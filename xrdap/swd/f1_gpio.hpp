@@ -86,7 +86,7 @@ class F1Gpio
     return LibXR::ErrorCode::OK;
   }
 
-  inline void Write(bool high)
+  [[gnu::always_inline]] inline void Write(bool high)
   {
     if (high)
     {
@@ -98,7 +98,10 @@ class F1Gpio
     }
   }
 
-  inline bool Read() const { return (Regs()->input & kMask) != 0U; }
+  [[gnu::always_inline]] inline bool Read() const
+  {
+    return (Regs()->input & kMask) != 0U;
+  }
 
  private:
   static constexpr uint32_t kInputFloating = 0x4U;
