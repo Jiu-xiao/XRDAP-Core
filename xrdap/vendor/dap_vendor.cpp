@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "timebase.hpp"
+#include "xrdap/protocol/dap_ids.hpp"
 
 namespace XrDap
 {
@@ -11,14 +12,6 @@ using namespace Vendor;
 
 namespace
 {
-// 标准 DAP 命令里需要跟踪的几个 / Standard DAP commands this class tracks.
-constexpr uint8_t kDapInfo = 0x00U;
-constexpr uint8_t kDapHostStatus = 0x01U;
-constexpr uint8_t kDapConnect = 0x02U;
-constexpr uint8_t kDapDisconnect = 0x03U;
-// 命令不支持时的回复 / Reply to an unsupported command.
-constexpr uint8_t kDapInvalid = 0xFFU;
-
 // 回复的最小长度：INFO 26 字节，SUB_SET 8 字节，SUB_READ 头 24 字节 / Minimum reply
 // sizes: INFO 26 bytes, SUB_SET 8 bytes, SUB_READ header 24 bytes.
 constexpr uint16_t kInfoReplyLen = 26U;
@@ -126,13 +119,13 @@ bool DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp, uint1
   if (sampler_.Active())
   {
     // 采样期间探针被订阅独占：只放行 DAP_Info、DAP_HostStatus 和厂商命令。
-    if (cmd == kDapInfo || cmd == kDapHostStatus)
+    if (cmd == Dap::kInfo || cmd == Dap::kHostStatus)
     {
       return false;
     }
     if (!IsVendor(cmd))
     {
-      resp[0] = kDapInvalid;
+      resp[0] = Dap::kInvalid;
       out = 1U;
       return true;
     }
@@ -145,12 +138,12 @@ bool DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp, uint1
   }
 
   // 跟踪 DAP_Connect / DAP_Disconnect，扩展命令要求先连接到 SWD 目标。
-  if (cmd == kDapConnect)
+  if (cmd == Dap::kConnect)
   {
     const uint8_t port = (len >= 2U) ? req[1] : 0U;
     connected_ = (port == 0U || port == 1U);
   }
-  else if (cmd == kDapDisconnect)
+  else if (cmd == Dap::kDisconnect)
   {
     connected_ = false;
     mem_.ForgetSelect();

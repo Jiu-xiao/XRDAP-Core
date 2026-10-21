@@ -26,7 +26,8 @@ add_test(NAME xrdap_core_unit COMMAND xrdap_core_unit)
 if(DEFINED LIBXR_DIR)
   set(LIBXR_SYSTEM linux)
   add_subdirectory("${LIBXR_DIR}" libxr EXCLUDE_FROM_ALL)
-  add_library(xrdap_core_compile OBJECT ${XRDAP_CORE_SOURCES})
+  add_library(xrdap_core_compile OBJECT ${XRDAP_CORE_SOURCES}
+                                        "${CMAKE_CURRENT_LIST_DIR}/compile/all_headers.cpp")
   target_include_directories(xrdap_core_compile PRIVATE "${CMAKE_CURRENT_LIST_DIR}/stub"
                                                         ${XRDAP_CORE_INCLUDE_DIRS})
   target_link_libraries(xrdap_core_compile PRIVATE xr)

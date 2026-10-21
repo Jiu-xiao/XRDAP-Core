@@ -13,6 +13,8 @@
 #include <atomic>
 #include <cstdint>
 
+#include "xrdap/protocol/dap_ids.hpp"
+
 namespace XrDap
 {
 
@@ -50,13 +52,13 @@ class DapActivity
       any_wired_.store(true, std::memory_order_relaxed);
     }
     commands_.fetch_add(1U, std::memory_order_relaxed);
-    if (req[0] == kHostStatus && len >= 3U)
+    if (req[0] == Dap::kHostStatus && len >= 3U)
     {
       // DAP_HostStatus：类型 0 是“已连接”灯，1 是“运行中”灯；状态 1 亮、0 灭
       (req[1] == 0U ? connected_ : running_)
           .store(req[2] != 0U, std::memory_order_relaxed);
     }
-    else if (req[0] == kDisconnect)
+    else if (req[0] == Dap::kDisconnect)
     {
       connected_.store(false, std::memory_order_relaxed);
       running_.store(false, std::memory_order_relaxed);
@@ -76,9 +78,6 @@ class DapActivity
   }
 
  private:
-  static constexpr uint8_t kHostStatus = 0x01U;
-  static constexpr uint8_t kDisconnect = 0x03U;
-
   std::atomic<uint32_t> commands_{0U};
   std::atomic<uint32_t> last_ms_{0U};
   std::atomic<uint32_t> last_wired_ms_{0U};
