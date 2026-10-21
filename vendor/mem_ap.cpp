@@ -18,6 +18,18 @@ constexpr uint8_t kApTar = 0x01U;
 constexpr uint8_t kApDrw = 0x03U;
 // CSW 的 Size（位 2:0）和 AddrInc（位 5:4）/ CSW Size (bits 2:0) and AddrInc (bits 5:4).
 constexpr uint32_t kCswSizeAndInc = 0x37U;
+// AHB-AP 的 CSW Prot（位 30:24）里要置的位：位 24 HPROT0 数据访问，位 25 HPROT1 特权，
+// 位 29 调试主机，与 OpenOCD 的 CSW_AHB_DEFAULT 相同；缓存、缓冲等其余位保持 AP 原值 /
+// Bits to set in the AHB-AP CSW Prot field (bits 30:24): bit 24 HPROT0 data access,
+// bit 25 HPROT1 privileged, bit 29 debug master, as in OpenOCD's CSW_AHB_DEFAULT; the
+// cache, buffer and other bits keep the AP's value.
+constexpr uint32_t kCswAhbProt = 0x23000000U;
+constexpr uint32_t kCswHprot1 = 1U << 25;
+// AP 的 IDR 在 bank 0xF 的 0xFC：类别在位 16:13（8 为 MEM-AP），类型在位 3:0（1 AHB3、
+// 5 AHB5、8 带增强 HPROT 的 AHB5）/ The AP IDR is at 0xFC in bank 0xF: class in bits
+// 16:13 (8 is MEM-AP), type in bits 3:0 (1 AHB3, 5 AHB5, 8 AHB5 with enhanced HPROT).
+constexpr uint32_t kSelectBankIdr = 0xF0U;
+constexpr uint8_t kApIdr = 0x03U;
 // CTRL/STAT 的 STICKYORUN、STICKYERR、WDATAERR / CTRL/STAT STICKYORUN, STICKYERR,
 // WDATAERR.
 constexpr uint32_t kCtrlStatErrors = (1U << 1) | (1U << 5) | (1U << 7);
@@ -61,14 +73,44 @@ MemAp::ApState* MemAp::EnsureAp(uint8_t ap)
 
 // 刚重新连接，或上一次访问被打断（例如采样被停掉）之后，第一次 AP 访问偶尔会因 DP 里
 // 残留的粘滞错误失败，所以失败时清掉再试一次。
+//
+// AHB-AP 上电后的 Prot 可能是非特权访问（例如 STM32F302 读出 0x01000052），这时访问
+// PPB（CPUID、DHCSR、AIRCR）会出错，所以 AHB-AP 一律改成特权数据访问，与 OpenOCD 相同。
+// 别的 AP 类型这几位含义不同（AXI-AP 是 ARPROT 和缓存属性），保持原值。已经是特权访问时不
+// 再读 IDR，这一位写过一次就留在 AP 里。
+// On an AHB-AP the Prot field after power-up may say unprivileged (an STM32F302 reads
+// 0x01000052), and accesses to the PPB (CPUID, DHCSR, AIRCR) then fail, so an AHB-AP
+// always gets privileged data access, as in OpenOCD. Other AP types use these bits
+// differently (ARPROT and cache attributes on an AXI-AP) and keep them. The IDR is not
+// read once the CSW says privileged; after one write the bit stays in the AP.
 bool MemAp::ReadCsw(uint8_t ap, uint32_t& csw)
 {
+  const uint32_t select = static_cast<uint32_t>(ap) << 24;
   for (int attempt = 0; attempt < 2; ++attempt)
   {
     Ack ack;
-    if (TxnOk(swd_.SetSelectCached(static_cast<uint32_t>(ap) << 24, ack), ack) &&
+    if (TxnOk(swd_.SetSelectCached(select, ack), ack) &&
         TxnOk(swd_.ApReadTxn(kApCsw, csw, ack), ack))
     {
+      if ((csw & kCswHprot1) != 0U)
+      {
+        return true;
+      }
+      uint32_t idr = 0U;
+      if (!TxnOk(swd_.SetSelectCached(select | kSelectBankIdr, ack), ack) ||
+          !TxnOk(swd_.ApReadTxn(kApIdr, idr, ack), ack) ||
+          !TxnOk(swd_.SetSelectCached(select, ack), ack))
+      {
+        ClearSticky();
+        swd_.InvalidateSelectCache();
+        continue;
+      }
+      const uint32_t type = idr & 0xFU;
+      const bool mem_ap = ((idr >> 13) & 0xFU) == 8U;
+      if (mem_ap && (type == 1U || type == 5U || type == 8U))
+      {
+        csw |= kCswAhbProt;
+      }
       return true;
     }
     ClearSticky();
