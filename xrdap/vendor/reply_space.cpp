@@ -60,8 +60,7 @@ uint16_t RequiredReply(const uint8_t* req, uint16_t len)
       return ItemReply(req, len, false);
     case Cmd::WRITE:
       return ItemReply(req, len, true);
-    case Cmd::SUB_SET:
-      return kSubSetReplyLen;
+    case Cmd::SUB_START:
     case Cmd::SUB_CTRL:
       return kStatusOnly;
     case Cmd::SUB_READ:

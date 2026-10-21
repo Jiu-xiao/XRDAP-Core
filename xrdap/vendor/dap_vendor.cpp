@@ -6,6 +6,7 @@
 #include "timebase.hpp"
 #include "xrdap/protocol/dap_ids.hpp"
 #include "xrdap/vendor/reply_space.hpp"
+#include "xrdap/vendor/sub_start.hpp"
 
 namespace XrDap
 {
@@ -16,7 +17,6 @@ namespace
 enum class SubCtrlOp : uint8_t
 {
   STOP = 0,
-  START = 1,
   CLEAR = 2,
 };
 
@@ -132,8 +132,8 @@ bool DapVendor::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len, uint
       return CmdRead(req, len, resp, out);
     case Cmd::WRITE:
       return CmdWrite(req, len, resp, out);
-    case Cmd::SUB_SET:
-      return CmdSubSet(req, len, resp, out);
+    case Cmd::SUB_START:
+      return CmdSubStart(req, len, resp, out);
     case Cmd::SUB_CTRL:
       return CmdSubCtrl(req, len, resp, out);
     case Cmd::SUB_READ:
@@ -156,7 +156,6 @@ bool DapVendor::CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out)
   resp[9] = kMaxDepth;
   Put32(&resp[10], kRingBytes);
   Put64(&resp[14], NowUs());
-  Put32(&resp[22], sampler_.AccessUs());
   out = kInfoReplyLen;
   return true;
 }
@@ -267,76 +266,28 @@ bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16
   return true;
 }
 
-bool DapVendor::CmdSubSet(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
+bool DapVendor::CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp,
+                            uint16_t& out)
 {
-  resp[0] = ToU8(Cmd::SUB_SET);
+  resp[0] = ToU8(Cmd::SUB_START);
   if (sampler_.Active())
   {
     return Reply(resp, kStatusState, out);
   }
-  if (len < 8U)
+  SubStartRequest start;
+  const uint8_t st = ParseSubStart(req, len, start);
+  if (st != kStatusOk)
   {
-    return Reply(resp, kStatusArg, out);
-  }
-  const uint32_t period = Get32(&req[1]);
-  const uint8_t flags = req[5];
-  const uint16_t count = Get16(&req[6]);
-  if (period == 0U || (flags & 0xFEU) != 0U || count == 0U)
-  {
-    return Reply(resp, kStatusArg, out);
-  }
-  if (count > kMaxItems)
-  {
-    return Reply(resp, kStatusResource, out);
-  }
-  const uint8_t* p = req + 8;
-  const uint8_t* end = req + len;
-  uint8_t aps_seen[kMaxAps];
-  uint8_t ap_count = 0U;
-  for (uint16_t i = 0; i < count; ++i)
-  {
-    Item it;
-    SubItem sub;
-    if (!ParseItem(p, end, it, &sub) || !SizeValid(it.size) || sub.div == 0U ||
-        sub.phase >= sub.div)
-    {
-      return Reply(resp, kStatusArg, out);
-    }
-    bool found = false;
-    for (uint8_t j = 0; j < ap_count; ++j)
-    {
-      found = found || (aps_seen[j] == it.ap);
-    }
-    if (!found)
-    {
-      if (ap_count >= kMaxAps)
-      {
-        return Reply(resp, kStatusResource, out);
-      }
-      aps_seen[ap_count++] = it.ap;
-    }
-  }
-  if (p != end)
-  {
-    return Reply(resp, kStatusArg, out);
+    return Reply(resp, st, out);
   }
   if (!Connected())
   {
     return Reply(resp, kStatusNoTarget, out);
   }
-
-  Sampler::Estimate est;
-  const uint8_t st = sampler_.Configure(SubItemList{req + 8, end, count}, period,
-                                        (flags & 1U) != 0U, est);
-  if (st == kStatusNoTarget)
-  {
-    return Reply(resp, kStatusNoTarget, out);
-  }
-  resp[1] = st;
-  Put16(&resp[2], est.max_frame);
-  Put32(&resp[4], est.frame_us);
-  out = kSubSetReplyLen;
-  return true;
+  // 采样归发起它的会话 / Sampling belongs to the session that starts it.
+  sampling_session_.store(session_.Session(), std::memory_order_release);
+  return Reply(resp, sampler_.Start(start.items, start.period_us, start.stop_on_full),
+               out);
 }
 
 bool DapVendor::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
@@ -351,28 +302,11 @@ bool DapVendor::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint
     case SubCtrlOp::STOP:
       sampler_.Stop();
       return Reply(resp, kStatusOk, out);
-    case SubCtrlOp::START:
-      if (sampler_.Active() || !sampler_.Configured())
-      {
-        return Reply(resp, kStatusState, out);
-      }
-      if (!Connected() || !StartSampling())
-      {
-        return Reply(resp, kStatusNoTarget, out);
-      }
-      return Reply(resp, kStatusOk, out);
     case SubCtrlOp::CLEAR:
       sampler_.ClearFrames();
       return Reply(resp, kStatusOk, out);
   }
   return Reply(resp, kStatusArg, out);
-}
-
-// 记下发起采样的会话，再开始采样。/ Note the session that starts sampling, then start.
-bool DapVendor::StartSampling()
-{
-  sampling_session_.store(session_.Session(), std::memory_order_release);
-  return sampler_.Start();
 }
 
 bool DapVendor::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
@@ -383,16 +317,16 @@ bool DapVendor::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint
   {
     return Reply(resp, kStatusArg, out);
   }
-  if (!sampler_.Configured())
-  {
-    return Reply(resp, kStatusState, out);
-  }
   const uint32_t want = Get16(req + 1);
   const uint32_t room = cap - kSubReadHeaderLen;
   const FrameRing::Taken t =
       sampler_.TakeFrames(resp + kSubReadHeaderLen, (want < room) ? want : room);
 
-  resp[1] = kStatusOk;
+  // 不在采样时状态为 0x02，回复照样带头和剩下的帧，上位机据此知道采样已停（例如会话
+  // 结束）。/ While not sampling the status is 0x02 and the reply still carries the
+  // head and the frames left, so the host learns that sampling stopped (for example
+  // because the session ended).
+  resp[1] = sampler_.Active() ? kStatusOk : kStatusState;
   Put64(&resp[2], NowUs());
   Put32(&resp[10], t.remaining);
   Put32(&resp[14], t.dropped);

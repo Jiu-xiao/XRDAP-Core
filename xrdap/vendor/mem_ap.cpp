@@ -3,7 +3,6 @@
 
 #include <cstring>
 
-#include "timebase.hpp"
 
 namespace XrDap::Vendor
 {
@@ -117,29 +116,6 @@ bool MemAp::ReadCsw(uint8_t ap, uint32_t& csw)
     swd_.InvalidateSelectCache();
   }
   return false;
-}
-
-bool MemAp::Calibrate(uint8_t ap, uint32_t& us)
-{
-  constexpr uint32_t kRounds = 16U;
-  Ack ack = Ack::NO_ACK;
-  uint32_t v = 0U;
-  bool ok = TxnOk(swd_.SetSelectCached(static_cast<uint32_t>(ap) << 24, ack), ack);
-  const uint64_t t0 = LibXR::Timebase::GetMicroseconds();
-  for (uint32_t i = 0; ok && i < kRounds; ++i)
-  {
-    ok = TxnOk(swd_.ApWriteTxn(kApTar, 0U, ack), ack) &&
-         TxnOk(swd_.ApReadTxn(kApCsw, v, ack), ack);
-  }
-  const uint64_t t1 = LibXR::Timebase::GetMicroseconds();
-  if (!ok)
-  {
-    ClearSticky();
-    return false;
-  }
-  const uint32_t per = static_cast<uint32_t>((t1 - t0 + kRounds - 1U) / kRounds);
-  us = (per == 0U) ? 1U : per;
-  return true;
 }
 
 // 写 CSW：保留原值里 Size 和 AddrInc 以外的位，关闭自增。

@@ -84,12 +84,6 @@ class MemAp
   /// 用给定的 AP 状态读一个条目（采样用），返回条目状态 / Read one item with a given AP
   /// state (used by sampling); returns the item status.
   uint8_t ReadItem(ApState& ap, const Item& it, uint8_t* out);
-  /// @brief 标定一次访问（写 TAR + 读 AP 寄存器）的耗时；读的是 CSW，没有副作用 /
-  ///        Calibrate one access (TAR write + AP register read); reads CSW, no side
-  ///        effects.
-  /// @param us 成功时为单次访问耗时（微秒，至少 1）/ On success the per-access time in
-  ///        microseconds, at least 1.
-  bool Calibrate(uint8_t ap, uint32_t& us);
 
  private:
   using Ack = LibXR::Debug::SwdProtocol::Ack;

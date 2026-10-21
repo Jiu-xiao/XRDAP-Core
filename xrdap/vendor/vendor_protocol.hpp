@@ -18,12 +18,12 @@ namespace XrDap::Vendor
 /// 厂商命令号 / Vendor command bytes.
 enum class Cmd : uint8_t
 {
-  INFO = 0x80,      ///< 能力和探针时间 / Capabilities and probe time.
-  READ = 0x81,      ///< 多条目读 / Multi-item read.
-  WRITE = 0x82,     ///< 多条目写 / Multi-item write.
-  SUB_SET = 0x83,   ///< 配置采样 / Configure sampling.
-  SUB_CTRL = 0x84,  ///< 开始、停止、清空采样 / Start, stop, clear sampling.
-  SUB_READ = 0x85,  ///< 取采样帧 / Read sample frames.
+  INFO = 0x80,       ///< 能力和探针时间 / Capabilities and probe time.
+  READ = 0x81,       ///< 多条目读 / Multi-item read.
+  WRITE = 0x82,      ///< 多条目写 / Multi-item write.
+  SUB_START = 0x83,  ///< 带配置开始采样 / Start sampling with its configuration.
+  SUB_CTRL = 0x84,   ///< 停止采样、清空缓冲 / Stop sampling, clear the buffer.
+  SUB_READ = 0x85,   ///< 取采样帧 / Read sample frames.
 };
 
 /// 内置命令的范围 / Range of the built-in commands.
@@ -31,7 +31,7 @@ constexpr uint8_t kFirstCmd = static_cast<uint8_t>(Cmd::INFO);
 constexpr uint8_t kLastCmd = static_cast<uint8_t>(Cmd::SUB_READ);
 
 /// 协议版本 / Protocol version.
-constexpr uint8_t kVersion = 1;
+constexpr uint8_t kVersion = 2;
 /// 功能位：READ | WRITE | 采样 | 8 字节访问 / Feature bits: READ | WRITE | sampling |
 /// 8-byte access.
 constexpr uint32_t kFeatures = 0x0F;
@@ -50,9 +50,7 @@ static_assert((kRingBytes & (kRingBytes - 1U)) == 0U, "Port::kRingBytes: power o
 constexpr uint16_t kMaxFrameBytes = 10U + (kMaxItems + 7U) / 8U + kMaxItems * 8U;
 
 /// INFO 回复的字节数 / Bytes of the INFO reply.
-constexpr uint16_t kInfoReplyLen = 26U;
-/// SUB_SET 回复的字节数 / Bytes of the SUB_SET reply.
-constexpr uint16_t kSubSetReplyLen = 8U;
+constexpr uint16_t kInfoReplyLen = 22U;
 /// SUB_READ 回复头的字节数 / Bytes of the SUB_READ reply head.
 constexpr uint16_t kSubReadHeaderLen = 24U;
 

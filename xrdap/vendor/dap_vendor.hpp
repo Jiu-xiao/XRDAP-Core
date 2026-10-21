@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// XR 厂商扩展命令（0x80 到 0x85）：多地址读写、指针链解引用、探针端周期采样。还可挂一条
+// XR 厂商扩展命令（0x80 到 0x85，协议版本
+// 2）：多地址读写、指针链解引用、探针端周期采样。还可挂一条
 // 附加命令（SetExtraCommand，例如 XRDAP-ESP 的 0x86 Wi-Fi 配置）。由 Executor 在 libxr
 // DAP 执行上下文里调用，命令属于哪条传输、能不能执行由 SessionOwner 决定。协议见
 // docs/protocol.md 第 3 节。
 //
 // 采样有两种运行方式，平台二选一：单循环的探针在主循环里调用 Poll()；有 RTOS 的探针建一个
-// 任务运行 RunSamplerTask()，由平台的节拍定时器经 WakeSamplerFromIsr() 唤醒。采样和
-// DAP_Connect 状态都记在会话编号上，会话结束即停。
+// 任务运行 RunSamplerTask()。两种方式都要平台的节拍定时器，它的中断调用 OnTickIsr()。
+// 采样和 DAP_Connect 状态都记在会话编号上，会话结束即停。
 //
-// XR vendor extension commands (0x80 to 0x85): multi-address read/write, pointer-chain
+// XR vendor extension commands (0x80 to 0x85, protocol version 2): multi-address
+// read/write, pointer-chain
 // dereference and probe-side periodic sampling. One extra command can be attached
 // (SetExtraCommand, e.g. XRDAP-ESP's 0x86 Wi-Fi configuration). Executor calls it in the
 // libxr DAP execution context; SessionOwner decides which transport a command belongs to
@@ -18,7 +20,8 @@
 //
 // Sampling runs one of two ways, chosen by the platform: a single-loop probe calls
 // Poll() in its main loop; a probe with an RTOS creates a task that runs
-// RunSamplerTask(), woken by the platform's tick timer through WakeSamplerFromIsr().
+// RunSamplerTask(). Both need the platform's tick timer, whose interrupt calls
+// OnTickIsr().
 // Sampling and the DAP_Connect state are tied to the session number and lapse when the
 // session ends.
 
@@ -67,27 +70,27 @@ class DapVendor
   Result OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                    uint16_t& out);
 
-  /// @brief 单循环：主循环在两条 DAP 命令之间调用，到期就读一拍 / Single loop: call
-  ///        between DAP commands in the main loop; reads a tick once it is due.
+  /// @brief 单循环：主循环在两条 DAP 命令之间调用，新节拍到了就采一拍 / Single loop:
+  ///        call between DAP commands in the main loop; samples a tick once a new one
+  ///        came.
   /// @note 与 DAP 执行在同一个线程 / Same thread as the DAP execution.
-  void Poll() { sampler_.Poll(); }
+  void Poll(Vendor::TickTimer& timer) { sampler_.Poll(timer); }
 
   /// @brief 是否正在采样，单循环主循环据此不在等命令时阻塞 / Whether sampling runs, so a
   ///        single main loop does not block waiting for commands.
-  /// @note 任何任务 / Any task.
+  /// @note 任何上下文 / Any context.
   bool Sampling() const { return sampler_.Active(); }
 
   /// @brief 任务：采样任务的函数体，不返回 / Task: body of the sampling task; never
   ///        returns.
-  /// @param timer 节拍定时器，可为空 / Tick timer; may be null.
   /// @note 平台建的采样任务里调用；任务应为 SWD 所在核上优先级最高的任务 / Call from the
   ///       platform's sampling task, which should have the highest priority on the core
   ///       that drives SWD.
-  [[noreturn]] void RunSamplerTask(Vendor::TickTimer* timer) { sampler_.RunTask(timer); }
+  [[noreturn]] void RunSamplerTask(Vendor::TickTimer& timer) { sampler_.RunTask(timer); }
 
   /// @brief 节拍定时器中断调用 / Called by the tick timer interrupt.
   /// @note 中断上下文 / Interrupt context.
-  void WakeSamplerFromIsr() { sampler_.WakeFromIsr(); }
+  void OnTickIsr() { sampler_.OnTickIsr(); }
 
   /// @brief 挂一条附加命令，其 feature 并入 INFO 功能位 / Attach one extra command whose
   ///        feature bit is merged into INFO.
@@ -109,11 +112,10 @@ class DapVendor
   bool CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out);
   bool CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
   bool CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
-  bool CmdSubSet(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
+  bool CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
   bool CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
   bool CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                   uint16_t& out);
-  bool StartSampling();
 
   SessionOwner& session_;
   Vendor::MemAp mem_;
