@@ -1,0 +1,10 @@
+# STM32H723: Cortex-M7, AXI SRAM from 0x24000000. The scratch region is the end of AXI SRAM,
+# which programs that link data at the start of AXI SRAM leave unused; no flash_test region,
+# so the flash content of the target program is only read.
+name = "stm32h723"
+dpidr = 0x6BA02477
+openocd_target = "target/stm32h7x.cfg"
+probe_rs_chip = "STM32H723ZGTx"
+pyocd_target = "stm32h723xx"
+scratch = { base = 0x2404BC00, size = 0x4400 }
+dump = { base = 0x08000000, size = 0x20000 }

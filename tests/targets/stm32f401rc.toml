@@ -1,0 +1,9 @@
+# STM32F401RC: Cortex-M4, 256 KiB flash (sector 5 is 128 KiB), 64 KiB SRAM.
+name = "stm32f401rc"
+dpidr = 0x2BA01477
+openocd_target = "target/stm32f4x.cfg"
+probe_rs_chip = "STM32F401RCTx"
+pyocd_target = "stm32f401xc"
+scratch = { base = 0x20001000, size = 0x4400 }
+dump = { base = 0x08000000, size = 0x20000 }
+flash_test = { base = 0x08020000, size = 0x20000 }

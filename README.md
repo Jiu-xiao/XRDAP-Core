@@ -20,6 +20,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 | `light/` | `StatusLight`：由连接、设置和 DAP 活动算出每一刻的灯色和亮度 |
 | `probe/` | `SetProbeInfo`、`FormatSerial`：DAP_Info 字符串和序列号规则 |
 | `docs/` | 协议文档 |
+| `tests/` | 全系列共用的测试规范（[SPEC.md](tests/SPEC.md)）和测试工具 `xrdap_test`（[用法](tests/README.md)） |
 
 本仓库不碰硬件。时间、互斥量和信号量用 libxr 的 `Timebase`、`Mutex`、`Semaphore`，三种平台都有；libxr 没有统一抽象的部分由平台提供：采样任务的创建（ESP 要固定到 SWD 所在的核）、节拍定时器（`Vendor::TickTimer`）、灯的驱动和引脚、USB 是否已配置的查询。
 
