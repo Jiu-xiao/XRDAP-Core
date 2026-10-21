@@ -2,15 +2,15 @@
 
 [中文](protocol.md)
 
-This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only), the probe identity and mDNS advertisement, and how the ESP32-C3 USB port separates the DAP link from the command line. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. The vendor extension is implemented in `vendor/` of this repository.
+This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (protocol version 2; 0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only) and the rule that one transport owns the probe at a time, the probe identity and mDNS advertisement, how the ESP32-C3 USB port separates the DAP link from the command line, the USB/IP virtual device, and the zero-length packet USB hosts must send. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. These rules are implemented in `xrdap/` of this repository: serial frames in `xrdap/serial/`, the session owner in `xrdap/session/`, the vendor extension in `xrdap/vendor/`.
 
 All integers are little-endian. Spaces in hexadecimal examples are for readability only.
 
-Contents: 1 Serial frames; 2 TCP frames; 3 XR vendor extension (3.1 to 3.6 cover rules, commands and sampling for 0x80 to 0x85, 3.7 covers 0x86, 3.8 holds byte examples); 4 Probe identity and discovery (DAP_Info, mDNS); 5 The ESP32-C3 USB port.
+Contents: 1 Serial frames; 2 TCP frames; 3 XR vendor extension (3.1 rules and session owner, 3.2 status and reply space, 3.3 items, 3.4 commands, 3.5 sampling, 3.6 SWD access, 3.7 0x86, 3.8 byte examples); 4 Probe identity and discovery (DAP_Info, mDNS); 5 The ESP32-C3 USB port; 6 USB/IP virtual device; 7 Notes for USB hosts.
 
 ## 1. Serial frames
 
-The serial link uses libxr Topic packed frames. On the firmware side it is implemented by libxr `DapSerialTransport` (`src/driver/debug/dap_serial_transport.hpp`); on the host side by the `xrdap` library of XRDAP-Host (`transport::serial`).
+The serial frame has the same format as libxr's Topic packed frames. On the firmware side it is implemented by `xrdap/serial/` of this repository (`Framer` assembles frames, `SerialLink` sends and receives); on the host side by the `xrdap` library of XRDAP-Host (`transport::serial`).
 
 ```
 prefix 0x5A(1) + data_len(3) + topic_crc32(4) + timestamp_us(6) + version(1) + header_crc8(1) + payload(data_len) + crc8(1)
@@ -37,16 +37,16 @@ Example: the complete frame for the request `DAP_Info(0xFF)` (query packet size;
 
 The probe parses frames by these rules:
 
-- If the header CRC8 is wrong, version is not 1, the topic is not `dap_req`, or data_len is smaller than 2 or larger than 2 + 1024, the current candidate frame is discarded and parsing restarts at the next `0x5A` in the buffer.
+- If the header CRC8 is wrong, version is not 1, the topic is not `dap_req`, or data_len is smaller than 2 or larger than 2 + the packet size (from DAP_Info), the current candidate frame is discarded and parsing restarts at the next `0x5A` in the buffer.
 - A wrong trailing CRC8 likewise discards the frame and resynchronises.
-- A frame with n larger than 1024 or n + 2 larger than data_len is discarded without a response.
+- A frame with n larger than the packet size or n + 2 larger than data_len is discarded without a response.
 - A discarded request gets no response; the host retries after a timeout. `xrdap share` waits 2 seconds (`--timeout-ms`) and then returns a single byte `0xFF` to the debug tool.
 
 Requests and responses correspond one to one. The host sends one request at a time and sends the next after receiving the response. For a command with no response content, n in the response frame is 0.
 
 The firmware baud rate is 4 000 000 (`kSerialBaud` in XRDAP-ESP `firmware/esp32s3/main/config.hpp` for the S3; the C3 uses USB Serial/JTAG, where the baud rate has no effect), 8 data bits, no parity, 1 stop bit, no flow control.
 
-A serial port has no notion of connecting or disconnecting. The probe handles sampling started over serial separately, see section 3.5.
+A serial port has no notion of connecting or disconnecting. While serial owns the probe, 5 seconds without any request end the session, see section 3.1.
 
 ## 2. TCP frames
 
@@ -58,66 +58,84 @@ The probe's TCP port 3241 and the listening port of `xrdap share openocd` use th
 
 Type 1 is a request, type 2 is a response; the reserved byte is 0. The length is the number of DAP packet bytes that follow.
 
-- Only one client is served at a time; requests are executed and answered in order.
+- Only one client is served at a time; requests are executed and answered in order. When the client disconnects the TCP session ends (section 3.1).
 - The probe closes the connection when it receives an invalid header (wrong magic, type other than 1, length 0 or larger than 1024).
 - A command with no response content (for example `DAP_TransferAbort`) gets no TCP frame back.
 - `xrdap share openocd` strips the 8-byte header from a TCP frame, hands the DAP packet to the probe (wrapped in a serial frame when the link is serial), and converts responses back; it does not interpret DAP content. After the client disconnects it sends `84 00` (stop sampling) to the probe once.
 
-## Notes for USB hosts
-
-A full-speed USB Bulk packet is 64 bytes. When a request length is an exact multiple of 64 (128, 192 bytes, ...) and smaller than the DAP packet size, the OUT transfer has no short packet to mark its end, so the probe keeps waiting: the request gets no response and later responses are misaligned. After sending such a request the host must send a zero-length packet. A SUB_SET with 8 items is exactly 128 bytes and is the most likely case. `xrdap` handles this; clients written with libusb or pyusb must add it. For reception, the IN request length must be a multiple of the endpoint maximum packet size (and not smaller than the DAP packet size).
-
 ## 3. XR vendor extension
+
+This section is protocol version 2 and is not compatible with version 1: version 1's SUB_SET and SUB_CTRL start are merged into SUB_START, and INFO no longer reports an access time. The host sends INFO first and does not use the extension unless the version is 2.
 
 ### 3.1 Rules
 
-- The commands live in the CMSIS-DAP vendor command range: 0x80 to 0x85 are data commands (sections 3.2 to 3.6) and 0x86 is Wi-Fi configuration (section 3.7). USB, TCP and serial use the same packets.
-- A command the probe does not support gets a one-byte response `0xFF`, which is standard CMSIS-DAP behaviour. A host that receives `FF` for INFO can conclude that the probe does not implement the extension. The probe supports 0x86 only when INFO feature bit 4 is 1.
-- Only SWD is supported. The target is treated as little-endian; values are the raw bytes in target memory.
+- The commands use the CMSIS-DAP vendor command range: 0x80 to 0x85 are data commands (sections 3.2 to 3.6), 0x86 is Wi-Fi configuration (section 3.7, XRDAP-ESP only). USB, TCP, serial and radio carry the same packets.
+- A command the probe does not support is answered with the single byte `0xFF`, the standard CMSIS-DAP behaviour. A host that gets `FF` for INFO knows the probe does not implement the extension.
+- SWD only. The target is treated as little-endian; values are the raw bytes in target memory.
 - The host resolves variable addresses (symbol table, DWARF); the probe only handles addresses.
-- Before using the extension commands, the host must connect with `DAP_Connect` using SWD (port 0 or 1) and confirm the target is accessible. The probe does not connect on behalf of the host; before a connection, READ, WRITE, SUB_SET and start-sampling return 0x04. After `DAP_Disconnect`, a TCP client connecting or disconnecting, or sampling stopping automatically because its transport went away, `DAP_Connect` must be issued again.
-- After READ, WRITE or sampling, the host must treat DP SELECT, AP CSW and TAR as unknown and write them again. OpenOCD caches these registers, so the extension commands must not be mixed with OpenOCD in the same connection.
+- Before using the extension commands, the host connects with `DAP_Connect` in SWD mode (port 0 or 1) and makes sure the target is reachable. The probe does not connect on the host's behalf; without a connection in the current session READ, WRITE and SUB_START return 0x04. After `DAP_Disconnect` or the end of the session, `DAP_Connect` is needed again.
+- After READ, WRITE or sampling, the host must treat DP SELECT, AP CSW and TAR as unknown and write them again. OpenOCD caches these registers, so the extension commands and OpenOCD are not mixed on one connection.
 
-While sampling runs, the probe is held exclusively by the subscription:
+#### Session owner
 
-- From start to stop, only `DAP_Info` (0x00), `DAP_HostStatus` (0x01) and 0x80 to 0x86 are accepted. Every other command gets a single byte `0xFF` and is not executed.
-- READ and WRITE can be used during sampling. They share the SWD bus with the sampling task in turn and can cause skipped ticks.
-- Sampling stops in these cases:
+At any time one transport (USB, serial, TCP, radio remote) owns the probe and SWD; that transport is the session owner. When there is no owner, the first transport that runs a command other than `DAP_Info` becomes the owner and starts a session. From then on, commands from any other transport are answered busy and not run:
 
-| Case | Sampling stopped |
+| Command | Reply |
 |---|---|
-| SUB_CTRL stop (`84 00`) received | Sampling started over any transport |
-| USB bus reset (unplug or host reset) | Sampling started over USB |
-| TCP client disconnects | Sampling started over any transport |
-| A new TCP client connects | Sampling started over any transport |
-| No serial request for 5 seconds | Sampling started over serial |
+| `DAP_Info` (0x00) | runs as usual |
+| `DAP_ExecuteCommands` (0x7F), `DAP_QueueCommands` (0x7E) | the container itself is handled as usual; every command inside is answered by this table |
+| other standard commands | `command FF` (DAP_ERROR) |
+| vendor commands 0x80 to 0x9F | `command 05` (busy) |
 
-After starting sampling over serial, the host must send a request (SUB_READ will do) at least every 5 seconds. After an automatic stop the frames in the buffer are kept and can still be read with SUB_READ until the next SUB_SET.
+With only 1 byte of reply space the reply is `FF` alone; with none there is no reply.
+
+The session ends in the following cases; afterwards any transport may become the new owner:
+
+| Case | Session that ends |
+|---|---|
+| The owner sends `DAP_Disconnect` | the owner's session |
+| The TCP client disconnects, the serial link stops | that transport's session |
+| USB bus reset (unplug or host reset) | the USB session |
+| No serial request for 5 seconds | the serial session |
+| The radio session id changes or is 0, or no ping within the lease | the radio remote's session (XRDAP-CH32V307) |
+
+While serial owns the probe, the host sends a request at least every 5 seconds (SUB_READ will do).
+
+#### Sampling
+
+Sampling belongs to the session that started it:
+
+- From start to stop, only `DAP_Info` (0x00), `DAP_HostStatus` (0x01) and 0x80 to 0x86 are accepted. Every other command is answered with the single byte `0xFF` and not run.
+- READ and WRITE may be used while sampling; they take turns with sampling on SWD and can cause skipped ticks.
+- Sampling stops on SUB_CTRL stop (`84 00`) or when the session that started it ends. The frames left in the buffer stay; the next session can still read them with SUB_READ until the next SUB_START or clear.
 
 ### 3.2 Requests, responses and status
 
-A request is `command byte + parameters`; a response is `command byte + overall status + data`, with the command byte echoed unchanged. When the overall status is not 0, the response is just these two bytes, except for the 0x03 returned by SUB_SET for insufficient resources (see 3.4).
+A request is `command byte + arguments`; a response is `command byte + overall status + data`, with the command byte echoed. When the overall status is not 0 the response has only these two bytes, except for SUB_READ's 0x02 (see section 3.4).
 
-A request whose length does not match the count field in the command returns 0x01 and is not executed. READ and WRITE compute the response size before executing; if it does not fit in one DAP packet (the packet size from DAP_Info: 1024 bytes on XRDAP-ESP and XRDAP-CH32V307, 512 bytes on XRDAP-F103C8) they return 0x03 and do nothing.
+A request whose length does not match the count field in the command returns 0x01 and is not executed.
+
+Reply space: before a vendor command runs, the probe works out from the request how many bytes its reply needs and compares that with the space it may write this time. The space is the packet size from DAP_Info (1024 bytes on XRDAP-ESP and XRDAP-CH32V307, 512 bytes on XRDAP-F103C8); inside `DAP_ExecuteCommands` it is the part of that packet not used yet. With less than 2 bytes of space the reply is `FF` alone; when the whole reply does not fit it is `command 03`; in both cases the command does not run and nothing is written past the given space. The READ reply is 3 + Σ(3 + size) bytes, WRITE 3 + 3 × count, INFO 22, SUB_START and SUB_CTRL 2, SUB_READ at least 24.
 
 | Overall status | Meaning |
 |---|---|
-| 0x00 | Success; per-item results are in the item status |
-| 0x01 | Invalid argument: length mismatch, count 0, size not 1/2/4/8, dereference count above 8, period 0, div 0 or phase >= div, reserved flag bits set, undefined SUB_CTRL op |
-| 0x02 | State not allowed: SUB_SET or start while sampling; start or read without a successful SUB_SET |
-| 0x03 | Insufficient resources: more than 32 items, response does not fit in one packet, one subscription uses more than 8 distinct APs, estimated frame time larger than the period |
-| 0x04 | No target connected: `DAP_Connect` not yet issued, or reading the AP CSW failed |
+| 0x00 | Success; see the item status for each item |
+| 0x01 | Invalid argument: length mismatch, count of 0, size not 1/2/4/8, more than 8 dereferences, period of 0, div of 0 or phase ≥ div, reserved flag bits not 0, undefined SUB_CTRL op |
+| 0x02 | State not allowed: SUB_START while sampling; SUB_READ while not sampling (the reply still carries data) |
+| 0x03 | Insufficient resources: more than 32 items, the reply does not fit the space left, more than 8 distinct APs in one sampling run, the frame with every item due does not fit the buffer |
+| 0x04 | No target connected: no `DAP_Connect` in this session yet, or reading an AP's CSW failed |
+| 0x05 | Busy: another transport owns the probe (section 3.1) |
 
-Item status (one byte per item for READ and WRITE; a sampling frame uses 1 bit per item for success or failure):
+Item status (one byte per item for READ and WRITE; in sample frames only 1 bit marks success or failure):
 
 | Item status | Meaning |
 |---|---|
 | 0x00 | Success |
 | 0x10 + k | SWD returned FAULT or timed out while reading the pointer at level k (0 to 7) |
-| 0x1F | SWD failed on the final read or write (including a sticky error detected after a write) |
+| 0x1F | SWD failure on the final read or write (including a sticky error detected after a write) |
 | 0x20 + k | The read address at level k is not 4-byte aligned |
 | 0x2F | The final address is not aligned to size (4-byte alignment when size is 8) |
-| 0x30 + k | The pointer read at level k is 0; stop there |
+| 0x30 + k | The pointer read at level k is 0; stop |
 
 ### 3.3 Items
 
@@ -158,141 +176,135 @@ With n equal to 0 the item accesses `base + final_off` directly. A base of 0 is 
 
 Request: `80`
 
-The response is a fixed 26 bytes:
+The response is always 22 bytes:
 
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 1 | 0x80 |
 | 1 | 1 | Overall status |
-| 2 | 1 | Protocol version, currently 1 |
+| 2 | 1 | Protocol version, currently 2 |
 | 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86); 0x1F on XRDAP-ESP, 0x0F on the others |
-| 7 | 2 | Maximum items per request or subscription: 32 |
+| 7 | 2 | Maximum items per request or sampling run: 32 |
 | 9 | 1 | Maximum dereference depth: 8 |
 | 10 | 4 | Ring buffer size in bytes: 16384 on XRDAP-ESP, 4096 on XRDAP-F103C8 and XRDAP-CH32V307 |
-| 14 | 8 | Current probe time, in µs |
-| 22 | 4 | Calibrated duration of one SWD access (write TAR plus read one AP register), in µs |
-
-The value at offset 22 is recalibrated at each SUB_SET using the current SWD clock: the probe writes TAR and reads CSW 16 times in a row and takes the average. This matches the number of SWD transactions of a single-word read (n equal to 0) and does not touch target memory. It is 0 until the first SUB_SET after power-up.
+| 14 | 8 | Current probe time, µs |
 
 #### 0x81 READ
 
-Request: `81 count(1) item...`, count from 1 to 32.
+Request: `81 count(1) item…`, count from 1 to 32.
 
-Response: `81 status count(1)`, then for each item `id(2) item_status(1) value(size)`. The value of a failed item is all zeros.
+Response: `81 status count(1)`, then per item `id(2) item_status(1) value(size)`. A failed item's value is all zeros.
 
 #### 0x82 WRITE
 
-Request: `82 count(1) (item value)...`, where value is `size` bytes in target byte order.
+Request: `82 count(1) (item value)…`, where value is size bytes in target byte order.
 
-Response: `82 status count(1)`, then for each item `id(2) item_status(1)`.
+Response: `82 status count(1)`, then per item `id(2) item_status(1)`.
 
-Items are executed in order; writes already done are not rolled back, and a failing item does not affect later ones. An 8-byte write is two 32-bit writes and is not atomic.
+Items are executed in order; what has been written is not rolled back, and a failing item does not affect later ones. An 8-byte write is two 32-bit writes and is not atomic.
 
-#### 0x83 SUB_SET
+#### 0x83 SUB_START
 
-Request: `83 period_us(4) flags(1) count(2) (item div(2) phase(2))...`
+One command carries the whole configuration, and sampling starts once it passes the checks. The probe keeps no "configured but not started" state.
 
-- period_us: base period.
-- flags: with bit0 equal to 0 the oldest frame is overwritten when the buffer is full; with 1 new frames are dropped. The other bits must be 0.
+Request: `83 period_us(4) flags(1) count(2) (item div(2) phase(2))…`
+
+- period_us: tick period, greater than 0.
+- flags: bit0 = 0 overwrites the oldest frame when the buffer is full, bit0 = 1 drops the new frame; the other bits must be 0.
 - count: 1 to 32.
 
-Response: `83 status max_frame_bytes(2) est_frame_us(4)`
+Response: `83 status`
 
-- max_frame_bytes: bytes in one frame when all items are due.
-- est_frame_us: estimated duration of one frame.
+- SUB_START while sampling returns 0x02 and does not affect the running sampling.
+- Invalid arguments return 0x01; more than 32 items, more than 8 APs, or a frame with every item due that with its 2-byte length head is larger than the buffer return 0x03.
+- No `DAP_Connect` in this session, or a failed CSW read of an AP, returns 0x04.
+- On success the buffer and both counters are cleared, the tick index starts at 0, and tick 0 is sampled at once.
 
-SUB_SET can only be sent while sampling is stopped; otherwise it returns `83 02`. Before `DAP_Connect` it returns `83 04`.
-
-After the parameter checks pass, the probe measures at the current SWD clock: it first calibrates the single-access time at INFO offset 22, reads the CSW of each AP, then trial-reads all items twice in the order used by sampling (the first pass warms the cache) and records the duration of the second pass as T (excluding the CSW reads). The trial reads use the same addresses as sampling and have the same side effects.
-
-```
-est_frame_us = 10 + 1.6 x T        (integer arithmetic: 10 + T x 8 / 5)
-```
-
-The factor 1.6 comes from measurement: during sampling the DAP thread on the same core also handles SUB_READ and preempts the sampling task. With 8 items and T of about 265 µs, the actual time per frame is about 1.5 times T.
-
-When est_frame_us is larger than period_us, 0x03 is returned. max_frame_bytes and est_frame_us are still filled in so the host can pick a feasible period. The configuration does not take effect; the previous configuration and buffer are unchanged. On success the buffer and counters are cleared.
-
-The estimate only rejects configurations that clearly cannot keep up; the actual situation is given by the skipped tick count returned by SUB_READ.
+The probe does not estimate the frame time and does not refuse a period as too short. Whether sampling keeps up is judged at run time only: skipped ticks, dropped frames and the bytes left in the buffer, all in the head of every SUB_READ response (section 3.5).
 
 #### 0x84 SUB_CTRL
 
-Request: `84 op(1)`; op 0 stops, 1 starts, 2 clears the buffer and counters.
+Request: `84 op(1)`; op 0 stops, op 2 clears the buffer and the counters. Other ops return 0x01.
 
 Response: `84 status`
 
-- Start: tick index starts from 0, counters are zeroed, and the CSW of each AP is read once at this point. Returns 0x02 if already running or no successful SUB_SET exists; returns 0x04 without `DAP_Connect` or when reading CSW fails.
-- Stop: returns 0x00 even when not running. Frames in the buffer can still be read with SUB_READ.
+- Stop: replies after the tick in progress has been read, and returns 0x00 also when not sampling. Frames left in the buffer can still be read with SUB_READ.
+- Clear: also allowed while sampling; the counters count again from 0.
 
 #### 0x85 SUB_READ
 
 Request: `85 max_bytes(2)`
 
-The response has a 24-byte header followed by frames:
+A 24-byte response head, followed by frames:
 
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 1 | 0x85 |
-| 1 | 1 | Overall status |
-| 2 | 8 | Current probe time, in µs |
-| 10 | 4 | Frame bytes still unread in the buffer |
-| 14 | 4 | Cumulative frames dropped by the buffer |
-| 18 | 4 | Cumulative skipped ticks |
+| 1 | 1 | Overall status: 0x00 sampling, 0x02 not sampling |
+| 2 | 8 | Current probe time, µs |
+| 10 | 4 | Frame bytes left unread in the buffer (length heads excluded) |
+| 14 | 4 | Accumulated dropped frames |
+| 18 | 4 | Accumulated skipped ticks |
 | 22 | 2 | Number of frames returned |
-| 24 | ... | Frames |
+| 24 | … | Frames |
 
-Only whole frames are returned; their total length does not exceed `min(max_bytes, packet size - 24)`. The frame count is 0 when the buffer is empty. Without any successful SUB_SET, 0x02 is returned. Both counters are cleared on a successful SUB_SET, on start, and on op 2.
+Only whole frames are returned; their total length does not exceed `min(max_bytes, reply space - 24)`. The frame count is 0 when the buffer is empty. With status 0x02 the response still carries the full head and frames: the host learns that sampling has stopped (for example because its session ended) and keeps reading until no bytes are left. Both counters are cleared on a successful SUB_START and on op 2.
 
 ### 3.5 Sampling
 
-#### Period and divider
+#### Ticks
 
-- Tick index k starts from 0. The target time of tick k is start time + k x period_us, so drift does not accumulate.
-- An item is sampled on ticks where `(k + phase) % div == 0`. A div of 1 samples on every tick; phase staggers slow items. The items due in one tick are read in SUB_SET order.
-- A tick with no due item produces no frame.
-- When the next tick is more than 3 ms away the sampling task sleeps; otherwise it busy-waits on the core that runs SWD to keep tick timing accurate.
+- The tick timer is the only clock. Its interrupt only adds 1 to the tick count every period and wakes sampling; on waking, sampling reads the count, and the newest tick is the count value k. The time base only stamps frames.
+- After a successful SUB_START the count is cleared, tick 0 is sampled at once, and one more tick comes every period.
+- An item is sampled on ticks where `(k + phase) % div == 0`. A div of 1 samples every tick; phase staggers slow items. Items due in one tick are read in the order given in SUB_START.
+- A tick with no item due produces no frame.
 
 #### Frame format
 
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 4 | Tick index k |
-| 4 | 6 | Timestamp, µs, taken before reading for this tick starts |
-| 10 | ceil(m/8) | Status bitmap, m being the number of due items; the i-th due item maps to bit i (LSB first), 1 means failure |
-| ... | ... | Values of the due items in due order, each `size` bytes, all zeros on failure |
+| 4 | 6 | Timestamp, µs, taken when the tick starts reading |
+| 10 | ceil(m/8) | Status bitmap, m is the number of items due; due item i maps to bit i (low bit first), 1 means failed |
+| … | … | Values of the due items in due order, size bytes each, all zeros on failure |
 
-The due items are derived from k and each item's div and phase; the frame does not list them again.
+The items due are derived from k and each item's div and phase, so they are not listed in the frame.
 
-- The timestamp comes from `esp_timer_get_time`, the probe's monotonic microsecond time, 48 bits. The time axis is not reset when sampling starts; the tick index restarts from 0. After a probe reboot the time axis restarts from 0.
-- Items within a frame are read one after another, so the variables of one frame differ in time and are not values at a single instant.
-- To align with the host clock: record the local time before and after an INFO or SUB_READ request, pair the midpoint with the probe time in the response, and take the difference as the offset. The error is about half a round trip. Every SUB_READ can update the offset.
+- The timestamp comes from libxr's Timebase: the probe's monotonic microsecond time, 48 bits, the same clock as the probe time in INFO and SUB_READ. The time axis is not reset when sampling starts; the tick index restarts from 0. After a probe restart the time axis starts from 0.
+- Items in one frame are read one after another, so variables in the same frame are not sampled at the same instant.
+- Aligning to the host clock: record the host time before and after an INFO or SUB_READ request, pair the midpoint with the probe time in the response, and take the offset; the error is about half a round trip. Every SUB_READ can refresh the offset.
 
-#### SWD cannot keep up
+#### Keeping up and skipped ticks
 
-When a tick takes longer than the period, the probe does not catch up; it jumps to the next tick that has not yet passed. The tick index then has a gap, and the number of missing ticks accumulates in the skipped tick count. The probe does not lower the rate or drop items on its own; the host adjusts according to the counters.
+- When sampling wakes, every tick between the last one sampled and the current count that was not sampled counts as skipped and accumulates in the skipped tick count; the tick index then has a gap. The probe does not make up ticks and does not lower the rate or drop items by itself.
+- When the next tick arrives while a tick is still being read, that tick is not made up; sampling waits for the one after it.
+- When one tick is busy for more than `period - max(period / 8, 15 µs)`, the probe gives up one more tick (counted as skipped) so other tasks on the same core get time.
 
 #### Reading too slowly
 
 Frames are first written to the ring buffer (its size is in INFO; each frame takes another 2 bytes for its length). When the buffer is full, the oldest frame is overwritten or the new frame is dropped according to flags.bit0; the number of frames overwritten or dropped accumulates in the dropped frame count, and gaps in the tick index also show which ticks were lost. When the unread byte count is not 0, the host should read again immediately.
 
-Bytes per tick are 10 + bitmap + the sizes of the due items; averaging by div and comparing with the real link speed shows whether the bandwidth suffices.
+Each tick takes 10 + bitmap + the sizes of the due items; averaged over div and compared with the real link speed, this estimates whether the bandwidth is enough.
 
-| Counter | Cause | Remedy |
+The host judges keeping up from these three values and gives advice:
+
+| Value | Meaning | Advice |
 |---|---|---|
-| Skipped ticks | SWD cannot keep up | Increase the period, increase div, reduce items |
-| Dropped frames | Reading too slowly or link bandwidth too low | Read more often, increase div, reduce items |
+| Skipped ticks | growing: SWD cannot keep up | longer period, larger div, fewer items |
+| Dropped frames | growing: reading too slowly or not enough link bandwidth | read more often, larger div, fewer items |
+| Bytes left | staying close to the buffer size: frames are about to drop | as above |
 
 ### 3.6 SWD access
 
-- DP SELECT: `ap << 24` is written when accessing a MEM-AP. CSW, TAR and DRW are all in bank 0.
-- CSW: the CSW of an AP is read once the first time a READ or WRITE command uses that AP, during the SUB_SET trial reads, and when sampling starts. When accessing, `(old & ~0x37) | Size` is written, which clears Size (bits 2:0) and AddrInc (bits 5:4), keeps Prot, HNONSEC and the other bits, sets the access width and disables auto-increment. It is not re-read within the same command or the same sampling run.
+- DP SELECT: `ap << 24` when accessing a MEM-AP; CSW, TAR and DRW are in bank 0. The AP's IDR is read with bank 0xF (register 0xFC).
+- CSW: the CSW of an AP is read once the first time a READ or WRITE command uses that AP, and at SUB_START; it is not read again within the same command or the same sampling run. When HPROT1 (bit 25) of the CSW read is 0, the AP's IDR is read too: when the IDR class (bits 16:13) is 8 (MEM-AP) and its type (bits 3:0) is 1, 5 or 8 (AHB3, AHB5, AHB5 with enhanced HPROT), bit 24 (HPROT0, data access), bit 25 (HPROT1, privileged) and bit 29 (debug master) of Prot are set, the same bits as OpenOCD's `CSW_AHB_DEFAULT`; the other Prot bits (cache, buffer, secure attributes) keep the value read. Other AP types (for example AXI-AP, APB-AP) use these bits differently and keep them. Accesses write `(that value & ~0x37) | Size`, i.e. Size (bits 2:0) and AddrInc (bits 5:4) cleared, the access width set and auto-increment off. After one write HPROT1 in the AP is 1, so the IDR is not read again.
 - Reading a word: write TAR, read DRW, then read DP RDBUFF for the result. Items are accessed one by one in order.
 - Writing a word: write TAR, write DRW, then read DP CTRL/STAT and check STICKYORUN, STICKYERR and WDATAERR.
-- 1- and 2-byte accesses: CSW Size is set to 8 or 16 bits; the value sits in DRW on the byte lane selected by the low address bits, and the probe places it in the low bytes of value.
-- 8 bytes: two 32-bit accesses, low address first, not atomic; a running target can yield an inconsistent value. Aligned accesses of 4 bytes or fewer are a single access.
-- WAIT acknowledge: the retry count set by `DAP_TransferConfigure` applies; exceeding it counts as failure.
-- After any FAULT, timeout or sticky error, DP ABORT = `0x0000001E` (STKCMPCLR, STKERRCLR, WDERRCLR, ORUNERRCLR) is written before the next item continues.
-- Memory is accessed through the MEM-AP; the core does not need to be halted.
+- 1- and 2-byte accesses: CSW Size is set to 8 or 16 bits; the value sits on the DRW byte lanes selected by the low address bits, and the probe moves it to the low bytes of value.
+- 8 bytes: two 32-bit accesses, low address first, not atomic; a running target may yield an inconsistent value. Aligned accesses of 4 bytes or less are single accesses.
+- WAIT responses: retried up to the count set by `DAP_TransferConfigure`; exceeding it is a failure.
+- After any access with FAULT, a timeout or a sticky error, DP ABORT = `0x0000001E` (STKCMPCLR, STKERRCLR, WDERRCLR, ORUNERRCLR) is written before continuing with the next item.
+- Memory is read and written through the MEM-AP; the core does not need to be halted.
 
 ### 3.7 0x86 Wi-Fi configuration
 
@@ -334,7 +346,7 @@ Response: `86 status`. With status 0x00 the credentials have been written to NVS
 
 #### op 2 clear
 
-Request: `86 02` (the length must be 2 bytes)
+Request: `86 02 A5` (the length must be 3 bytes; the third byte is the confirm byte 0xA5). A missing or wrong confirm byte returns 0x01 and does nothing, so a stray short command cannot clear the credentials.
 
 Response: `86 status`. With status 0x00 the credentials have been cleared, and about 0.5 seconds after the response is sent the probe restarts; Wi-Fi does not start after the restart.
 
@@ -346,9 +358,9 @@ The values below are examples only.
 
 Request: `80`
 
-Response: `80 00 01 1F000000 2000 08 00400000 40420F0000000000 32000000`
+Response: `80 00 02 1F000000 2000 08 00400000 40420F0000000000`
 
-Meaning: version 1, feature bits 0x1F, at most 32 items, depth 8, buffer 16384 bytes, probe time 1 000 000 µs, single access 50 µs.
+Meaning: version 2, feature bits 0x1F, at most 32 items, depth 8, 16384-byte buffer, probe time 1 000 000 µs.
 
 #### READ, one item
 
@@ -358,7 +370,7 @@ Item: `00 0100 04 00000020 01 0800 0400` (ap 0, id 1, size 4, base 0x20000000, n
 
 Request: `81 01 00 0100 04 00000020 01 0800 0400`
 
-Response (the pointer reads 0x20001000, the value there is 0x12345678): `81 00 01 0100 00 78563412`
+Response (the pointer reads 0x20001000 and the value there is 0x12345678): `81 00 01 0100 00 78563412`
 
 Response when the pointer is 0: `81 00 01 0100 30 00000000`
 
@@ -372,7 +384,7 @@ Request: `82 01 00 0200 02 10000020 00 0000 3412`
 
 Response: `82 00 01 0200 00`
 
-#### SUB_SET, two items
+#### SUB_START, two items
 
 Period 1000 µs, flags 0, 2 items:
 
@@ -381,38 +393,40 @@ Period 1000 µs, flags 0, 2 items:
 
 Request: `83 E8030000 00 0200`, followed by item 1 and item 2
 
-Response: `83 00 1100 78000000` (at most 17 bytes per frame, estimated frame time 120 µs)
+Response: `83 00`; sampling has started.
 
-Item 2 is due at k = 7, 17, 27, ... (`(k + 3) % 10 == 0`).
+Item 2 is due at k = 7, 17, 27, … (`(k + 3) % 10 == 0`).
 
-With the same two items and a period of 100 µs the request is rejected: `83 03 1100 78000000`
-
-Before `DAP_Connect`: `83 04`
-
-#### SUB_CTRL start
-
-Request: `84 01`, response: `84 00`
+Sent again while sampling: `83 02`; without `DAP_Connect` in this session: `83 04`
 
 #### SUB_READ
 
 Request: `85 0004` (at most 1024 bytes, on a probe with 1024-byte packets)
 
-The response holds two frames: at k = 6 only item 1 is due, at k = 7 both items are due.
+A response with two frames: at k = 6 only item 1 is due, at k = 7 both items are due.
 
 ```
-85 00                      command, overall status
+85 00                      command, overall status (sampling)
 80610F0000000000           current probe time 1 008 000 µs
-00000000                   0 bytes unread
-00000000                   0 frames dropped in total
-00000000                   0 ticks skipped in total
+00000000                   0 bytes left unread
+00000000                   0 dropped frames
+00000000                   0 skipped ticks
 0200                       2 frames
-06000000 B0590F000000 00 07000000              k=6, timestamp 1 006 000 µs, bitmap 00, value of item 1 is 7
+06000000 B0590F000000 00 07000000              k=6, timestamp 1 006 000 µs, bitmap 00, item 1 value 7
 07000000 985D0F000000 00 08000000 3412         k=7, timestamp 1 007 000 µs, bitmap 00, item 1 value 8, item 2 value 0x1234
 ```
 
 #### Stop
 
 Request: `84 00`, response: `84 00`
+
+#### Not enough reply space
+
+Inside `DAP_ExecuteCommands` the commands before used up the packet, and 5 bytes are left when a READ whose reply needs 10 bytes comes: this READ's reply is `81 03`, and it does not run. With 1 byte left it is `FF`.
+
+#### Another transport owns the probe
+
+USB is the owner; a READ over serial: `81 05`; a `DAP_Transfer` over serial: `05 FF`; a `DAP_Info` over serial: answered as usual.
 
 #### 0x86 query
 
@@ -432,11 +446,13 @@ Response: `86 00`; the probe restarts about 0.5 seconds later.
 
 #### 0x86 clear
 
-Request: `86 02`, response: `86 00`; the probe restarts about 0.5 seconds later.
+Request: `86 02 A5`, response: `86 00`; the probe restarts about 0.5 seconds later.
+
+Without the confirm byte: request `86 02`, response `86 01`; the credentials stay.
 
 #### Standard command during sampling
 
-Request: `05 ...` (`DAP_Transfer`), response: `FF`
+Request: `05 …` (`DAP_Transfer`), response: `FF`
 
 ## 4. Probe identity and discovery
 
@@ -448,7 +464,7 @@ The firmware returns these strings in `DAP_Info` (`probe/probe_identity.hpp` in 
 |---|---|---|
 | 0x01 | Vendor | `XRobot` |
 | 0x02 | Product | ESP32-S3: `XR-DAP-S3`; ESP32-C3: `XR-DAP-C3`; ESP32: `XR-DAP-ESP32`; STM32F103: `XR-DAP-F103`; CH32V307: `XR-DAP-V307` |
-| 0x03 | Serial number | `XRobot-XRDAP-` followed by the chip's unique id in upper-case hexadecimal: the factory MAC on ESP (6 bytes from eFuse, 12 digits), e.g. `XRobot-XRDAP-E8069093EF1C`; the 12-byte UID on STM32F103 and CH32V307 (24 digits) |
+| 0x03 | Serial number | `XRobot-XRDAP-` followed by the chip's unique id in upper-case hexadecimal: the factory MAC on ESP (6 bytes from eFuse, 12 digits), e.g. `XRobot-XRDAP-0123456789AB`; the 12-byte UID on STM32F103 and CH32V307 (24 digits) |
 | 0x04 | CMSIS-DAP protocol version | `2.0.0` |
 | 0x05, 0x06 | Target device vendor, name | Not provided (empty) |
 | 0x07 | Board vendor | `XRobot` |
@@ -463,9 +479,9 @@ Once the probe has an IP address it advertises itself on the LAN:
 
 | Item | Content |
 |---|---|
-| Host name | `xrdap-` followed by the last 3 MAC bytes in lower-case hexadecimal, e.g. `xrdap-93ef1c.local` |
+| Host name | `xrdap-` followed by the last 3 MAC bytes in lower-case hexadecimal, e.g. `xrdap-6789ab.local` |
 | Service | `_xrdap._tcp`, on the TCP DAP port 3241 |
-| Instance name | The serial number, e.g. `XRobot-XRDAP-E8069093EF1C` |
+| Instance name | The serial number, e.g. `XRobot-XRDAP-0123456789AB` |
 | TXT `serial` | The serial number |
 | TXT `chip` | `esp32s3` or `esp32c3` |
 | TXT `fw` | Firmware version, e.g. `0.5.5` |
@@ -506,4 +522,8 @@ Device:
 
 DAP command pairing: every Bulk OUT is executed immediately and its response is queued (depth 4, equal to the packet count reported by DAP_Info) and handed to the waiting Bulk IN in order of arrival; an IN that arrives first waits in the queue for a response. A command without a response (DAP_TransferAbort) does not take an IN. When the queue is full the URB is answered with -EPIPE.
 
-The replies caused by one command (the reply to the OUT and the response paired with an IN) are combined into a single `send()`. When sent in two parts, the second part waits for the peer's delayed ACK, which adds about 40 ms to every round trip.
+The replies caused by one command (the reply to the OUT and the response paired with an IN) are combined into a single `send()`. When sent in two parts, the second part waits for the peer's delayed ACK, which makes every round trip much slower.
+
+## 7. Notes for USB hosts
+
+A full-speed USB Bulk packet is 64 bytes. When a request length is an exact multiple of 64 (128, 192 bytes, ...) and smaller than the DAP packet size, the OUT transfer has no short packet to mark its end, so the probe keeps waiting: the request gets no response and later responses are misaligned. After sending such a request the host must send a zero-length packet. A SUB_START with 8 items is exactly 128 bytes and is the most likely case. `xrdap` handles this; clients written with libusb or pyusb must add it. For reception, the IN request length must be a multiple of the endpoint maximum packet size (and not smaller than the DAP packet size).

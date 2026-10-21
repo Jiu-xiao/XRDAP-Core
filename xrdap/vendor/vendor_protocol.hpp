@@ -30,6 +30,17 @@ enum class Cmd : uint8_t
 constexpr uint8_t kFirstCmd = static_cast<uint8_t>(Cmd::INFO);
 constexpr uint8_t kLastCmd = static_cast<uint8_t>(Cmd::SUB_READ);
 
+/// Wi-Fi 配置命令（仅 XRDAP-ESP 实现，docs/protocol.md 3.7）/ Wi-Fi configuration
+/// command (implemented by XRDAP-ESP only, docs/protocol.md 3.7).
+constexpr uint8_t kWifiCmd = 0x86U;
+/// 0x86 的操作：查询、保存、清除 / 0x86 operations: query, save, clear.
+constexpr uint8_t kWifiOpQuery = 0x00U;
+constexpr uint8_t kWifiOpSave = 0x01U;
+constexpr uint8_t kWifiOpClear = 0x02U;
+/// 清除必须带的确认字节：请求为 86 02 A5 / Confirm byte a clear must carry: the request
+/// is 86 02 A5.
+constexpr uint8_t kWifiClearConfirm = 0xA5U;
+
 /// 协议版本 / Protocol version.
 constexpr uint8_t kVersion = 2;
 /// 功能位：READ | WRITE | 采样 | 8 字节访问 / Feature bits: READ | WRITE | sampling |
