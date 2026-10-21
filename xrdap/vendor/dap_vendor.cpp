@@ -51,13 +51,12 @@ void DapVendor::OnTransportClosed()
   DropConnection();
 }
 
-// 连接状态回到初始：扩展命令要求重新 DAP_Connect，SWD 的 SELECT 缓存作废。
+// 连接状态回到初始：扩展命令要求重新 DAP_Connect。
 void DapVendor::DropConnection()
 {
   connected_ = false;
   owner_ = Transport::USB;
   transport_ = Transport::USB;
-  mem_.ForgetSelect();
 }
 
 void DapVendor::OnNetworkClientConnected()
@@ -146,8 +145,7 @@ bool DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp, uint1
   else if (cmd == Dap::kDisconnect)
   {
     connected_ = false;
-    mem_.ForgetSelect();
-  }
+    }
   return false;
 }
 

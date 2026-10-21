@@ -88,7 +88,7 @@ bool MemAp::ReadCsw(uint8_t ap, uint32_t& csw)
   const uint32_t select = static_cast<uint32_t>(ap) << 24;
   for (int attempt = 0; attempt < 2; ++attempt)
   {
-    Ack ack;
+    Ack ack = Ack::NO_ACK;
     if (TxnOk(swd_.SetSelectCached(select, ack), ack) &&
         TxnOk(swd_.ApReadTxn(kApCsw, csw, ack), ack))
     {
@@ -122,7 +122,7 @@ bool MemAp::ReadCsw(uint8_t ap, uint32_t& csw)
 bool MemAp::Calibrate(uint8_t ap, uint32_t& us)
 {
   constexpr uint32_t kRounds = 16U;
-  Ack ack;
+  Ack ack = Ack::NO_ACK;
   uint32_t v = 0U;
   bool ok = TxnOk(swd_.SetSelectCached(static_cast<uint32_t>(ap) << 24, ack), ack);
   const uint64_t t0 = LibXR::Timebase::GetMicroseconds();
@@ -154,7 +154,7 @@ bool MemAp::SetSize(ApState& st, uint8_t size)
   {
     return true;
   }
-  Ack ack;
+  Ack ack = Ack::NO_ACK;
   if (!TxnOk(swd_.ApWriteTxn(kApCsw, csw, ack), ack))
   {
     st.written = false;
@@ -168,7 +168,7 @@ bool MemAp::SetSize(ApState& st, uint8_t size)
 
 bool MemAp::ReadWord(uint32_t addr, uint32_t& val)
 {
-  Ack ack;
+  Ack ack = Ack::NO_ACK;
   if (!TxnOk(swd_.ApWriteTxn(kApTar, addr, ack), ack) ||
       !TxnOk(swd_.ApReadTxn(kApDrw, val, ack), ack))
   {
@@ -181,7 +181,7 @@ bool MemAp::ReadWord(uint32_t addr, uint32_t& val)
 // 写是 posted 的，写完读一次 CTRL/STAT 看有没有粘滞错误。
 bool MemAp::CheckCtrlStat()
 {
-  Ack ack;
+  Ack ack = Ack::NO_ACK;
   uint32_t cs = 0U;
   if (!TxnOk(swd_.DpReadTxn(DpReadReg::CTRL_STAT, cs, ack), ack) ||
       (cs & kCtrlStatErrors) != 0U)
@@ -194,7 +194,7 @@ bool MemAp::CheckCtrlStat()
 
 bool MemAp::WriteWord(uint32_t addr, uint32_t val)
 {
-  Ack ack;
+  Ack ack = Ack::NO_ACK;
   if (!TxnOk(swd_.ApWriteTxn(kApTar, addr, ack), ack) ||
       !TxnOk(swd_.ApWriteTxn(kApDrw, val, ack), ack))
   {
@@ -207,7 +207,7 @@ bool MemAp::WriteWord(uint32_t addr, uint32_t val)
 // 不清掉粘滞错误，后面的访问会连续失败。
 void MemAp::ClearSticky()
 {
-  Ack ack;
+  Ack ack = Ack::NO_ACK;
   (void)swd_.WriteAbortTxn(kAbortClearAll, ack);
 }
 

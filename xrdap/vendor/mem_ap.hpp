@@ -63,11 +63,6 @@ class MemAp
   ///        object.
   explicit MemAp(LibXR::Debug::Swd& swd) : swd_(swd) {}
 
-  /// @brief 让 SWD 的 SELECT 缓存失效；目标断开或换了传输时调用，不需要 Lock /
-  ///        Invalidate the SWD SELECT cache; call when the target disconnects or the
-  ///        transport changes. No Lock needed.
-  void ForgetSelect() { swd_.InvalidateSelectCache(); }
-
   // 以下方法都要求调用方持有 Lock / Every method below requires the caller to hold a
   // Lock.
 
