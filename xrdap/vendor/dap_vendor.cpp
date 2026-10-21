@@ -5,6 +5,7 @@
 
 #include "timebase.hpp"
 #include "xrdap/protocol/dap_ids.hpp"
+#include "xrdap/vendor/reply_space.hpp"
 
 namespace XrDap
 {
@@ -12,12 +13,6 @@ using namespace Vendor;
 
 namespace
 {
-// 回复的最小长度：INFO 26 字节，SUB_SET 8 字节，SUB_READ 头 24 字节 / Minimum reply
-// sizes: INFO 26 bytes, SUB_SET 8 bytes, SUB_READ header 24 bytes.
-constexpr uint16_t kInfoReplyLen = 26U;
-constexpr uint16_t kSubSetReplyLen = 8U;
-constexpr uint16_t kSubReadHeaderLen = 24U;
-
 enum class SubCtrlOp : uint8_t
 {
   STOP = 0,
@@ -114,20 +109,31 @@ bool DapVendor::IsVendor(uint8_t cmd) const
 bool DapVendor::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len, uint8_t* resp,
                              uint16_t cap, uint16_t& out)
 {
+  // 回复空间一处检查：附加命令只保证至少 2 字节，自己的回复长度由它自己检查。
+  // One reply space check: the extra command is only guaranteed 2 bytes and checks the
+  // length of its own reply.
   if (extra_handler_ != nullptr && cmd == extra_cmd_)
   {
+    if (!ReserveReply(cmd, 2U, resp, cap, out))
+    {
+      return true;
+    }
     return extra_handler_(extra_ctx_, req, len, resp, cap, out);
+  }
+  if (!ReserveReply(cmd, RequiredReply(req, len), resp, cap, out))
+  {
+    return true;
   }
   switch (static_cast<Cmd>(cmd))
   {
     case Cmd::INFO:
-      return CmdInfo(len, resp, cap, out);
+      return CmdInfo(len, resp, out);
     case Cmd::READ:
-      return CmdRead(req, len, resp, cap, out);
+      return CmdRead(req, len, resp, out);
     case Cmd::WRITE:
-      return CmdWrite(req, len, resp, cap, out);
+      return CmdWrite(req, len, resp, out);
     case Cmd::SUB_SET:
-      return CmdSubSet(req, len, resp, cap, out);
+      return CmdSubSet(req, len, resp, out);
     case Cmd::SUB_CTRL:
       return CmdSubCtrl(req, len, resp, out);
     case Cmd::SUB_READ:
@@ -136,13 +142,8 @@ bool DapVendor::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len, uint
   return false;
 }
 
-bool DapVendor::CmdInfo(uint16_t len, uint8_t* resp, uint16_t cap, uint16_t& out)
+bool DapVendor::CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out)
 {
-  if (cap < kInfoReplyLen)
-  {
-    out = 0U;
-    return true;
-  }
   resp[0] = ToU8(Cmd::INFO);
   if (len != 1U)
   {
@@ -160,8 +161,7 @@ bool DapVendor::CmdInfo(uint16_t len, uint8_t* resp, uint16_t cap, uint16_t& out
   return true;
 }
 
-bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
-                        uint16_t& out)
+bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
 {
   resp[0] = ToU8(Cmd::READ);
   if (len < 2U || req[1] == 0U)
@@ -176,7 +176,6 @@ bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_
   const uint8_t* const first = req + 2;
   const uint8_t* const end = req + len;
   const uint8_t* p = first;
-  uint32_t resp_size = 3U;
   for (uint8_t i = 0; i < count; ++i)
   {
     Item it;
@@ -184,15 +183,10 @@ bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_
     {
       return Reply(resp, kStatusArg, out);
     }
-    resp_size += 3U + it.size;
   }
   if (p != end)
   {
     return Reply(resp, kStatusArg, out);
-  }
-  if (resp_size > cap || resp_size > max_packet_)
-  {
-    return Reply(resp, kStatusResource, out);
   }
   if (!Connected())
   {
@@ -219,8 +213,7 @@ bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_
   return true;
 }
 
-bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
-                         uint16_t& out)
+bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
 {
   resp[0] = ToU8(Cmd::WRITE);
   if (len < 2U || req[1] == 0U)
@@ -250,10 +243,6 @@ bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16
   {
     return Reply(resp, kStatusArg, out);
   }
-  if (3U + 3U * count > cap || 3U + 3U * count > max_packet_)
-  {
-    return Reply(resp, kStatusResource, out);
-  }
   if (!Connected())
   {
     return Reply(resp, kStatusNoTarget, out);
@@ -278,14 +267,8 @@ bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16
   return true;
 }
 
-bool DapVendor::CmdSubSet(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
-                          uint16_t& out)
+bool DapVendor::CmdSubSet(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
 {
-  if (cap < kSubSetReplyLen)
-  {
-    out = 0U;
-    return true;
-  }
   resp[0] = ToU8(Cmd::SUB_SET);
   if (sampler_.Active())
   {
@@ -395,11 +378,6 @@ bool DapVendor::StartSampling()
 bool DapVendor::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                            uint16_t& out)
 {
-  if (cap < kSubReadHeaderLen)
-  {
-    out = 0U;
-    return true;
-  }
   resp[0] = ToU8(Cmd::SUB_READ);
   if (len != 3U)
   {

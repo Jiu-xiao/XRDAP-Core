@@ -55,12 +55,8 @@ class DapVendor
   ///        object.
   /// @param session 会话主人，生命周期需长于本对象 / Session owner; must outlive this
   ///        object.
-  /// @param max_packet DAP 包长 / DAP packet size.
-  DapVendor(LibXR::Debug::Swd& swd, SessionOwner& session, uint16_t max_packet)
-      : max_packet_(max_packet),
-        session_(session),
-        mem_(swd),
-        sampler_(mem_, &DapVendor::KeepSampling, this)
+  DapVendor(LibXR::Debug::Swd& swd, SessionOwner& session)
+      : session_(session), mem_(swd), sampler_(mem_, &DapVendor::KeepSampling, this)
   {
   }
 
@@ -96,6 +92,9 @@ class DapVendor
   /// @brief 挂一条附加命令，其 feature 并入 INFO 功能位 / Attach one extra command whose
   ///        feature bit is merged into INFO.
   /// @param cmd 命令字节，应在 0x85 之后 / Command byte, expected above 0x85.
+  /// @param handler 至少有 2 字节回复空间时才被调用，回复不能超过给它的 cap /
+  ///        Called only with at least 2 bytes of reply space; its reply must not exceed
+  ///        the cap it is given.
   /// @note 初始化时、命令开始执行之前调用，只能挂一条 / Call at initialisation, before
   ///       commands run; only one is supported.
   void SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler, void* ctx);
@@ -107,19 +106,15 @@ class DapVendor
   bool IsVendor(uint8_t cmd) const;
   bool HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len, uint8_t* resp,
                     uint16_t cap, uint16_t& out);
-  bool CmdInfo(uint16_t len, uint8_t* resp, uint16_t cap, uint16_t& out);
-  bool CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
-               uint16_t& out);
-  bool CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
-                uint16_t& out);
-  bool CmdSubSet(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
-                 uint16_t& out);
+  bool CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out);
+  bool CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
+  bool CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
+  bool CmdSubSet(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
   bool CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
   bool CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                   uint16_t& out);
   bool StartSampling();
 
-  uint16_t max_packet_;
   SessionOwner& session_;
   Vendor::MemAp mem_;
   Vendor::Sampler sampler_;

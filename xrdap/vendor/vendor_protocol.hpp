@@ -49,6 +49,13 @@ static_assert((kRingBytes & (kRingBytes - 1U)) == 0U, "Port::kRingBytes: power o
 /// sample frame: tick 4 + timestamp 6 + status bitmap + values.
 constexpr uint16_t kMaxFrameBytes = 10U + (kMaxItems + 7U) / 8U + kMaxItems * 8U;
 
+/// INFO 回复的字节数 / Bytes of the INFO reply.
+constexpr uint16_t kInfoReplyLen = 26U;
+/// SUB_SET 回复的字节数 / Bytes of the SUB_SET reply.
+constexpr uint16_t kSubSetReplyLen = 8U;
+/// SUB_READ 回复头的字节数 / Bytes of the SUB_READ reply head.
+constexpr uint16_t kSubReadHeaderLen = 24U;
+
 /// 命令状态：成功 / Command status: success.
 constexpr uint8_t kStatusOk = 0x00;
 /// 命令状态：参数错误 / Command status: bad argument.
