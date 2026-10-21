@@ -47,6 +47,7 @@ def rad_pairing(ctx):
                 raise R.NotApplicable("no radio settings command (0x9F 0x13)")
             return r[4], struct.unpack_from("<I", r, 8)[0]
 
+    ctx.need_operator()
     paired, link_id = settings()
     ctx.check("paired before", paired == 1)
     ctx.ask("power-cycle both radio boards (unplug both, plug both back)")

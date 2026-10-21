@@ -289,7 +289,7 @@ STAB-05 (assisted): turn off the hotspot and confirm that the probe is unreachab
 
 STAB-06: a child process connects, starts sampling and exits directly, without stopping, Disconnect or closing. Pass: the next client can stop sampling, and sampling works normally after reconnecting.
 
-STAB-07 (assisted): reset or power-cycle the probe during sampling. The tool starts timing when the probe stops responding and stops at the first DAP_Info response, which is the boot time. Pass: it responds within 60 s, and sampling works normally afterwards.
+STAB-07 (assisted): reset or power-cycle the probe during sampling. The tool starts timing when the probe stops responding and stops at the first DAP_Info response, which is the boot time (when `--restart-cmd` returns only after the restart has begun, timing starts at the end of the command). Pass: it responds within 60 s, the probe time starts again from zero (the probe really restarted), and sampling works normally afterwards.
 
 ### 4.7 Multiple clients
 

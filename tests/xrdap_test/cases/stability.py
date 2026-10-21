@@ -94,6 +94,8 @@ def after_recovery(ctx):
 @R.case("STAB-03", "Replug the probe while sampling: sampling stops, the link comes back",
         mode=R.ASSISTED, links=("usb", "serial", "radio"))
 def stab_replug(ctx):
+    if not ctx.args.replug_cmd:
+        ctx.need_operator()
     start_sampling(ctx)
     if ctx.args.replug_cmd:
         subprocess.run(ctx.args.replug_cmd, shell=True, check=True)
@@ -115,6 +117,7 @@ def stab_replug(ctx):
 
 @R.case("STAB-04", "Target power loss during sampling and after", mode=R.ASSISTED)
 def stab_target_power(ctx):
+    ctx.need_operator()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         items = numbered(t.word_items(4))
@@ -134,6 +137,7 @@ def stab_target_power(ctx):
 @R.case("STAB-05", "Wi-Fi access point loss: time until the probe is reachable again",
         mode=R.ASSISTED, links=("tcp", "usbip"))
 def stab_wifi(ctx):
+    ctx.need_operator()
     ctx.ask("switch the access point off")
     gone = wait_probe(ctx, True, 60)
     ctx.check("probe unreachable while the AP is off", gone is not None)
@@ -153,8 +157,9 @@ from xrdap_test import link
 from xrdap_test.dap import Dap
 from xrdap_test.vendor import Vendor, numbered, Item
 lk = link.open_link({spec!r})
+v = Vendor(lk); v.stop()
 d = Dap(lk); d.query_packet(); d.attach({clock})
-v = Vendor(lk); v.sub_set(1000, numbered([Item({addr})])); v.sub_ctrl(1)
+v.sub_set(1000, numbered([Item({addr})])); v.sub_ctrl(1)
 os._exit(0)  # no stop, no DAP_Disconnect, no close
 """
 
@@ -177,16 +182,26 @@ def stab_host_exit(ctx):
 
 @R.case("STAB-07", "Probe restart: boot time to the first DAP_Info answer, sampling works again", mode=R.ASSISTED)
 def stab_restart(ctx):
+    if not ctx.args.restart_cmd:
+        ctx.need_operator()
     start_sampling(ctx)
+    with ctx.link() as lk:
+        before = Vendor(lk).info()["probe_time_us"]
     if ctx.args.restart_cmd:
         subprocess.run(ctx.args.restart_cmd, shell=True, check=True)
     else:
         ctx.ask("after Enter, press the probe's reset button (or power-cycle it) within 10 s")
+    # Measured from the moment the probe stops answering; a restart command that returns
+    # after the reboot has begun leaves nothing to see, so it is timed from its end.
     gone = wait_probe(ctx, True, 10)
     back = wait_probe(ctx, False, 60)
     ctx.check("probe answers again within 60 s", back is not None)
     ctx.metric("down_seen", gone is not None)
     ctx.metric("ready_s", round(back, 2) if back else None)
     if back:
+        with ctx.link() as lk:
+            after = Vendor(lk).info()["probe_time_us"]
+        ctx.check("the probe restarted (its clock started again)", after < before,
+                  f"{before // 1000} ms -> {after // 1000} ms")
         after_recovery(ctx)
     ctx.summary(f"ready {back:.1f} s after the restart was seen" if back else "not back")

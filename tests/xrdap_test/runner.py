@@ -101,6 +101,12 @@ class Context:
     def summary(self, text):
         self.result.summary = text
 
+    def need_operator(self):
+        """Assisted cases call this before touching the probe, so a skipped case leaves
+        nothing running."""
+        if not self.prompt:
+            raise NotApplicable("needs an operator (run without --no-prompt)")
+
     def ask(self, text):
         """Operator step of an assisted case; returns False when prompts are off."""
         if not self.prompt:
