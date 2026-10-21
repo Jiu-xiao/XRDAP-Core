@@ -522,6 +522,44 @@ Device:
 | Endpoints | Bulk OUT 0x01, Bulk IN 0x81, 512 bytes |
 | BOS | MS OS 2.0 platform capability, vendor request code 0x20; descriptor set of 162 bytes: compatible ID `WINUSB`, `DeviceInterfaceGUIDs` = `{CDB3B5AD-293B-4663-AA36-1AAE46463776}` |
 
+Descriptor bytes (the ESP firmware and the `usbip` module of XRDAP-Host both follow these):
+
+```
+Device descriptor (18 bytes)
+12 01 10 02 00 00 00 40 50 1D 99 61 00 02 01 02 03 01
+
+Configuration descriptor (wTotalLength 32 = configuration 9 + interface 9 + endpoint 7 + endpoint 7)
+09 02 20 00 01 01 00 80 32
+09 04 00 00 02 FF 00 00 04
+07 05 01 02 00 02 00
+07 05 81 02 00 02 00
+
+Device qualifier descriptor (10 bytes)
+0A 06 00 02 00 00 00 40 01 00
+
+BOS (wTotalLength 33 = BOS header 5 + MS OS 2.0 platform capability 28)
+05 0F 21 00 01
+1C 10 05 00 DF 60 DD D8 89 45 C7 4C 9C D2 65 9D 9E 64 8A 9F 00 00 03 06 A2 00 20 00
+
+MS OS 2.0 descriptor set (162 bytes = set header 10 + compatible ID 20 + registry property 132)
+0A 00 00 00 00 00 03 06 A2 00
+14 00 03 00 57 49 4E 55 53 42 00 00 00 00 00 00 00 00 00 00
+84 00 04 00 07 00 2A 00
+44 00 65 00 76 00 69 00 63 00 65 00 49 00 6E 00 74 00 65 00 72 00 66 00 61 00 63 00
+65 00 47 00 55 00 49 00 44 00 73 00 00 00
+50 00
+7B 00 43 00 44 00 42 00 33 00 42 00 35 00 41 00 44 00 2D 00 32 00 39 00 33 00 42 00
+2D 00 34 00 36 00 36 00 33 00 2D 00 41 00 41 00 33 00 36 00 2D 00 31 00 41 00 41 00
+45 00 34 00 36 00 34 00 36 00 33 00 37 00 37 00 36 00 7D 00 00 00 00 00
+```
+
+- Device: bcdUSB 0x0210 (at least 2.01 when a BOS is present), class 0/0/0, EP0 packet size 64, 1D50:6199, bcdDevice 0x0200, string indexes 1/2/3, one configuration.
+- Configuration: one interface, bus-powered, 100 mA; the interface is vendor class 0xFF/0x00/0x00 and its name is string 4 (CMSIS-DAP v2 requires an interface name containing `CMSIS-DAP`); Bulk OUT 0x01 first, then Bulk IN 0x81, 512 bytes each.
+- The BOS platform capability UUID is MS OS 2.0's `{D8DD60DF-4589-4CC7-9CD2-659D9E648A9F}`, Windows version 0x06030000, descriptor set of 162 bytes, vendor request code 0x20. The host fetches the set with a `GET` vendor request (bRequest 0x20, wIndex 7).
+- The set holds only the device-level compatible ID `WINUSB` and the registry property `DeviceInterfaceGUIDs` (REG_MULTI_SZ, ending in two zeros) with the GUID CMSIS-DAP v2 prescribes, `{CDB3B5AD-293B-4663-AA36-1AAE46463776}`.
+- String 0 is `04 03 09 04` (English, United States); the other strings are UTF-16LE.
+- `usbip_usb_device`: bus ID `1-1`, busnum 1, devnum 1, speed 3 (high), device class 0/0/0, configuration value 1, 1 configuration, 1 interface (FF 00 00).
+
 DAP command pairing: every Bulk OUT is executed immediately and its response is queued (depth 4, equal to the packet count reported by DAP_Info) and handed to the waiting Bulk IN in order of arrival; an IN that arrives first waits in the queue for a response. A command without a response (DAP_TransferAbort) does not take an IN. When the queue is full the URB is answered with -EPIPE.
 
 The replies caused by one command (the reply to the OUT and the response paired with an IN) are combined into a single `send()`. When sent in two parts, the second part waits for the peer's delayed ACK, which makes every round trip much slower.
