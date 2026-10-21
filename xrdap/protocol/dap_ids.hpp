@@ -21,6 +21,24 @@ inline constexpr uint8_t kHostStatus = 0x01U;
 inline constexpr uint8_t kConnect = 0x02U;
 /// DAP_Disconnect / DAP_Disconnect.
 inline constexpr uint8_t kDisconnect = 0x03U;
+/// DAP_TransferConfigure / DAP_TransferConfigure.
+inline constexpr uint8_t kTransferConfigure = 0x04U;
+/// DAP_Transfer / DAP_Transfer.
+inline constexpr uint8_t kTransfer = 0x05U;
+/// DAP_TransferBlock / DAP_TransferBlock.
+inline constexpr uint8_t kTransferBlock = 0x06U;
+/// DAP_TransferAbort（没有响应）/ DAP_TransferAbort (no response).
+inline constexpr uint8_t kTransferAbort = 0x07U;
+/// DAP_Delay / DAP_Delay.
+inline constexpr uint8_t kDelay = 0x09U;
+/// DAP_ResetTarget / DAP_ResetTarget.
+inline constexpr uint8_t kResetTarget = 0x0AU;
+/// DAP_SWJ_Pins / DAP_SWJ_Pins.
+inline constexpr uint8_t kSwjPins = 0x10U;
+/// DAP_SWJ_Clock / DAP_SWJ_Clock.
+inline constexpr uint8_t kSwjClock = 0x11U;
+/// DAP_SWD_Configure / DAP_SWD_Configure.
+inline constexpr uint8_t kSwdConfigure = 0x13U;
 /// DAP_QueueCommands / DAP_QueueCommands.
 inline constexpr uint8_t kQueueCommands = 0x7EU;
 /// DAP_ExecuteCommands / DAP_ExecuteCommands.
