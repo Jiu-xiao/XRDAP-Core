@@ -1,8 +1,8 @@
-name: format
+name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, "feat/**"]
   pull_request:
 
 jobs:
@@ -14,3 +14,22 @@ jobs:
         run: |
           pip install clang-format==21.1.8
           git ls-files '*.hpp' '*.cpp' | xargs clang-format --dry-run --Werror
+
+  host-tests:
+    runs-on: ubuntu-latest
+    env:
+      # libxr 提交与各固件当前钉住的一致 / The libxr commit the firmwares pin today.
+      LIBXR_COMMIT: 0a9cca11340a1261d65a651659ff8d25e45b6486
+    steps:
+      - uses: actions/checkout@v4
+      - name: libxr
+        run: |
+          git clone --filter=blob:none https://github.com/xrobot-org/libxr.git "$RUNNER_TEMP/libxr"
+          git -C "$RUNNER_TEMP/libxr" checkout "$LIBXR_COMMIT"
+      - name: build
+        run: |
+          sudo apt-get install -y ninja-build
+          cmake -S tests -B build -G Ninja -DLIBXR_DIR="$RUNNER_TEMP/libxr"
+          cmake --build build
+      - name: ctest
+        run: ctest --test-dir build --output-on-failure
