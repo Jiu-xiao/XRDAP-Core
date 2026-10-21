@@ -40,7 +40,7 @@ The probe parses frames by these rules:
 - If the header CRC8 is wrong, version is not 1, the topic is not `dap_req`, or data_len is smaller than 2 or larger than 2 + the packet size (from DAP_Info), the current candidate frame is discarded and parsing restarts at the next `0x5A` in the buffer.
 - A wrong trailing CRC8 likewise discards the frame and resynchronises.
 - A frame with n larger than the packet size or n + 2 larger than data_len is discarded without a response.
-- A discarded request gets no response; the host handles it as a timeout. When `xrdap share` gets no response from the probe it ends that debug tool's connection and reports the reason; `DAP_TransferAbort` (0x07) has no response under CMSIS-DAP, and `xrdap share` sends nothing back to the debug tool for it.
+- A discarded request gets no response; the host handles it as a timeout. When `xrdap share` gets no response from the probe within the response timeout (`--timeout-ms`, default 2000 ms), or a serial, USB or TCP read or write to the probe fails, it ends that debug tool's connection and reports the reason. `DAP_TransferAbort` (0x07) is forwarded to the probe as usual; it has no response under CMSIS-DAP, so `xrdap share` sends nothing back to the debug tool, and over serial the host discards the probe's n = 0 frame.
 
 Requests and responses correspond one to one. The host sends one request at a time and sends the next after receiving the response. For a command with no response content, n in the response frame is 0.
 
