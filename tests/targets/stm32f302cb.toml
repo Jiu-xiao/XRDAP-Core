@@ -1,0 +1,9 @@
+# STM32F302CB: Cortex-M4, 128 KiB flash, 32 KiB SRAM.
+name = "stm32f302cb"
+dpidr = 0x2BA01477
+openocd_target = "target/stm32f3x.cfg"
+probe_rs_chip = "STM32F302CBTx"
+pyocd_target = "stm32f302cb"
+scratch = { base = 0x20001000, size = 0x4400 }
+dump = { base = 0x08000000, size = 0x20000 }
+flash_test = { base = 0x0801C000, size = 0x4000 }

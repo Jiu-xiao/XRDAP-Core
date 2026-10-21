@@ -20,6 +20,7 @@ The host tool is [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host). The proto
 | `light/` | `StatusLight`: computes the colour and level of the light at each moment from the link, the settings and DAP activity |
 | `probe/` | `SetProbeInfo`, `FormatSerial`: DAP_Info strings and the serial rule |
 | `docs/` | protocol document |
+| `tests/` | test specification of the whole family ([SPEC.en.md](tests/SPEC.en.md)) and the test tool `xrdap_test` ([usage](tests/README.en.md)) |
 
 This repository does not touch hardware. Time, mutexes and semaphores come from libxr's `Timebase`, `Mutex` and `Semaphore`, which all three platforms have; what libxr has no common abstraction for is supplied by the platform: creating the sampling task (ESP pins it to the core that drives SWD), the tick timer (`Vendor::TickTimer`), the LED driver and pins, and the query whether USB is configured.
 

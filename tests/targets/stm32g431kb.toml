@@ -1,0 +1,9 @@
+# STM32G431KB: Cortex-M4, 128 KiB flash, 22 KiB SRAM1/2 + 10 KiB CCM.
+name = "stm32g431kb"
+dpidr = 0x2BA01477
+openocd_target = "target/stm32g4x.cfg"
+probe_rs_chip = "STM32G431KBTx"
+pyocd_target = "stm32g431kbtx"
+scratch = { base = 0x20001000, size = 0x3000 }
+dump = { base = 0x08000000, size = 0x20000 }
+flash_test = { base = 0x0801C000, size = 0x4000 }
