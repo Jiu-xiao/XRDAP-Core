@@ -112,17 +112,26 @@ class SerialLink
 
   /// @brief 停止工作线程，最多等 1 s；串口的会话随之结束 / Stop the worker, waiting at
   ///        most 1 s; the serial session ends with it.
+  /// @return 工作线程已退出时 OK；1 s 内没退出时 TIMEOUT，这时仍算已启动，Start() 回
+  /// BUSY，
+  ///         不会再建第二个工作线程 / OK once the worker exited; TIMEOUT when it did not
+  ///         exit within 1 s, in which case the link still counts as started and Start()
+  ///         returns BUSY instead of creating a second worker.
   /// @note 任何任务，不能在工作线程里调用 / Any task except the worker itself.
-  void Stop()
+  LibXR::ErrorCode Stop()
   {
     if (!started_)
     {
-      return;
+      return LibXR::ErrorCode::OK;
     }
     stop_.store(true, std::memory_order_release);
-    (void)exited_.Wait(kStopTimeoutMs);
-    started_ = false;
     exec_.EndSession(Transport::SERIAL);
+    if (exited_.Wait(kStopTimeoutMs) != LibXR::ErrorCode::OK)
+    {
+      return LibXR::ErrorCode::TIMEOUT;
+    }
+    started_ = false;
+    return LibXR::ErrorCode::OK;
   }
 
   /// @brief 送入已收到的字节，整帧在这里执行并回复 / Feed received bytes; whole frames
