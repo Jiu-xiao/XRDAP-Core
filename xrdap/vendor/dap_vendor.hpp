@@ -30,11 +30,11 @@
 #include <atomic>
 #include <cstdint>
 
-#include "dap_activity.hpp"
 #include "debug/swd.hpp"
-#include "mem_ap.hpp"
-#include "sampler.hpp"
-#include "vendor_protocol.hpp"
+#include "xrdap/activity/dap_activity.hpp"
+#include "xrdap/vendor/mem_ap.hpp"
+#include "xrdap/vendor/sampler.hpp"
+#include "xrdap/vendor/vendor_protocol.hpp"
 
 namespace XrDap
 {
@@ -130,7 +130,7 @@ class DapVendor
 
   /// DAP 活动和上位机状态，给状态灯读 / DAP activity and host state, read by status
   /// lights.
-  const Vendor::DapActivity& Activity() const { return activity_; }
+  const DapActivity& Activity() const { return activity_; }
 
   /// libxr DAP 类的命令钩子入口，返回 true 表示命令已处理（回复在 resp/out）/ Entry for
   /// the libxr DAP class command hook; returns true when the command was handled (reply
@@ -162,7 +162,7 @@ class DapVendor
   uint16_t max_packet_;
   Vendor::MemAp mem_;
   Vendor::Sampler sampler_;
-  Vendor::DapActivity activity_;
+  DapActivity activity_;
 
   std::atomic<Transport> transport_{Transport::USB};
   std::atomic<Transport> owner_{Transport::USB};

@@ -26,10 +26,10 @@
 #include <atomic>
 #include <cstdint>
 
-#include "frame_ring.hpp"
-#include "mem_ap.hpp"
 #include "semaphore.hpp"
-#include "vendor_protocol.hpp"
+#include "xrdap/vendor/frame_ring.hpp"
+#include "xrdap/vendor/mem_ap.hpp"
+#include "xrdap/vendor/vendor_protocol.hpp"
 
 namespace XrDap::Vendor
 {

@@ -10,6 +10,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "xrdap_port.hpp"
+
 namespace XrDap::Vendor
 {
 
@@ -39,14 +41,10 @@ constexpr uint16_t kMaxItems = 32;
 constexpr uint8_t kMaxDepth = 8;
 /// 一条命令里最多用到的 AP 数 / Maximum distinct APs in one command.
 constexpr size_t kMaxAps = 8;
-/// 采样环形缓冲字节数，必须是 2 的幂，INFO 会报告。默认 4 KB；RAM 多的平台用编译定义
-/// XRDAP_RING_BYTES 加大 / Sampling ring buffer size in bytes; must be a power of two and
-/// is reported by INFO. 4 KB by default; platforms with more RAM raise it with the
-/// compile definition XRDAP_RING_BYTES.
-#ifndef XRDAP_RING_BYTES
-#define XRDAP_RING_BYTES 4096
-#endif
-constexpr uint32_t kRingBytes = XRDAP_RING_BYTES;
+/// 采样环形缓冲字节数，由平台在 xrdap_port.hpp 里给出，INFO 会报告 / Sampling ring
+/// buffer size in bytes, given by the platform in xrdap_port.hpp and reported by INFO.
+constexpr uint32_t kRingBytes = Port::kRingBytes;
+static_assert((kRingBytes & (kRingBytes - 1U)) == 0U, "Port::kRingBytes: power of two");
 /// 一帧采样数据的最大字节数：节拍号 4 + 时间戳 6 + 状态位图 + 值 / Maximum bytes of one
 /// sample frame: tick 4 + timestamp 6 + status bitmap + values.
 constexpr uint16_t kMaxFrameBytes = 10U + (kMaxItems + 7U) / 8U + kMaxItems * 8U;

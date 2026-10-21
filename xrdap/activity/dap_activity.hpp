@@ -13,7 +13,7 @@
 #include <atomic>
 #include <cstdint>
 
-namespace XrDap::Vendor
+namespace XrDap
 {
 
 /// DAP 活动统计，命令线程写、任意任务读 / DAP activity, written by the command thread and
@@ -87,4 +87,4 @@ class DapActivity
   std::atomic<bool> running_{false};
 };
 
-}  // namespace XrDap::Vendor
+}  // namespace XrDap

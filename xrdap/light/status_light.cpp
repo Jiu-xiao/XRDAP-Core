@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "status_light.hpp"
+#include "xrdap/light/status_light.hpp"
 
 namespace XrDap::Light
 {
@@ -61,8 +61,8 @@ StatusLight::StatusLight(uint32_t now_ms)
 {
 }
 
-Frame StatusLight::Update(Link link, Setting setting,
-                          const Vendor::DapActivity::State& dap, uint32_t now_ms)
+Frame StatusLight::Update(Link link, Setting setting, const DapActivity::State& dap,
+                          uint32_t now_ms)
 {
   const uint32_t t = now_ms - start_ms_;
   if (dap.commands != seen_commands_)

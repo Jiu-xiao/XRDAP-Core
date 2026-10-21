@@ -15,7 +15,7 @@
 
 #include "debug/swd.hpp"
 #include "mutex.hpp"
-#include "vendor_protocol.hpp"
+#include "xrdap/vendor/vendor_protocol.hpp"
 
 namespace XrDap::Vendor
 {

@@ -31,7 +31,7 @@
 
 #include <cstdint>
 
-#include "dap_activity.hpp"
+#include "xrdap/activity/dap_activity.hpp"
 
 namespace XrDap::Light
 {
@@ -95,7 +95,7 @@ class StatusLight
   /// @param link 主连接 / Main link.
   /// @param setting 设置状态 / Setting state.
   /// @param dap DapActivity::Read(now_ms) 的结果 / Result of DapActivity::Read(now_ms).
-  Frame Update(Link link, Setting setting, const Vendor::DapActivity::State& dap,
+  Frame Update(Link link, Setting setting, const DapActivity::State& dap,
                uint32_t now_ms);
 
  private:

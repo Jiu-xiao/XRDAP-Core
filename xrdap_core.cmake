@@ -7,14 +7,17 @@
 # (ESP-IDF: pass them to idf_component_register), and makes the libxr headers visible to
 # these sources together with the platform's xrdap_port.hpp.
 set(XRDAP_CORE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+# 不依赖 libxr 的纯逻辑，电脑端测试也编译它们 / Pure logic without libxr, also built
+# by the host tests.
+set(XRDAP_CORE_PURE_SOURCES
+    "${XRDAP_CORE_DIR}/xrdap/light/status_light.cpp"
+    "${XRDAP_CORE_DIR}/xrdap/probe/probe_identity.cpp"
+    "${XRDAP_CORE_DIR}/xrdap/vendor/frame_ring.cpp")
 set(XRDAP_CORE_SOURCES
-    "${XRDAP_CORE_DIR}/light/status_light.cpp"
-    "${XRDAP_CORE_DIR}/probe/probe_identity.cpp"
-    "${XRDAP_CORE_DIR}/vendor/dap_vendor.cpp"
-    "${XRDAP_CORE_DIR}/vendor/frame_ring.cpp"
-    "${XRDAP_CORE_DIR}/vendor/mem_ap.cpp"
-    "${XRDAP_CORE_DIR}/vendor/sampler.cpp")
-set(XRDAP_CORE_INCLUDE_DIRS
-    "${XRDAP_CORE_DIR}/light"
-    "${XRDAP_CORE_DIR}/probe"
-    "${XRDAP_CORE_DIR}/vendor")
+    ${XRDAP_CORE_PURE_SOURCES}
+    "${XRDAP_CORE_DIR}/xrdap/vendor/dap_vendor.cpp"
+    "${XRDAP_CORE_DIR}/xrdap/vendor/mem_ap.cpp"
+    "${XRDAP_CORE_DIR}/xrdap/vendor/sampler.cpp")
+# 头文件按 "xrdap/<模块>/<文件>.hpp" 引用 / Headers are included as
+# "xrdap/<module>/<file>.hpp".
+set(XRDAP_CORE_INCLUDE_DIRS "${XRDAP_CORE_DIR}")

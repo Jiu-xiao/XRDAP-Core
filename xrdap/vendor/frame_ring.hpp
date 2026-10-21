@@ -15,7 +15,7 @@
 
 #include <cstdint>
 
-#include "vendor_protocol.hpp"
+#include "xrdap/vendor/vendor_protocol.hpp"
 #include "xrdap_port.hpp"
 
 namespace XrDap::Vendor
@@ -54,9 +54,6 @@ class FrameRing
   void AddSkipped(uint32_t n);
 
  private:
-  static_assert((kRingBytes & (kRingBytes - 1U)) == 0U,
-                "kRingBytes must be a power of two");
-
   uint16_t FrameLen(uint32_t pos) const;
   void CopyIn(uint32_t at, const uint8_t* src, uint32_t len);
   void CopyOut(uint32_t at, uint8_t* dst, uint32_t len) const;
