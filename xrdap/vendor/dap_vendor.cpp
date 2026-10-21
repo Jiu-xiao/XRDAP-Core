@@ -40,113 +40,69 @@ void DapVendor::SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler hand
   extra_ctx_ = ctx;
 }
 
-void DapVendor::NotifySerialActivity()
-{
-  last_serial_ms_.store(NowMs(), std::memory_order_release);
-}
-
-void DapVendor::OnTransportClosed()
-{
-  sampler_.Stop();
-  DropConnection();
-}
-
-// 连接状态回到初始：扩展命令要求重新 DAP_Connect。
-void DapVendor::DropConnection()
-{
-  connected_ = false;
-  owner_ = Transport::USB;
-  transport_ = Transport::USB;
-}
-
-void DapVendor::OnNetworkClientConnected()
-{
-  OnTransportClosed();
-  transport_ = Transport::TCP;
-}
-
-void DapVendor::SetUsbResetSource(ResetCountFn fn, void* ctx)
-{
-  usb_reset_fn_ = fn;
-  usb_reset_ctx_ = ctx;
-}
-
-void DapVendor::Observe(const uint8_t* req, uint16_t len)
-{
-  if (req != nullptr && len >= 1U)
-  {
-    activity_.Observe(req, len, NowMs(), transport_.load() != Transport::TCP);
-  }
-}
-
-bool DapVendor::Hook(void* ctx, const uint8_t* req, uint16_t len, uint8_t* resp,
-                     uint16_t cap, uint16_t& out)
-{
-  auto* self = static_cast<DapVendor*>(ctx);
-  self->Observe(req, len);
-  return self->OnCommand(req, len, resp, cap, out);
-}
-
-// 每拍末尾调用：发起采样的传输已经离开时返回 false，采样随即停止。
+// 发起采样的会话结束时返回 false，采样随即停止。采样任务或主循环调用。
+// Returns false once the session that started sampling has ended, which stops sampling.
+// Called by the sampling task or the main loop.
 bool DapVendor::KeepSampling(void* ctx)
 {
   auto* self = static_cast<DapVendor*>(ctx);
-  const Transport owner = self->owner_;
-  const bool usb_gone =
-      owner == Transport::USB && self->usb_reset_fn_ != nullptr &&
-      self->usb_reset_fn_(self->usb_reset_ctx_) != self->usb_reset_base_;
-  const bool serial_gone =
-      owner == Transport::SERIAL &&
-      NowMs() - self->last_serial_ms_.load(std::memory_order_acquire) > kSerialLeaseMs;
-  if (usb_gone || serial_gone)
-  {
-    self->DropConnection();
-    return false;
-  }
-  return true;
+  return self->session_.Alive(self->sampling_session_.load(std::memory_order_acquire),
+                              NowMs());
 }
 
-bool DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
-                          uint16_t& out)
+// 扩展命令要求本会话里已经 DAP_Connect。 / Extension commands need a DAP_Connect in this
+// session.
+bool DapVendor::Connected()
+{
+  const uint32_t id = connected_session_.load(std::memory_order_acquire);
+  return id != 0U && session_.Alive(id, NowMs());
+}
+
+DapVendor::Result DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp,
+                                       uint16_t cap, uint16_t& out)
 {
   if (req == nullptr || resp == nullptr || len < 1U || cap < 1U)
   {
-    return false;
+    return Result::PASS;
   }
   const uint8_t cmd = req[0];
 
   if (sampler_.Active())
   {
     // 采样期间探针被订阅独占：只放行 DAP_Info、DAP_HostStatus 和厂商命令。
+    // While sampling the probe belongs to the subscription: only DAP_Info, DAP_HostStatus
+    // and vendor commands pass.
     if (cmd == Dap::kInfo || cmd == Dap::kHostStatus)
     {
-      return false;
+      return Result::PASS;
     }
     if (!IsVendor(cmd))
     {
       resp[0] = Dap::kInvalid;
       out = 1U;
-      return true;
+      return Result::REFUSED;
     }
-    return HandleVendor(cmd, req, len, resp, cap, out);
+    return HandleVendor(cmd, req, len, resp, cap, out) ? Result::HANDLED : Result::PASS;
   }
 
   if (IsVendor(cmd))
   {
-    return HandleVendor(cmd, req, len, resp, cap, out);
+    return HandleVendor(cmd, req, len, resp, cap, out) ? Result::HANDLED : Result::PASS;
   }
 
-  // 跟踪 DAP_Connect / DAP_Disconnect，扩展命令要求先连接到 SWD 目标。
+  // 跟踪 DAP_Connect / DAP_Disconnect：扩展命令要求先连接到 SWD 目标。
+  // Track DAP_Connect / DAP_Disconnect: extension commands need an SWD target connected.
   if (cmd == Dap::kConnect)
   {
     const uint8_t port = (len >= 2U) ? req[1] : 0U;
-    connected_ = (port == 0U || port == 1U);
+    connected_session_.store((port == 0U || port == 1U) ? session_.Session() : 0U,
+                             std::memory_order_release);
   }
   else if (cmd == Dap::kDisconnect)
   {
-    connected_ = false;
-    }
-  return false;
+    connected_session_.store(0U, std::memory_order_release);
+  }
+  return Result::PASS;
 }
 
 bool DapVendor::IsVendor(uint8_t cmd) const
@@ -238,7 +194,7 @@ bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_
   {
     return Reply(resp, kStatusResource, out);
   }
-  if (!connected_)
+  if (!Connected())
   {
     return Reply(resp, kStatusNoTarget, out);
   }
@@ -298,7 +254,7 @@ bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16
   {
     return Reply(resp, kStatusResource, out);
   }
-  if (!connected_)
+  if (!Connected())
   {
     return Reply(resp, kStatusNoTarget, out);
   }
@@ -381,7 +337,7 @@ bool DapVendor::CmdSubSet(const uint8_t* req, uint16_t len, uint8_t* resp, uint1
   {
     return Reply(resp, kStatusArg, out);
   }
-  if (!connected_)
+  if (!Connected())
   {
     return Reply(resp, kStatusNoTarget, out);
   }
@@ -417,7 +373,7 @@ bool DapVendor::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint
       {
         return Reply(resp, kStatusState, out);
       }
-      if (!connected_ || !StartSampling())
+      if (!Connected() || !StartSampling())
       {
         return Reply(resp, kStatusNoTarget, out);
       }
@@ -429,12 +385,10 @@ bool DapVendor::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint
   return Reply(resp, kStatusArg, out);
 }
 
-// 记下发起采样的传输和它的存活依据，再开始采样。
+// 记下发起采样的会话，再开始采样。/ Note the session that starts sampling, then start.
 bool DapVendor::StartSampling()
 {
-  owner_ = transport_.load();
-  last_serial_ms_.store(NowMs(), std::memory_order_release);
-  usb_reset_base_ = (usb_reset_fn_ != nullptr) ? usb_reset_fn_(usb_reset_ctx_) : 0U;
+  sampling_session_.store(session_.Session(), std::memory_order_release);
   return sampler_.Start();
 }
 
