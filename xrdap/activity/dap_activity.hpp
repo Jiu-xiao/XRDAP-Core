@@ -54,9 +54,17 @@ class DapActivity
     commands_.fetch_add(1U, std::memory_order_relaxed);
     if (req[0] == Dap::kHostStatus && len >= 3U)
     {
-      // DAP_HostStatus：类型 0 是“已连接”灯，1 是“运行中”灯；状态 1 亮、0 灭
-      (req[1] == 0U ? connected_ : running_)
-          .store(req[2] != 0U, std::memory_order_relaxed);
+      // DAP_HostStatus：类型 0 是“已连接”灯，1 是“运行中”灯，其他类型不是这两个灯；
+      // 状态 1 亮、0 灭 / DAP_HostStatus: type 0 is the "connected" light, 1 the
+      // "running" light, other types are neither; status 1 on, 0 off.
+      if (req[1] == Dap::kHostStatusConnected)
+      {
+        connected_.store(req[2] != 0U, std::memory_order_relaxed);
+      }
+      else if (req[1] == Dap::kHostStatusRunning)
+      {
+        running_.store(req[2] != 0U, std::memory_order_relaxed);
+      }
     }
     else if (req[0] == Dap::kDisconnect)
     {
@@ -68,16 +76,26 @@ class DapActivity
   /// 读当前状态，可在任意任务调用 / Read the current state; callable from any task.
   State Read(uint32_t now_ms) const
   {
-    const bool quiet = now_ms - last_ms_.load(std::memory_order_relaxed) > kHostQuietMs;
+    const bool quiet =
+        Since(now_ms, last_ms_.load(std::memory_order_relaxed)) > kHostQuietMs;
     const bool wired =
         any_wired_.load(std::memory_order_relaxed) &&
-        now_ms - last_wired_ms_.load(std::memory_order_relaxed) <= kHostQuietMs;
+        Since(now_ms, last_wired_ms_.load(std::memory_order_relaxed)) <= kHostQuietMs;
     return State{commands_.load(std::memory_order_relaxed),
                  !quiet && connected_.load(std::memory_order_relaxed),
                  !quiet && running_.load(std::memory_order_relaxed), wired};
   }
 
  private:
+  // 从 then 到 now 过了多久。别的线程可能在读的人取了 now 之后才记下 then，这时 then 比
+  // now 新，算 0 / Time from then to now. Another thread may record `then` after the
+  // reader took `now`; `then` is then newer and counts as 0.
+  static uint32_t Since(uint32_t now, uint32_t then)
+  {
+    const uint32_t d = now - then;
+    return (static_cast<int32_t>(d) < 0) ? 0U : d;
+  }
+
   std::atomic<uint32_t> commands_{0U};
   std::atomic<uint32_t> last_ms_{0U};
   std::atomic<uint32_t> last_wired_ms_{0U};
