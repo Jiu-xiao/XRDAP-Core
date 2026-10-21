@@ -231,6 +231,8 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+在真实探针上的测试另有一套：全系列共用的测试规范 [tests/SPEC.md](tests/SPEC.md) 和执行它的工具 `xrdap_test`（[用法](tests/README.md)），经 USB、串口、TCP、USB/IP 或无线板对对任何一块 XR-DAP 探针运行同一组用例。
+
 ## 代码风格
 
 C++17，clang-format 21.1.8，配置与 libxr 相同（`.clang-format`）。公开头文件带中英文 Doxygen 注释，并写明可以在哪个执行上下文里调用。

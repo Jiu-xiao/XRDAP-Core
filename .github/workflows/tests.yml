@@ -1,0 +1,26 @@
+name: xrdap-test
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+jobs:
+  xrdap-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencies
+        run: pip install pyusb pyserial pyflakes
+      - name: Lint
+        run: python -m pyflakes xrdap_test tool_unit
+      - name: Specification matches the implemented cases
+        run: python -m xrdap_test coverage
+      - name: Unit tests
+        run: python -m unittest discover -s tool_unit -v
