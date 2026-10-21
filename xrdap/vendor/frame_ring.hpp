@@ -22,6 +22,10 @@ namespace XrDap::Vendor
 {
 
 /// 采样帧环形缓冲 / Ring buffer of sample frames.
+/// @note Push、AddSkipped 在采样的执行上下文里调用，Take、Reset 在 DAP 执行上下文里调用，
+///       两者可以在不同的核上；都不能在中断里调用 / Push and AddSkipped are called in the
+///       sampling context, Take and Reset in the DAP execution context, possibly on
+///       different cores; none of them from an interrupt.
 class FrameRing
 {
  public:

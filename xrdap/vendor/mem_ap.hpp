@@ -21,6 +21,9 @@ namespace XrDap::Vendor
 {
 
 /// 共享 SWD 链路上的 MEM-AP 访问 / MEM-AP access on a shared SWD link.
+/// @note 在 DAP 执行上下文或采样的执行上下文里用；Lock 以外的方法都要求调用方持有
+///       Lock / Used in the DAP execution context or the sampling context; every method
+///       other than Lock requires the caller to hold a Lock.
 class MemAp
 {
  public:

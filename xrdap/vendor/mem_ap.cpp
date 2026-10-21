@@ -3,7 +3,6 @@
 
 #include <cstring>
 
-
 namespace XrDap::Vendor
 {
 namespace
@@ -72,13 +71,15 @@ MemAp::ApState* MemAp::EnsureAp(uint8_t ap)
 
 // 刚重新连接，或上一次访问被打断（例如采样被停掉）之后，第一次 AP 访问偶尔会因 DP 里
 // 残留的粘滞错误失败，所以失败时清掉再试一次。
+// Right after a reconnect, or after an access was cut short (for example sampling being
+// stopped), the first AP access sometimes fails on a sticky error left in the DP, so a
+// failure clears it and tries once more.
 //
-// AHB-AP 上电后的 Prot 可能是非特权访问（例如 STM32F302 读出 0x01000052），这时访问
-// PPB（CPUID、DHCSR、AIRCR）会出错，所以 AHB-AP 一律改成特权数据访问，与 OpenOCD 相同。
-// 别的 AP 类型这几位含义不同（AXI-AP 是 ARPROT 和缓存属性），保持原值。已经是特权访问时不
-// 再读 IDR，这一位写过一次就留在 AP 里。
-// On an AHB-AP the Prot field after power-up may say unprivileged (an STM32F302 reads
-// 0x01000052), and accesses to the PPB (CPUID, DHCSR, AIRCR) then fail, so an AHB-AP
+// AHB-AP 上电后的 Prot 可能是非特权访问，这时访问 PPB（CPUID、DHCSR、AIRCR）会出错，
+// 所以 AHB-AP 一律改成特权数据访问，与 OpenOCD 的 CSW_AHB_DEFAULT 相同。别的 AP
+// 类型这几位 含义不同（AXI-AP 是 ARPROT 和缓存属性），保持原值。已经是特权访问时不再读
+// IDR，这一位 写过一次就留在 AP 里。 On an AHB-AP the Prot field after power-up may say
+// unprivileged, and accesses to the PPB (CPUID, DHCSR, AIRCR) then fail, so an AHB-AP
 // always gets privileged data access, as in OpenOCD. Other AP types use these bits
 // differently (ARPROT and cache attributes on an AXI-AP) and keep them. The IDR is not
 // read once the CSW says privileged; after one write the bit stays in the AP.

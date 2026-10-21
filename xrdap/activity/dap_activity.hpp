@@ -18,8 +18,11 @@
 namespace XrDap
 {
 
-/// DAP 活动统计，命令线程写、任意任务读 / DAP activity, written by the command thread and
-/// read from any task.
+/// DAP 活动统计 / DAP activity.
+/// @note Observe 在 DAP 执行上下文里调用（Executor 保证同一时间只有一个），Read 可以在
+///       任何任务里调用，都不能在中断里 / Observe is called in the DAP execution context
+///       (Executor keeps it to one at a time); Read may be called from any task; neither
+///       from an interrupt.
 class DapActivity
 {
  public:

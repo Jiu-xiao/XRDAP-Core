@@ -33,9 +33,9 @@ constexpr size_t SerialBufferSize(size_t id_bytes)
 ///        upper-case hex.
 /// @param out 至少 SerialBufferSize(id_bytes) 字节 / At least SerialBufferSize(id_bytes)
 ///        bytes.
-/// @note 不用 snprintf：64 KB 的探针放不下 printf 一族 / No snprintf: a 64 KB probe has
-/// no
-///       room for the printf family.
+/// @note 不用 snprintf：64 KB 的探针放不下 printf 一族。纯函数，任何上下文 / No
+///       snprintf: a 64 KB probe has no room for the printf family. Pure function, any
+///       context.
 void FormatSerial(const uint8_t* id, size_t id_bytes, char* out);
 
 /// DAP_Info 里随探针变化的字符串，都需长期有效 / The DAP_Info strings that vary by probe;
@@ -55,6 +55,7 @@ struct ProbeIdentity
 
 /// @brief 把探针身份写入 DAP 实例的 DAP_Info 字符串 / Write the probe identity into the
 ///        DAP instance's DAP_Info strings.
+/// @note 初始化时、命令开始执行之前调用 / Call at initialisation, before commands run.
 template <typename DapT>
 void SetProbeInfo(DapT& dap, const ProbeIdentity& id)
 {

@@ -85,6 +85,8 @@ struct Frame
 };
 
 /// 状态灯规则 / Status light rule.
+/// @note 只在平台刷新灯的那一个任务里用 / Used only in the one task where the platform
+///       refreshes its lights.
 class StatusLight
 {
  public:
