@@ -12,6 +12,7 @@ set(XRDAP_CORE_DIR "${CMAKE_CURRENT_LIST_DIR}")
 set(XRDAP_CORE_PURE_SOURCES
     "${XRDAP_CORE_DIR}/xrdap/light/status_light.cpp"
     "${XRDAP_CORE_DIR}/xrdap/probe/probe_identity.cpp"
+    "${XRDAP_CORE_DIR}/xrdap/serial/serial_frame.cpp"
     "${XRDAP_CORE_DIR}/xrdap/session/busy_reply.cpp"
     "${XRDAP_CORE_DIR}/xrdap/session/session_owner.cpp"
     "${XRDAP_CORE_DIR}/xrdap/vendor/frame_ring.cpp"

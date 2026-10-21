@@ -18,7 +18,10 @@ file(GLOB XRDAP_UNIT_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/unit/*.c
 add_executable(xrdap_core_unit ${XRDAP_UNIT_TESTS} ${XRDAP_CORE_PURE_SOURCES})
 target_include_directories(xrdap_core_unit PRIVATE "${CMAKE_CURRENT_LIST_DIR}/stub"
                                                    ${XRDAP_CORE_INCLUDE_DIRS})
-target_compile_options(xrdap_core_unit PRIVATE -Wall -Wextra -Werror)
+target_compile_options(xrdap_core_unit PRIVATE -Wall -Wextra -Werror -g
+                                              -fsanitize=address,undefined
+                                              -fno-sanitize-recover=all)
+target_link_options(xrdap_core_unit PRIVATE -fsanitize=address,undefined)
 
 enable_testing()
 add_test(NAME xrdap_core_unit COMMAND xrdap_core_unit)

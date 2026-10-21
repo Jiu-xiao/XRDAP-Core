@@ -7,6 +7,8 @@
 #include "xrdap/probe/family.hpp"
 #include "xrdap/probe/probe_identity.hpp"
 #include "xrdap/protocol/dap_ids.hpp"
+#include "xrdap/serial/serial_frame.hpp"
+#include "xrdap/serial/serial_link.hpp"
 #include "xrdap/session/busy_reply.hpp"
 #include "xrdap/session/executor.hpp"
 #include "xrdap/session/session_owner.hpp"
@@ -39,3 +41,5 @@ struct FakeDap
 }  // namespace
 
 template class XrDap::Executor<FakeDap>;
+
+template class XrDap::SerialLink<XrDap::Executor<FakeDap>, 64U>;

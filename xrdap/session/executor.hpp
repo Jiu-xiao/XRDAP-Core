@@ -91,6 +91,20 @@ class Executor
     current_ = Transport::NONE;
   }
 
+  /// @brief 传输 t 断开（TCP 客户端关闭、串口链路停止、无线会话号变化）：t 是主人时结束
+  ///        它的会话 / Transport t went away (TCP client closed, serial link stopped,
+  ///        radio session id changed): end its session if t is the owner.
+  /// @note 任何任务，不能在中断里 / Any task, not from an interrupt.
+  void EndSession(Transport t) { session_.End(t); }
+
+  /// @brief t 是主人时刷新它的租期（例如无线 ping）/ Refresh t's lease if it is the
+  ///        owner (for example a radio ping).
+  /// @note 任何任务，不能在中断里 / Any task, not from an interrupt.
+  void TouchSession(Transport t)
+  {
+    session_.Touch(t, static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds()));
+  }
+
  private:
   static bool Hook(void* ctx, const uint8_t* req, uint16_t len, uint8_t* resp,
                    uint16_t cap, uint16_t& out)
