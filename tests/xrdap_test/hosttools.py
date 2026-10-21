@@ -41,7 +41,9 @@ def tool_version(argv, flag="--version"):
 def usbip_attached(ctx, spec):
     """Linux: attach the probe's USB/IP export with the kernel driver, detach afterwards."""
     if not sys.platform.startswith("linux"):
-        raise RuntimeError("USB/IP attach is done with the Linux vhci-hcd driver")
+        from .runner import NotApplicable
+
+        raise NotApplicable("host tools reach a USB/IP probe through the Linux vhci-hcd driver")
     sudo = [] if os.geteuid() == 0 else ["sudo", "-n"]
     serial = probe_serial(ctx)
     subprocess.run(sudo + ["usbip", "attach", "-r", spec["host"], "-b", "1-1"] +
