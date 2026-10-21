@@ -328,11 +328,13 @@ Successful response:
 |---|---|---|
 | 0 | 1 | 0x86 |
 | 1 | 1 | Status 0x00 |
-| 2 | 1 | Flags: bit0 Wi-Fi started (it starts only when credentials are saved), bit1 IP obtained |
+| 2 | 1 | Flags: bit0 Wi-Fi started (it starts only when credentials are saved), bit1 IP obtained, bit2 NVS was damaged at this boot and was erased and rebuilt |
 | 3 | 4 | IPv4 address in network byte order (`C0 A8 01 14` is 192.168.1.20); 0 when not connected |
 | 7 | 1 | Signal strength RSSI, i8, in dBm; 0 when not connected |
 | 8 | 1 | SSID length n |
 | 9 | n | Saved SSID; n is 0 when none is saved; the password is not returned |
+| 9+n | 1 | What last cleared the credentials (kept in NVS): 0 never or unknown, 1 board button, 2 console `wifi clear`, 3 0x86 clear, 4 NVS repair |
+| 10+n | 1 | Reset reason of this boot: 0 unknown, 1 power-on, 2 software restart, 3 watchdog, 4 panic, 5 brown-out, 6 other |
 
 On failure the response is just `86` and the status.
 
@@ -432,9 +434,9 @@ USB is the owner; a READ over serial: `81 05`; a `DAP_Transfer` over serial: `05
 
 Request: `86 00`
 
-Response (connected to access point `lab`, IP 192.168.1.20, signal -52 dBm): `86 00 03 C0A80114 CC 03 6C6162`
+Response (connected to access point `lab`, IP 192.168.1.20, signal -52 dBm, credentials never cleared, power-on boot): `86 00 03 C0A80114 CC 03 6C6162 00 01`
 
-With no credentials saved: `86 00 00 00000000 00 00`
+After a 0x86 clear and the software restart: `86 00 00 00000000 00 00 03 02`
 
 #### 0x86 save
 
