@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from xrdap_test import cli, link  # noqa: E402
 from xrdap_test.vendor import Item, decode_frames  # noqa: E402
+from xrdap_test.vendor import Vendor as VendorClient  # noqa: E402
 
 
 def hexb(text):
@@ -51,6 +52,33 @@ class Vendor(unittest.TestCase):
                    "07000000 985D0F000000 00 08000000 3412")
         frames = decode_frames(raw, items, 2)
         self.assertEqual(frames, [(6, 1006000, {0x10: 7}), (7, 1007000, {0x10: 8, 0x11: 0x1234})])
+
+
+class FakeLink:
+    """Records the request and returns a canned answer (encoder/decoder checks only)."""
+
+    def __init__(self, answer):
+        self.answer, self.sent = answer, None
+
+    def xfer(self, request, timeout=2.0):
+        self.sent = request
+        return self.answer
+
+
+class ProtocolV2(unittest.TestCase):
+    def test_info_example(self):
+        info = VendorClient(FakeLink(hexb("80 00 02 1F000000 2000 08 00400000 40420F0000000000"))).info()
+        self.assertEqual((info["version"], info["length"], info["features"], info["max_items"],
+                          info["max_depth"], info["ring_bytes"], info["probe_time_us"]),
+                         (2, 22, 0x1F, 32, 8, 16384, 1_000_000))
+
+    def test_sub_start_example(self):
+        items = [Item(0x20000100, 4, id=0x10), Item(0x20000104, 2, id=0x11, div=10, phase=3)]
+        lk = FakeLink(hexb("83 00"))
+        self.assertEqual(VendorClient(lk).start(1000, items), 0)
+        self.assertEqual(lk.sent, hexb("83 E8030000 00 0200"
+                                       "00 1000 04 00010020 00 0000 0100 0000"
+                                       "00 1100 02 04010020 00 0000 0A00 0300"))
 
 
 class MinimumPeriodSearch(unittest.TestCase):

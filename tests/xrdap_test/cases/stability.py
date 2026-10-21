@@ -206,8 +206,9 @@ def stab_restart(ctx):
 
 
 def wifi_and_boot(spec, timeout=20.0):
-    """Saved SSID (0x86 op 0) and the probe's boot moment (wall time minus probe clock),
-    read over another link; retried while the session under test still owns the probe."""
+    """Saved SSID, last clear source and reset reason (0x86 op 0, protocol 3.7) and the
+    probe's boot moment (wall time minus probe clock), read over another link; retried while
+    the session under test still owns the probe (answers 86 05 / 80 05)."""
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -217,8 +218,10 @@ def wifi_and_boot(spec, timeout=20.0):
                 info = Vendor(lk).info()
                 rtt = time.time() - t0
                 if r[:2] == b"\x86\x00" and info.get("status") == OK:
-                    ssid = bytes(r[9:9 + r[8]])
-                    return ssid, t0 + rtt / 2 - info["probe_time_us"] / 1e6
+                    n = r[8]
+                    ssid = bytes(r[9:9 + n])
+                    why = {"clear_source": r[9 + n], "reset_reason": r[10 + n]} if len(r) >= 11 + n else {}
+                    return ssid, t0 + rtt / 2 - info["probe_time_us"] / 1e6, why
         except Exception:
             pass
         if time.monotonic() > deadline:
@@ -234,7 +237,8 @@ def stab_serial_hygiene(ctx):
     if not ctx.args.link2 or linkmod.parse_spec(ctx.args.link2)["kind"] != "tcp":
         raise R.NotApplicable("needs --link2 tcp:HOST (the checks go over Wi-Fi)")
     t = openocd_ready(ctx)
-    ssid0, boot0 = wifi_and_boot(ctx.args.link2)
+    ssid0, boot0, why0 = wifi_and_boot(ctx.args.link2)
+    ctx.metric("before", why0)
     if not ssid0:
         raise R.NotApplicable("needs saved Wi-Fi credentials on the probe")
     hold = ctx.args.share_hold_s
@@ -272,9 +276,9 @@ def stab_serial_hygiene(ctx):
     rows = []
     for name, step in steps:
         step()
-        ssid, boot = wifi_and_boot(ctx.args.link2)
+        ssid, boot, why = wifi_and_boot(ctx.args.link2)
         restarted = abs(boot - boot0) > 2.0
-        rows.append({"step": name, "ssid_kept": ssid == ssid0, "restarted": restarted})
+        rows.append({"step": name, "ssid_kept": ssid == ssid0, "restarted": restarted, **why})
         ctx.check(f"{name}: credentials kept", ssid == ssid0, "SSID gone" if not ssid else "")
         ctx.check(f"{name}: no restart", not restarted, f"boot moved {boot - boot0:+.1f} s")
         if restarted:

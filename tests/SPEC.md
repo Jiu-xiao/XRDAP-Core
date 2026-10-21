@@ -109,7 +109,7 @@ SUB_READ 的 max_bytes 为 0xFFFF（探针按包长截断）。容量测试（VN
 | PERF-01 | `auto` | all | measure | 往返时间：DAP_Info 和一次 DP 读，中位数 / p99 |
 | PERF-02 | `auto` | all | measure, cmsis-dap | 块读写吞吐：4 MHz、10 MHz、最高稳定时钟 |
 | PERF-03 | `auto` | all | measure, cmsis-dap | 小数据访问：随机地址 4 B、64 B 每秒次数 |
-| DAP-01 | `auto` | all | cmsis-dap, decision B10 | DAP_Transfer：DP/AP 访问、posted 读、匹配、时间戳、FAULT、中止 |
+| DAP-01 | `auto` | all | cmsis-dap, protocol 1, protocol 2, decision B10 | DAP_Transfer：DP/AP 访问、posted 读、匹配、时间戳、FAULT、中止 |
 | DAP-02 | `auto` | all | cmsis-dap | DAP_TransferBlock：AP/DP 块、计数 0、包长边界、FAULT |
 | DAP-03 | `auto` | all | cmsis-dap, protocol 2 | 包边界：USB 包长附近的请求和响应长度 |
 | DAP-04 | `auto` | all | cmsis-dap | 命令集：DAP_Info、HostStatus、SWJ_Pins、Execute/QueueCommands、未知命令 |
@@ -124,29 +124,29 @@ SUB_READ 的 max_bytes 为 0xFFFF（探针按包长截断）。容量测试（VN
 | VND-01 | `auto` | all | protocol 3.4, protocol 4.1 | INFO 和 DAP_Info 身份 |
 | VND-02 | `auto` | all | protocol 3.2, protocol 3.3 | READ：1/2/4/8 字节、指针链、条目状态、上限 |
 | VND-03 | `auto` | all | protocol 3.2, protocol 3.3 | WRITE：1/2/4/8 字节和读回、条目状态 |
-| VND-04 | `auto` | all | protocol 3.2, decision B9 | 参数与状态检查 |
+| VND-04 | `auto` | all | protocol 3.2, protocol 3.4, decision B9 | 参数与状态检查 |
 | VND-05 | `auto` | all | measure, protocol 3.3 | READ/WRITE 延迟、每秒条目数、指针链每级开销 |
-| VND-06 | `auto` | all | decision B9, measure | 采样：1/4/8/32 变量的估计耗时和实际最小周期 |
+| VND-06 | `auto` | all | decision B9, measure | 采样：1/4/8/32 变量的最小周期 |
 | VND-07 | `auto` | all | protocol 3.5 | 分频与相位：8 条目分频组 |
 | VND-08 | `auto` | all | protocol 3.5, measure | 时间戳抖动：1 ms、10 s |
 | VND-09 | `auto` | all | protocol 3.5, decision B9 | 跳拍与丢帧计数、满即停、部分读取、采样期间独占 |
 | VND-10 | `auto` | all | arm, protocol 3.1, measure | 经厂商 WRITE 停核、运行、复位的延迟 |
-| VND-11 | `auto` | all | decision C5 | AP CSW 为非特权 Prot 时访问 PPB |
-| VND-12 | `auto` | all | protocol 3.5 | 停止后立即重新开始：新一轮从节拍 0 开始，没有旧帧 |
+| VND-11 | `auto` | all | protocol 3.6, decision C5 | AP CSW 为非特权 Prot 时访问 PPB |
+| VND-12 | `auto` | all | protocol 3.4, protocol 3.5 | 停止后立即重新开始：新一轮从节拍 0 开始，没有旧帧 |
 | VND-13 | `auto` | usb, serial, tcp, usbip | protocol 3.7, decision A4 | 0x86 Wi-Fi 状态查询 |
-| VND-14 | `auto` | all | decision B8 | 响应空间不够时回 0x03 |
+| VND-14 | `auto` | all | protocol 3.2, decision B8 | 响应空间不够时回 0x03 |
 | VND-15 | `auto` | serial | protocol 3.1 | 串口租约：5 s 没有请求后串口发起的采样停止 |
 | STAB-01 | `auto` | all | protocol 3.5 | 长时间采样（默认 1 h） |
 | STAB-02 | `auto` | all | hardware | OpenOCD 编程校验循环（默认 1 h） |
 | STAB-03 | `assisted` | usb, serial, radio | protocol 3.1 | 采样中拔插探针 |
 | STAB-04 | `assisted` | all | protocol 3.5 | 采样中目标断电和恢复 |
 | STAB-05 | `assisted` | tcp, usbip | measure | 热点断开：恢复可达的时间 |
-| STAB-06 | `auto` | all | decision B2 | 上位机不停止、不 Disconnect 就退出 |
+| STAB-06 | `auto` | all | protocol 3.1, decision B2 | 上位机不停止、不 Disconnect 就退出 |
 | STAB-07 | `assisted` | all | measure | 探针重启：启动到第一次应答 DAP_Info 的时间 |
-| STAB-08 | `auto` | serial | decision A4, hardware | 串口会话卫生：xrdap share 长时间运行、OpenOCD 连接、进程被杀后热点参数和探针运行时间不变 |
-| MC-01 | `auto` | tcp | decision B2 | 第二个 TCP 客户端 |
-| MC-02 | `auto` | all | decision B2 | 两条链路同时访问一块探针 |
-| MC-03 | `auto` | all | decision B2 | 采样的发起方更换 |
+| STAB-08 | `auto` | serial | decision A4, protocol 3.7, hardware | 串口会话卫生：xrdap share 长时间运行、OpenOCD 连接、进程被杀后热点参数和探针运行时间不变 |
+| MC-01 | `auto` | tcp | protocol 2 | 第二个 TCP 客户端不被服务 |
+| MC-02 | `auto` | all | protocol 3.1, decision B2 | 第二条链路回"忙"，会话主人不受影响 |
+| MC-03 | `auto` | all | protocol 3.1, decision B2 | 会话主人更换 |
 | RAD-01 | `auto` | radio | measure | 无线负载：重发率、失败数、往返时间 |
 | RAD-02 | `assisted` | radio | decision B3 | 配对在两块板断电后保持 |
 | RAD-03 | `manual` | radio | measure | 距离与干扰 |
@@ -182,7 +182,7 @@ PERF-03 小数据。随机 64 B 对齐地址上，各运行 2 s：4 B 读（写 
 
 DAP-01 到 DAP-04 是 cmsis-dap-behavior-suite 分支目录在真实探针上的对应检查：
 
-- DAP-01：DP 读写；一个包里写 TAR 后连读 4 次 DRW 再读 RDBUFF，数值按顺序；同一包里混合 DP、AP 写并中途重写 SELECT；掩码 0xFFFF0000 下匹配读命中与不命中（不命中时应答带 0x10）；探针报告测试域定时器时检查带时间戳的读和写；读 `fault_address` 得到 FAULT，写 ABORT 后恢复；计数大于实际操作数的畸形请求、读 255 次超出包长的请求都得到应答且链路仍一问一答；`DAP_TransferAbort` 在任何链路上都没有应答（CMSIS-DAP 规范；决定 B10），空闲时发送后下一条命令的应答照常配对。
+- DAP-01：DP 读写；一个包里写 TAR 后连读 4 次 DRW 再读 RDBUFF，数值按顺序；同一包里混合 DP、AP 写并中途重写 SELECT；掩码 0xFFFF0000 下匹配读命中与不命中（不命中时应答带 0x10）；探针报告测试域定时器时检查带时间戳的读和写；读 `fault_address` 得到 FAULT，写 ABORT 后恢复；计数大于实际操作数的畸形请求、读 255 次超出包长的请求都得到应答且链路仍一问一答；`DAP_TransferAbort` 没有应答内容（CMSIS-DAP 规范；决定 B10）：USB 和 TCP 上没有响应（协议第 2 节），串口上是一个 n 为 0 的空帧（协议第 1 节）；空闲时发送后下一条命令的应答照常配对。
 - DAP-02：DP 块读（IDCODE × 3）和 DP 块写（SELECT × 2）；计数 0；一个包能放下的最多字数完整返回，多一个字时响应不超过包长；从 `fault_address` 块读得到 FAULT；带匹配、时间戳位的块请求得到应答且链路同步。
 - DAP-03：请求长度取 MPS−1、MPS、MPS+1、2×MPS、包长−1、包长（MPS 为 USB 端点最大包长，其他链路取 64），响应长度取 MPS−4、MPS、包长、8 字节，每种 20 次。整包长度的请求由上位机补零长度包（协议“USB 主机的注意事项”）。
 - DAP-04：DAP_Info 各 ID、DAP_HostStatus、DAP_SWJ_Pins 读、DAP_Delay；ExecuteCommands 回显命令数；连续两个 QueueCommands 包加一个 ExecuteCommands 包得到三个按顺序的 0x7F 响应；未定义命令 0x3F 只回 `FF`。
@@ -266,13 +266,13 @@ TGT-04 multidrop（手工）：XR-DAP 不实现 SWD multidrop 的目标选择，
 
 ### 4.5 XR 厂商扩展
 
-VND-01：DAP_Info 厂商为 `XRobot`，序列号以 `XRobot-XRDAP-` 开头，有固件版本；INFO 协议版本 1、最多 32 条目、深度 8，功能位含 READ、WRITE、采样、8 字节；探针时间递增。
+VND-01：DAP_Info 厂商为 `XRobot`，序列号以 `XRobot-XRDAP-` 开头，有固件版本；INFO 为 22 字节，协议版本 2，最多 32 条目、深度 8，功能位含 READ、WRITE、采样、8 字节；探针时间递增。
 
 VND-02：一次 READ 读出 u8、u16、u32、u64 和三级指针链，数值与夹具一致；状态矩阵：空指针 0x30，读 `fault_address` 处的指针 0x10，指针地址未对齐 0x20，最终地址未按 size 对齐 0x2F，第二级指针故障 0x11，最终访问故障 0x1F，其后的正常条目 0x00 且数值正确；计数 0 返回 0x01；33 个条目返回 0x03；32 个 8 字节条目（响应 355 字节，任何包长都放得下）成功。响应空间不够的情况由 VND-14 检查。
 
 VND-03：WRITE 1、2、8、4 字节后读回一致；空指针 0x30、第二级指针故障 0x11、最终写故障 0x1F，其后的正常写入生效；计数 0 返回 0x01。
 
-VND-04：开始采样命令（决定 B9：配置随开始命令一起下发，按 Core 协议文档的格式）的 period 0、flags 保留位、计数 0、div 0、phase ≥ div、size 3 返回 0x01；INFO 多一个字节、停止命令未定义 op 或缺参数、READ 长度不符返回 0x01；运行中再次开始返回 0x02；停止时再停止返回 0x00；没有开始过就读帧按协议文档的状态应答；`DAP_Disconnect` 之后 READ 和开始采样返回 0x04。
+VND-04：SUB_START 的 period 0、flags 保留位、计数 0、div 0、phase ≥ div、size 3 返回 0x01，33 个条目返回 0x03；INFO 多一个字节、SUB_CTRL op 1（版本 2 已去掉）、未定义 op、缺参数、READ 长度不符返回 0x01；没有在采样时 SUB_READ 返回 0x02 并带完整的响应头；采样中 SUB_READ 返回 0x00，再发 SUB_START 返回 0x02；停止时再停止返回 0x00；`DAP_Disconnect` 之后 READ 和 SUB_START 返回 0x04。
 
 VND-05：单条目 READ、WRITE 的往返中位数；1、8、32 条目 READ 的每秒条目数；指针链每级开销：8 个条目经自指针分别解引用 0、1、2、4、8 级，(8 级 − 0 级) / 64 即每级耗时。通过：8 级自指针链解析成功。
 
@@ -286,13 +286,13 @@ VND-09：8 变量组，2 ms 周期开始后把 SWD 降到 100 kHz，运行 2 s�
 
 VND-10：经厂商 WRITE/READ 访问 DHCSR、DEMCR、AIRCR 停核、继续运行、复位后停在复位向量，记录从发出到 DHCSR 反映状态的毫秒数。通过：三种状态都在 1 s 内观察到。
 
-VND-11：把 AP CSW 的 Prot 设为非特权数据访问（`0x01`，部分芯片调试上电后的初值），再用厂商 READ 读 CPUID、DHCSR。通过：两项状态都为 0x00，CPUID 与特权读到的值相同。探针应自行使用特权访问，不沿用 CSW 原有的 Prot。
+VND-11（协议 3.6，决定 C5）：把 AP CSW 的 Prot 设为非特权数据访问（`0x01`，部分芯片调试上电后的初值），再用厂商 READ 读 CPUID、DHCSR。通过：两项状态都为 0x00，CPUID 与特权读到的值相同。依据：CSW 的 HPROT1 为 0 时，探针在 AHB MEM-AP 上把 HPROT0、HPROT1 和调试主机位置 1（与 OpenOCD 的 CSW_AHB_DEFAULT 相同），别的 AP 类型保持原值；工具记录写入后的 CSW 和 AP 的 IDR。
 
-VND-12：4 变量组采样 0.5 s 后停止，立即用另一个 2 条目组 SUB_SET 并开始，50 ms 后读取。通过：没有丢帧，新一轮第一帧节拍为 0，所有帧只含新条目且数值正确。
+VND-12：4 变量组采样 0.5 s 后停止，立即用另一个 2 条目组 SUB_START，50 ms 后读取。通过：没有丢帧，新一轮第一帧节拍为 0，所有帧只含新条目且数值正确。
 
-VND-13（XRDAP-ESP）：0x86 op 0 的响应长度为 9 + 热点名长度，记录标志和 RSSI；未定义 op 返回 0x01；op 2（清除）不带确认字节时返回 0x01，热点参数保持不变（决定 A4，确认字节的值按 Core 协议文档）。带确认字节的清除和保存会改动设置并重启探针，归入 RES-04 和手工步骤。
+VND-13（XRDAP-ESP）：0x86 op 0 的响应长度为 11 + 热点名长度，记录标志、RSSI、最近一次清除的来源和复位原因；未定义 op 返回 0x01；`86 02` 不带确认字节、确认字节不是 0xA5 时都回 `86 01`，热点参数不变（决定 A4，协议 3.7）。带确认字节的清除和保存会改动设置并重启探针，归入 RES-04 和手工步骤。
 
-VND-14（决定 B8）：在 `DAP_ExecuteCommands` 里先放若干 `DAP_Info(0xFF)` 占用响应空间，只剩约 50 字节时再放一条需要 91 字节响应的 READ（8 个 8 字节条目）。通过：READ 的应答为 `81 03`，整个响应不超过包长，链路随后照常一问一答。
+VND-14（协议 3.2，决定 B8）：在 `DAP_ExecuteCommands` 里先放若干 `DAP_Info(0xFF)` 占用响应空间，只剩约 50 字节时再放一条需要 91 字节响应的 READ（8 个 8 字节条目）。通过：READ 的应答为 `81 03`，整个响应不超过包长，链路随后照常一问一答。再把剩余空间凑成正好 1 字节（用一条应答长度为奇数的 `DAP_Info`，必要时加 `DAP_HostStatus`）：READ 的应答为一个 `FF`，整个响应正好填满一个包。
 
 VND-15（协议 3.1，串口）：串口发起 100 ms 周期的采样后保持端口打开但 7 s 不发请求。通过：之后 1 s 内缓冲剩余字节不再增长（采样已因 5 s 租约停止），缓冲里的帧仍可读出。
 
@@ -308,19 +308,19 @@ STAB-04（辅助）：采样中给目标断电。通过：断电期间探针照�
 
 STAB-05（辅助）：关掉热点，确认探针不可达；打开热点后立即开始计时，记录到探针重新应答 DAP_Info 的时间。通过：300 s 内可达，随后采样正常。
 
-STAB-06（决定 B2）：子进程在同一条链路上连接、开始采样后直接退出，不停止、不 Disconnect、不关闭。通过：同一链路上的下一个客户端能停止采样，重新连接后采样正常。
+STAB-06（协议 3.1，决定 B2）：子进程在同一条链路上连接、开始采样后直接退出，不停止、不 Disconnect、不关闭。通过：同一链路上的下一个客户端能停止采样，重新连接后采样正常。
 
 STAB-07（辅助）：采样中复位或重新上电探针。工具从探针失去应答开始计时，到第一次应答 DAP_Info 为止，即启动时间（`--restart-cmd` 在重启开始后才返回时，从命令结束时算起）。通过：60 s 内应答，探针时间从头开始（确实重启过），随后采样正常。
 
-STAB-08（决定 A4，串口 + `--link2 tcp`）：串口会话不能让探针重启或丢失热点参数。依次执行：Python 串口会话保持 `--share-hold-s`（默认 30 s）；`xrdap share openocd` 空闲同样时长后按 Ctrl-C 结束；`xrdap share` 加 OpenOCD 连接 `--attach-count` 次和一次 SRAM 读写后按 Ctrl-C 结束；`xrdap share` 空闲后直接杀进程。每一步之后经 TCP 读 0x86 op 0 和探针时钟（墙钟时间减探针时间即开机时刻）。通过：每一步之后热点名不变，开机时刻变化不超过 2 s。探针没有保存热点参数时记为 n/a。
+STAB-08（决定 A4，串口 + `--link2 tcp`）：串口会话不能让探针重启或丢失热点参数。依次执行：Python 串口会话保持 `--share-hold-s`（默认 30 s）；`xrdap share openocd` 空闲同样时长后按 Ctrl-C 结束；`xrdap share` 加 OpenOCD 连接 `--attach-count` 次和一次 SRAM 读写后按 Ctrl-C 结束；`xrdap share` 空闲后直接杀进程。每一步之后经 TCP 读 0x86 op 0（热点名、最近一次清除的来源、复位原因）和探针时钟（墙钟时间减探针时间即开机时刻）；串口会话还没结束时 TCP 得到"忙"，工具等它结束再读。通过：每一步之后热点名不变，开机时刻变化不超过 2 s。探针没有保存热点参数时记为 n/a。
 
 ### 4.7 多客户端
 
-MC-01（决定 B2，TCP）：客户端 A 连接并开始采样后，客户端 B 连接同一端口。通过：B 的 DAP_Info 照常应答，B 的其他命令得到明确的"忙"（格式按 Core 协议文档），A 的会话和采样不受影响。
+MC-01（协议第 2 节，TCP）：客户端 A 连接并开始采样后，客户端 B 连接同一端口。通过：B 得不到服务（连接被拒或没有应答），A 照常应答，采样继续。
 
-MC-02（决定 B2，`--link2`）：A、B 两条链路（例如 USB 和 TCP）连同一块探针，A 先连接。通过：B 的 DAP_Info 照常应答，B 的其他命令得到"忙"；A 连续 5 s 读夹具中的 u32 和指针链，没有一个值出错。
+MC-02（协议 3.1，决定 B2，`--link2`）：A、B 两条链路（例如 USB 和 TCP）连同一块探针，A 先连接成为会话主人。通过：B 的 DAP_Info 照常应答，B 的 `DAP_Transfer` 回 `05 FF`，B 的 READ 回 `81 05`；A 连续 5 s 读夹具中的 u32 和指针链（其间 B 不断发命令），没有一个值出错。
 
-MC-03（决定 B2，`--link2`）：A 开始采样后结束会话（停止并断开）；B 随后连接、开始采样 1 s。通过：A 的会话在时，B 被拒为"忙"；A 结束后，B 的每一步状态为 0x00，至少 500 帧。
+MC-03（协议 3.1，决定 B2，`--link2`）：A 开始采样，B 的 READ 回 `81 05`；A 停止采样并 `DAP_Disconnect`（会话结束）；B 用 SUB_READ 读到 A 留下的帧（状态 0x02，带数据），再连接、开始采样 1 s。通过：每一步状态如上，B 至少采到 500 帧。
 
 ### 4.8 无线板对
 

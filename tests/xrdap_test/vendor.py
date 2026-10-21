@@ -1,10 +1,12 @@
-"""XR vendor extension 0x80..0x86 (docs/protocol.md section 3)."""
+"""XR vendor extension 0x80..0x86, protocol version 2 (docs/protocol.md section 3)."""
 
 import struct
 import time
 from dataclasses import dataclass, field
 
-OK, ARG, STATE, RESOURCE, NO_TARGET = 0x00, 0x01, 0x02, 0x03, 0x04
+OK, ARG, STATE, RESOURCE, NO_TARGET, BUSY = 0x00, 0x01, 0x02, 0x03, 0x04, 0x05
+PROTOCOL_VERSION = 2
+WIFI_CLEAR_CONFIRM = 0xA5  # protocol 3.7: 86 02 A5
 
 
 @dataclass
@@ -49,15 +51,14 @@ class Vendor:
 
     def info(self):
         r = self.link.xfer(b"\x80")
-        if len(r) < 26 or r[0] != 0x80:
+        if len(r) < 22 or r[0] != 0x80:
             return {"status": r[1] if len(r) > 1 else None, "raw": r.hex(" ")}
         return {
-            "status": r[1], "version": r[2],
+            "status": r[1], "version": r[2], "length": len(r),
             "features": int.from_bytes(r[3:7], "little"),
             "max_items": int.from_bytes(r[7:9], "little"), "max_depth": r[9],
             "ring_bytes": int.from_bytes(r[10:14], "little"),
             "probe_time_us": int.from_bytes(r[14:22], "little"),
-            "per_access_us": int.from_bytes(r[22:26], "little"),
         }
 
     def read(self, items):
@@ -85,14 +86,6 @@ class Vendor:
             return r[1] if len(r) > 1 else None, []
         return r[1], [struct.unpack_from("<HB", r, 3 + 3 * k) for k in range(r[2])]
 
-    def sub_set(self, period_us, items, flags=0):
-        """Returns (status, max_frame_bytes, est_frame_us)."""
-        request = struct.pack("<BIBH", 0x83, period_us, flags, len(items))
-        request += b"".join(i.encode() + struct.pack("<HH", i.div, i.phase) for i in items)
-        r = self.link.xfer(request)
-        if len(r) >= 8:
-            return r[1], int.from_bytes(r[2:4], "little"), int.from_bytes(r[4:8], "little")
-        return (r[1] if len(r) > 1 else None), None, None
 
     def sub_ctrl(self, op):
         r = self.link.xfer(bytes([0x84, op]))
@@ -109,9 +102,11 @@ class Vendor:
         return out
 
     def start(self, period_us, items, flags=0):
-        """Configure and start sampling. Returns the status of the step that failed, else OK."""
-        status = self.sub_set(period_us, items, flags)[0]
-        return status if status != OK else self.sub_ctrl(1)
+        """SUB_START (0x83): configure and start at once. Returns the status."""
+        request = struct.pack("<BIBH", 0x83, period_us, flags, len(items))
+        request += b"".join(i.encode() + struct.pack("<HH", i.div, i.phase) for i in items)
+        r = self.link.xfer(request)
+        return r[1] if len(r) > 1 else None
 
     def stop(self):
         return self.sub_ctrl(0)
