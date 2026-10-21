@@ -1,0 +1,16 @@
+name: format
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  clang-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format 21.1.8 (libxr configuration)
+        run: |
+          pip install clang-format==21.1.8
+          git ls-files '*.hpp' '*.cpp' | xargs clang-format --dry-run --Werror
