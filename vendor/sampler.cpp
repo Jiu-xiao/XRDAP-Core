@@ -72,6 +72,8 @@ uint8_t Sampler::Configure(const SubItemList& items, uint32_t period_us,
 
 // 按采样时的访问序列试读两遍，返回第二遍的耗时：第一遍在预热缓存，偶尔慢很多，会让估计
 // 偏大而误拒订阅。各 AP 的 CSW 先读好，不计入耗时。试读和采样访问同一批地址，副作用相同。
+// 试读时条目还在请求字节里、边解析边读，采样时条目已解析好，所以再计一遍只解析不读的耗时
+// 并减掉。
 bool Sampler::MeasureFrame(const SubItemList& items, uint32_t& us)
 {
   MemAp::Lock lock(mem_);
@@ -96,6 +98,14 @@ bool Sampler::MeasureFrame(const SubItemList& items, uint32_t& us)
           (void)mem_.ReadItem(ap, it, value);
         });
     us = static_cast<uint32_t>(NowUs() - t0);
+  }
+  if (ok)
+  {
+    volatile uint32_t sink = 0U;
+    const uint64_t t0 = NowUs();
+    items.ForEach([&](const SubItem& sub) { sink = sink + sub.item.size; });
+    const auto parse_us = static_cast<uint32_t>(NowUs() - t0);
+    us = (us > parse_us) ? us - parse_us : 0U;
   }
   return ok;
 }

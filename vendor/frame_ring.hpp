@@ -2,17 +2,21 @@
 #pragma once
 
 // 采样帧的环形缓冲。每帧前面有 2 字节小端长度，只按整帧取出。采样写、SUB_READ 读，两边
-// 经 libxr 互斥量互斥，可以在不同的任务、不同的核上；单循环的探针上互斥量只是一个标志。
+// 可以在不同的任务、不同的核上，经平台的自旋锁（xrdap_port.hpp 的 Port::SpinLock）互斥。
+// 不用会阻塞的互斥量：SUB_READ 拷贝时采样任务来写，会让优先级最高的采样任务睡下、经优先级
+// 继承来回切换，短周期下节拍因此迟到。
 //
 // Ring buffer of sample frames. Each frame is preceded by a 2-byte little-endian length
-// and is only taken out whole. Sampling writes and SUB_READ reads; both sides go through
-// a libxr mutex and may run in different tasks or on different cores. On a single-loop
-// probe the mutex is only a flag.
+// and is only taken out whole. Sampling writes and SUB_READ reads, possibly in different
+// tasks or on different cores, under the platform's spinlock (Port::SpinLock from
+// xrdap_port.hpp). A blocking mutex is not used: a tick that arrives while SUB_READ
+// copies would put the highest-priority sampling task to sleep and switch back and forth
+// through priority inheritance, making ticks late at short periods.
 
 #include <cstdint>
 
-#include "mutex.hpp"
 #include "vendor_protocol.hpp"
+#include "xrdap_port.hpp"
 
 namespace XrDap::Vendor
 {
@@ -57,7 +61,7 @@ class FrameRing
   void CopyIn(uint32_t at, const uint8_t* src, uint32_t len);
   void CopyOut(uint32_t at, uint8_t* dst, uint32_t len) const;
 
-  LibXR::Mutex mutex_;
+  Port::SpinLock lock_;
   uint8_t buf_[kRingBytes] = {};
   uint32_t head_ = 0U;
   uint32_t tail_ = 0U;

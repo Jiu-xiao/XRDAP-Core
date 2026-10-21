@@ -21,7 +21,7 @@ The host tool is [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host). The proto
 | `probe/` | `SetProbeInfo`, `FormatSerial`: DAP_Info strings and the serial rule |
 | `docs/` | protocol document |
 
-This repository does not touch hardware. Time, mutexes and semaphores come from libxr's `Timebase`, `Mutex` and `Semaphore`, which all three platforms have; what libxr has no common abstraction for is supplied by the platform: creating the sampling task (ESP pins it to the core that drives SWD), the tick timer (`Vendor::TickTimer`), the LED driver and pins, and the query whether USB is configured.
+This repository does not touch hardware. Time, mutexes and semaphores come from libxr's `Timebase`, `Mutex` and `Semaphore`, which all three platforms have; what libxr has no common abstraction for is supplied by the platform: creating the sampling task (ESP pins it to the core that drives SWD), the tick timer (`Vendor::TickTimer`), the spinlock of the sample frame buffer (`xrdap_port.hpp`), the LED driver and pins, and the query whether USB is configured.
 
 ## Integration
 
@@ -31,6 +31,24 @@ A firmware project includes `xrdap_core.cmake`, adds the sources to its own targ
 include(${CMAKE_CURRENT_SOURCE_DIR}/third_party/xrdap-core/xrdap_core.cmake)
 target_sources(app.elf PRIVATE ${XRDAP_CORE_SOURCES})
 target_include_directories(app.elf PRIVATE ${XRDAP_CORE_INCLUDE_DIRS})
+```
+
+The include path must also hold the platform's own `xrdap_port.hpp`, which provides `XrDap::Port::SpinLock` for the sample frame buffer. The sampling task and SUB_READ both hold it briefly (at most a 1 KB copy), and it must not block: a blocking mutex would put the highest-priority sampling task to sleep while SUB_READ copies, and ticks would be late at short periods. The dual-core ESP32 parts use a portMUX, a single-core RTOS a critical section, a single-loop probe a no-op:
+
+```cpp
+// xrdap_port.hpp (single-core FreeRTOS)
+#include "FreeRTOS.h"
+#include "task.h"
+
+namespace XrDap::Port
+{
+class SpinLock
+{
+ public:
+  void Lock() { taskENTER_CRITICAL(); }
+  void Unlock() { taskEXIT_CRITICAL(); }
+};
+}  // namespace XrDap::Port
 ```
 
 An ESP-IDF project passes `XRDAP_CORE_SOURCES` and `XRDAP_CORE_INCLUDE_DIRS` to `idf_component_register`. The sampling ring buffer is 4 KB by default; platforms with more RAM raise it with a compile definition, and INFO reports the actual size:

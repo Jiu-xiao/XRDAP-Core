@@ -21,7 +21,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 | `probe/` | `SetProbeInfo`、`FormatSerial`：DAP_Info 字符串和序列号规则 |
 | `docs/` | 协议文档 |
 
-本仓库不碰硬件。时间、互斥量和信号量用 libxr 的 `Timebase`、`Mutex`、`Semaphore`，三种平台都有；libxr 没有统一抽象的部分由平台提供：采样任务的创建（ESP 要固定到 SWD 所在的核）、节拍定时器（`Vendor::TickTimer`）、灯的驱动和引脚、USB 是否已配置的查询。
+本仓库不碰硬件。时间、互斥量和信号量用 libxr 的 `Timebase`、`Mutex`、`Semaphore`，三种平台都有；libxr 没有统一抽象的部分由平台提供：采样任务的创建（ESP 要固定到 SWD 所在的核）、节拍定时器（`Vendor::TickTimer`）、采样帧缓冲的自旋锁（`xrdap_port.hpp`）、灯的驱动和引脚、USB 是否已配置的查询。
 
 ## 接入
 
@@ -31,6 +31,24 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 include(${CMAKE_CURRENT_SOURCE_DIR}/third_party/xrdap-core/xrdap_core.cmake)
 target_sources(app.elf PRIVATE ${XRDAP_CORE_SOURCES})
 target_include_directories(app.elf PRIVATE ${XRDAP_CORE_INCLUDE_DIRS})
+```
+
+包含路径上还要有平台自己的 `xrdap_port.hpp`，提供采样帧缓冲用的 `XrDap::Port::SpinLock`。采样任务和 SUB_READ 都会短暂持有它（最多拷贝 1 KB），它不能阻塞：会阻塞的互斥量让优先级最高的采样任务在 SUB_READ 拷贝时睡下，短周期下节拍会迟到。双核的 ESP32 用 portMUX，单核 RTOS 用临界区，单循环的探针用空操作：
+
+```cpp
+// xrdap_port.hpp（单核 FreeRTOS）
+#include "FreeRTOS.h"
+#include "task.h"
+
+namespace XrDap::Port
+{
+class SpinLock
+{
+ public:
+  void Lock() { taskENTER_CRITICAL(); }
+  void Unlock() { taskEXIT_CRITICAL(); }
+};
+}  // namespace XrDap::Port
 ```
 
 ESP-IDF 工程把 `XRDAP_CORE_SOURCES`、`XRDAP_CORE_INCLUDE_DIRS` 交给 `idf_component_register`。采样环形缓冲默认 4 KB，RAM 多的平台用编译定义加大，INFO 会报告实际大小：
