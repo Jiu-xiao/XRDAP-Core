@@ -89,13 +89,16 @@ void Sampler::RunTask(TickTimer& timer)
   for (;;)
   {
     (void)wake_.Wait(UINT32_MAX);
-    Service(timer);
+    while (Service(timer))
+    {
+    }
   }
 }
 
-// 醒来一次：按需开关定时器，到了新节拍就采一拍。
-// One wake: start or stop the timer as needed, and sample a tick when a new one came.
-void Sampler::Service(TickTimer& timer)
+// 醒来一次：按需开关定时器，到了要采的节拍就采一拍，再定下一次唤醒的计数。
+// One wake: start or stop the timer as needed, sample a tick when the one to sample came,
+// then set the count of the next wake.
+bool Sampler::Service(TickTimer& timer)
 {
   uint32_t count = ticks_.load(std::memory_order_relaxed);
   MemAp::Lock lock(mem_);
@@ -106,7 +109,7 @@ void Sampler::Service(TickTimer& timer)
       timer.Stop();
       timer_on_ = false;
     }
-    return;
+    return false;
   }
   const uint32_t gen = gen_.load(std::memory_order_acquire);
   if (gen != run_gen_)
@@ -126,21 +129,27 @@ void Sampler::Service(TickTimer& timer)
   }
 
   const TickAccount::Step step = account_.OnWake(count);
-  if (!step.sample)
+  if (step.sample)
   {
-    return;
-  }
-  const uint64_t t0 = NowUs();
-  SampleTick(step);
-  const auto busy = static_cast<uint32_t>(NowUs() - t0);
-  account_.OnDone(ticks_.load(std::memory_order_relaxed), busy, period_us_);
+    const uint64_t t0 = NowUs();
+    SampleTick(step);
+    const auto busy = static_cast<uint32_t>(NowUs() - t0);
+    account_.OnDone(ticks_.load(std::memory_order_relaxed), busy, period_us_);
 
-  if (!keep_(keep_ctx_))
-  {
-    active_.store(false, std::memory_order_release);
-    timer.Stop();
-    timer_on_ = false;
+    if (!keep_(keep_ctx_))
+    {
+      active_.store(false, std::memory_order_release);
+      timer.Stop();
+      timer_on_ = false;
+      return false;
+    }
   }
+  // 先定下唤醒的计数再看计数：要采的节拍若在这之前已到，中断不会再唤醒，这里接着做。
+  // Set the wake count first, then read the count: if the tick to sample came before
+  // that, the interrupt will not wake us again, so carry on here.
+  const uint32_t next = account_.Next();
+  wake_at_.store(next, std::memory_order_relaxed);
+  return TickDue(ticks_.load(std::memory_order_relaxed), next);
 }
 
 // 读一拍里到期的条目，组成帧放进缓冲：节拍号 u32 + 时间戳 u48 + 状态位图 + 各到期条目

@@ -2,23 +2,30 @@
 #pragma once
 
 // 探针端周期采样（docs/protocol.md 3.5）。节拍定时器（TickTimer，平台实现）是唯一的
-// 时钟：它的中断调用 OnTickIsr()，只把节拍计数加 1 并唤醒采样。采样醒来后按 TickAccount
-// 决定采哪一拍、跳过了几拍；时基只用来给帧打时间戳。两种运行方式，逻辑相同：
+// 时钟：它的中断调用 OnTickIsr()，把节拍计数加 1，计数到达下一个要采的节拍时唤醒采样。
+// 采样醒来后按 TickAccount 决定采哪一拍、跳过了几拍；时基只用来给帧打时间戳。两种运行
+// 方式，逻辑相同：
 //   任务：平台建一个任务运行
 //   RunTask()，任务在信号量上无超时地阻塞，停止也经信号量唤醒它。
-//     任务应为 SWD 所在核上优先级最高的任务。
+//     任务应为 SWD 所在核上优先级最高的任务。它不会饿死同一核上的命令处理：任务只为要采
+//     的节拍醒来，两帧之间至少空出 max(15 us, 周期/8, 占用/4)（见 tick_account.hpp），
+//     所以任何周期下命令处理都至少有这个核约 1/5 的时间（节拍中断本身除外）。
 //   单循环（没有 RTOS）：主循环在两条 DAP 命令之间调用 Poll()，计数变了就采一拍。
 // 每一拍在 MemAp::Lock 里完成：确认这次运行还在（代号没变）、读到期的条目、把帧放进
 // 缓冲，所以停止后换了配置也不会混进旧的帧。
 //
 // Probe-side periodic sampling (docs/protocol.md 3.5). The tick timer (TickTimer,
 // implemented by the platform) is the only clock: its interrupt calls OnTickIsr(), which
-// only adds 1 to the tick count and wakes sampling. On waking, TickAccount decides which
-// tick to sample and how many were skipped; the time base only stamps frames. Two ways
-// to run it, with the same logic:
+// adds 1 to the tick count and wakes sampling when the count reaches the next tick to
+// sample. On waking, TickAccount decides which tick to sample and how many were skipped;
+// the time base only stamps frames. Two ways to run it, with the same logic:
 //   Task: the platform creates a task that runs RunTask(); it blocks on a semaphore with
 //     no timeout, and a stop wakes it through the semaphore too. The task should have
-//     the highest priority on the core that drives SWD.
+//     the highest priority on the core that drives SWD. It does not starve command
+//     handling on that core: the task wakes only for ticks it samples, and at least
+//     max(15 us, period/8, busy/4) is left free between two frames (see
+//     tick_account.hpp), so at any period command handling gets at least about 1/5 of
+//     the core (the tick interrupts themselves aside).
 //   Single loop (no RTOS): the main loop calls Poll() between DAP commands and samples a
 //     tick when the count changed.
 // Every tick completes under MemAp::Lock: it checks the run is still current (same
@@ -98,14 +105,15 @@ class Sampler
     return ring_.Take(dst, limit);
   }
 
-  /// @brief 节拍定时器中断调用：计数加 1，任务方式下唤醒采样任务 / Called by the tick
-  ///        timer interrupt: adds 1 to the count and wakes the sampling task in task
-  ///        mode.
+  /// @brief 节拍定时器中断调用：计数加 1；任务方式下计数到达下一个要采的节拍时唤醒
+  ///        采样任务 / Called by the tick timer interrupt: adds 1 to the count; in task
+  ///        mode wakes the sampling task when the count reaches the next tick to sample.
   /// @note 中断上下文 / Interrupt context.
   void OnTickIsr()
   {
-    ticks_.fetch_add(1U, std::memory_order_relaxed);
-    if (task_mode_.load(std::memory_order_relaxed))
+    const uint32_t count = ticks_.fetch_add(1U, std::memory_order_relaxed) + 1U;
+    if (task_mode_.load(std::memory_order_relaxed) &&
+        TickWakes(count, wake_at_.load(std::memory_order_relaxed)))
     {
       wake_.PostFromCallback(true);
     }
@@ -118,7 +126,7 @@ class Sampler
 
   /// @brief 单循环：主循环每圈调用 / Single loop: called on every main-loop pass.
   /// @note 与 DAP 执行在同一个线程 / Same thread as the DAP execution.
-  void Poll(TickTimer& timer) { Service(timer); }
+  void Poll(TickTimer& timer) { (void)Service(timer); }
 
  private:
   struct ApCsw
@@ -129,7 +137,9 @@ class Sampler
   };
 
   const ApCsw* FindCsw(uint8_t ap) const;
-  void Service(TickTimer& timer);
+  /// 返回 true 时要采的节拍已经到了，不等唤醒再来一次 / Returns true when the next tick
+  /// to sample has already come, to run again without waiting.
+  bool Service(TickTimer& timer);
   void SampleTick(const TickAccount::Step& step);
 
   MemAp& mem_;
@@ -139,6 +149,9 @@ class Sampler
   std::atomic<bool> active_{false};
   std::atomic<uint32_t> gen_{0U};
   std::atomic<uint32_t> ticks_{0U};
+  /// 中断在计数到这里时唤醒采样任务 / The interrupt wakes the sampling task at this
+  /// count.
+  std::atomic<uint32_t> wake_at_{0U};
   std::atomic<bool> task_mode_{false};
   LibXR::Semaphore wake_{0};
 
