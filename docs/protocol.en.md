@@ -115,7 +115,7 @@ A request is `command byte + arguments`; a response is `command byte + overall s
 
 A request whose length does not match the count field in the command returns 0x01 and is not executed.
 
-Reply space: before a vendor command runs, the probe works out from the request how many bytes its reply needs and compares that with the space it may write this time. The space is the packet size from DAP_Info (1024 bytes on XRDAP-ESP and XRDAP-CH32V307, 512 bytes on XRDAP-F103C8); inside `DAP_ExecuteCommands` it is the part of that packet not used yet. With less than 2 bytes of space the reply is `FF` alone; when the whole reply does not fit it is `command 03`; in both cases the command does not run and nothing is written past the given space. The READ reply is 3 + Σ(3 + size) bytes, WRITE 3 + 3 × count, INFO 22, SUB_START and SUB_CTRL 2, SUB_READ at least 24.
+Reply space: before a vendor command runs, the probe works out from the request how many bytes its reply needs and compares that with the space it may write this time. The space is the packet size from DAP_Info (1024 bytes on XRDAP-ESP and XRDAP-CH32V307, 512 bytes on XRDAP-F103C8); inside `DAP_ExecuteCommands` it is the part of that packet not used yet. Vendor commands may sit inside `DAP_ExecuteCommands` and `DAP_QueueCommands`, as in the CMSIS-DAP reference implementation; the commands of a container are back to back and each one's length follows from its own content (READ, WRITE and SUB_START from the item count and the items, INFO 1 byte, SUB_CTRL 2, SUB_READ 3, 0x86 by operation: query 2, save 3 + ssid_len + 1 + pw_len, clear 3); a container with a length that cannot be worked out answers `7F FF` as a whole. With less than 2 bytes of space the reply is `FF` alone; when the whole reply does not fit it is `command 03`; in both cases the command does not run and nothing is written past the given space. The READ reply is 3 + Σ(3 + size) bytes, WRITE 3 + 3 × count, INFO 22, SUB_START and SUB_CTRL 2, SUB_READ at least 24.
 
 | Overall status | Meaning |
 |---|---|
@@ -254,7 +254,7 @@ Only whole frames are returned; their total length does not exceed `min(max_byte
 
 #### Ticks
 
-- The tick timer is the only clock. Its interrupt only adds 1 to the tick count every period and wakes sampling; on waking, sampling reads the count, and the newest tick is the count value k. The time base only stamps frames.
+- The tick timer is the only clock. Its interrupt adds 1 to the tick count every period and wakes sampling only when the count reaches the next tick to sample; on waking, sampling reads the count, and the newest tick is the count value k. The time base only stamps frames.
 - After a successful SUB_START the count is cleared, tick 0 is sampled at once, and one more tick comes every period.
 - An item is sampled on ticks where `(k + phase) % div == 0`. A div of 1 samples every tick; phase staggers slow items. Items due in one tick are read in the order given in SUB_START.
 - A tick with no item due produces no frame.
@@ -278,7 +278,8 @@ The items due are derived from k and each item's div and phase, so they are not 
 
 - When sampling wakes, every tick between the last one sampled and the current count that was not sampled counts as skipped and accumulates in the skipped tick count; the tick index then has a gap. The probe does not make up ticks and does not lower the rate or drop items by itself.
 - When the next tick arrives while a tick is still being read, that tick is not made up; sampling waits for the one after it.
-- When one tick is busy for more than `period - max(period / 8, 15 µs)`, the probe gives up one more tick (counted as skipped) so other tasks on the same core get time.
+- After each frame, the next tick to sample is at least `busy + gap` after this frame's tick, with gap = `max(15 µs, period / 8, busy / 4)` and busy the time this frame took to read; the ticks in between count as skipped.
+- So the probe answers commands at any period: between two frames the other tasks on the same core (DAP commands, serial, TCP) get at least that gap, about 1/5 of the core or more. A period shorter than a frame only adds skipped ticks; commands still get the CPU.
 
 #### Reading too slowly
 
