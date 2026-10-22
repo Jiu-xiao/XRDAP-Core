@@ -85,7 +85,7 @@ A target profile is a TOML file that states the RAM the tool may overwrite (scra
 
 ## Serial session hygiene (STAB-08)
 
-STAB-08 checks whether a serial session makes the probe restart or lose the Wi-Fi credentials: on the serial link it runs `xrdap share` and OpenOCD, and at the same time reads the Wi-Fi credentials and the probe clock over Wi-Fi, so both the serial and the TCP path must be given, together with the locations of `xrdap` and OpenOCD:
+STAB-08 checks whether a serial session makes the probe restart or lose the Wi-Fi credentials: on the serial link it runs `xrdap share` and OpenOCD, and at the same time reads the Wi-Fi credentials and the probe clock over another link (TCP or USB), so both the serial port and that link must be given, together with the locations of `xrdap` and OpenOCD:
 
 ```bash
 python -m xrdap_test run --link serial:PORT --link2 tcp:HOST --target my-target.toml --cases STAB-08 --xrdap PATH/xrdap --openocd PATH/openocd

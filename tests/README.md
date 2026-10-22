@@ -85,7 +85,7 @@ python -m xrdap_test ab --link usb --target my-target.toml --cases PERF,VND-06 \
 
 ## 串口会话卫生（STAB-08）
 
-STAB-08 检查串口会话会不会让探针重启或丢掉热点参数：串口链路跑 `xrdap share` 和 OpenOCD，同时经 Wi-Fi 读热点参数和探针时钟，所以要同时给出串口和 TCP 两条路径，以及 `xrdap`、OpenOCD 的位置：
+STAB-08 检查串口会话会不会让探针重启或丢掉热点参数：串口链路跑 `xrdap share` 和 OpenOCD，同时经另一条链路（TCP 或 USB）读热点参数和探针时钟，所以要同时给出串口和这条链路，以及 `xrdap`、OpenOCD 的位置：
 
 ```bash
 python -m xrdap_test run --link serial:PORT --link2 tcp:HOST --target my-target.toml --cases STAB-08 --xrdap PATH/xrdap --openocd PATH/openocd

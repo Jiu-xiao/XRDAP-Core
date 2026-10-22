@@ -81,8 +81,7 @@ def start_share(ctx, port):
     spec = linkmod.parse_spec(ctx.spec)
     win = sys.platform == "win32"
     xrdap = shlex.split(ctx.args.xrdap or "xrdap", posix=not win)
-    cmd = xrdap + ["-p", spec["port"]] + (["--keep-lines"] if spec["keep_lines"] else []) + [
-        "share", "openocd", "--listen", f"127.0.0.1:{port}"]
+    cmd = xrdap + ["share", "openocd", "-p", spec["port"], "--listen", f"127.0.0.1:{port}"]
     # Own process group, so a graceful stop (Ctrl-Break) reaches only the share.
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if win else 0
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

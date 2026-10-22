@@ -217,6 +217,7 @@ def wifi_and_boot(spec, timeout=20.0):
                 t0 = time.time()
                 info = Vendor(lk).info()
                 rtt = time.time() - t0
+                lk.xfer(b"\x03")  # end the checker's session so the next serial step can own the probe
                 if r[:2] == b"\x86\x00" and info.get("status") == OK:
                     n = r[8]
                     ssid = bytes(r[9:9 + n])
@@ -234,8 +235,8 @@ def wifi_and_boot(spec, timeout=20.0):
 def stab_serial_hygiene(ctx):
     from .tools import openocd_ready
 
-    if not ctx.args.link2 or linkmod.parse_spec(ctx.args.link2)["kind"] != "tcp":
-        raise R.NotApplicable("needs --link2 tcp:HOST (the checks go over Wi-Fi)")
+    if not ctx.args.link2 or linkmod.parse_spec(ctx.args.link2)["kind"] == "serial":
+        raise R.NotApplicable("needs --link2 over another transport (tcp:HOST or usb), not serial")
     t = openocd_ready(ctx)
     ssid0, boot0, why0 = wifi_and_boot(ctx.args.link2)
     ctx.metric("before", why0)
