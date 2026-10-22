@@ -30,6 +30,7 @@ jobs:
           git -C "$RUNNER_TEMP/libxr" checkout "$LIBXR_COMMIT"
       - name: build
         run: |
+          sudo apt-get update
           sudo apt-get install -y ninja-build libudev-dev
           cmake -S tests -B build -G Ninja -DLIBXR_DIR="$RUNNER_TEMP/libxr"
           cmake --build build
