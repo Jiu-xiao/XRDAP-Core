@@ -246,6 +246,22 @@ def divided_set(t, counter):
 DIVIDED_CONST = {2: 0x5A000000, 4: 0x0123456789ABCDEF, 5: 0x89ABCDEF, 6: 0x1234, 7: 0xA5, 8: 0xCAFEBABE}
 
 
+def distribution(values):
+    """Percentiles, extremes and a coarse histogram (us) of a list of numbers."""
+    if not values:
+        return {}
+    v = sorted(values)
+
+    def pct(p):
+        return v[min(len(v) - 1, int(len(v) * p))]
+
+    edges = (5, 10, 20, 50, 100, 200, 500)
+    hist = {f"<={e}": sum(1 for x in v if abs(x) <= e) for e in edges}
+    hist[">500"] = sum(1 for x in v if abs(x) > 500)
+    return {"n": len(v), "min": v[0], "p50": pct(0.5), "p90": pct(0.9), "p99": pct(0.99),
+            "p999": pct(0.999), "max": v[-1], "hist_abs_cumulative": hist}
+
+
 def check_stream(ctx, cap, items, period, counter_kind):
     """Divider/phase, values, counters and timestamps of a captured stream."""
     frames = cap.frames
@@ -258,7 +274,13 @@ def check_stream(ctx, cap, items, period, counter_kind):
     failed = sum(1 for f in frames for v in f[2].values() if v is None)
     bad_const = sum(1 for f in frames for i, v in f[2].items()
                     if i in DIVIDED_CONST and v is not None and v != DIVIDED_CONST[i])
-    ctx.check("no failed items", failed == 0, failed)
+    per_item = {i.id: sum(1 for f in frames if i.id in f[2] and f[2][i.id] is None) for i in items}
+    first = next(((k, ts) for k, ts, v in frames if None in v.values()), None)
+    ctx.check("no failed items", failed == 0,
+              f"{failed} failed, per item id {per_item}, first at tick {first[0]}" if first else "")
+    if first:
+        ctx.metric("failed_items", {"per_item": per_item, "first_tick": first[0],
+                                    "first_after_s": round((first[1] - frames[0][1]) / 1e6, 1)})
     ctx.check("constants and 3-level chain", bad_const == 0, f"{bad_const} wrong values")
     gaps = tick_gaps(frames, items)
     ctx.check("no tick gaps, 0 skipped, 0 dropped", not (gaps or cap.skipped or cap.dropped),
@@ -266,7 +288,11 @@ def check_stream(ctx, cap, items, period, counter_kind):
     base_k, base_t = frames[0][0], frames[0][1]
     dev = [ts - base_t - (k - base_k) * period for k, ts, _ in frames]
     out = {"frames": len(frames), "dev_min_us": min(dev), "dev_max_us": max(dev),
-           "dev_p99_abs_us": sorted(abs(d) for d in dev)[int(len(dev) * 0.99) - 1]}
+           "dev_p99_abs_us": sorted(abs(d) for d in dev)[int(len(dev) * 0.99) - 1],
+           "dev_abs_us": distribution([abs(d) for d in dev]),
+           # Time between consecutive frames minus the ticks they are apart x period.
+           "interval_error_us": distribution(
+               [(b[1] - a[1]) - (b[0] - a[0]) * period for a, b in zip(frames, frames[1:])])}
     if counter_kind:
         ticks = [(k, v[1]) for k, _, v in frames if v.get(1) is not None]
         deltas = [(b - a) & 0xFFFFFFFF for (_, a), (_, b) in zip(ticks, ticks[1:])]
@@ -279,6 +305,8 @@ def check_stream(ctx, cap, items, period, counter_kind):
             real = [d / hz * 1e6 - period for d in deltas]
             out["target_hz"] = round(hz)
             out["target_jitter_p99_us"] = round(sorted(abs(x) for x in real)[int(len(real) * 0.99) - 1], 1)
+            # Sampling instants seen by the target's own cycle counter.
+            out["target_interval_error_us"] = distribution([round(x, 1) for x in real])
         slow = [v[3] for _, _, v in frames if 3 in v and v[3] is not None]
         ctx.check("div-10 counter item advances", len(slow) < 2 or all(
             (b - a) & 0xFFFFFFFF < 1 << 31 for a, b in zip(slow, slow[1:])))

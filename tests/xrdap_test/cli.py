@@ -113,7 +113,8 @@ def do_run(args, out_dir):
 def run_dir(args, label=""):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     kind = "radio" if args.via_radio else linkmod.parse_spec(args.link)["kind"]
-    name = "-".join(filter(None, [stamp, kind, args.target or "notarget", label]))
+    target = os.path.splitext(os.path.basename(args.target))[0] if args.target else "notarget"
+    name = "-".join(filter(None, [stamp, kind, target, label]))
     return os.path.join(args.out, name)
 
 

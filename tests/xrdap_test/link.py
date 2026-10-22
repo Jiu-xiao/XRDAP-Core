@@ -239,6 +239,12 @@ class SerialLink(Link):
                 if time.monotonic() > deadline:
                     self.ser.close()
                     raise LinkError(f"no DAP answer on {port}")
+        # A late answer to an earlier client's request may still arrive; let it land and drop
+        # it so that every later response pairs with its own request.
+        time.sleep(0.2)
+        self.pending.clear()
+        self.parser.feed(self.ser.read(self.ser.in_waiting or 1))
+        self.pending.clear()
 
     def send(self, request):
         self.ser.write(pack_serial_request(request))
