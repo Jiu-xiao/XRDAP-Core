@@ -162,7 +162,7 @@ usb_dap.Create<XrDap::Executor<Dap>*>(
     "dap_usb", 4096, LibXR::Thread::Priority::HIGH);
 ```
 
-`StepUsb(wait_ms)` keeps the executor's lock while it waits for a command, so other transports wait at most `wait_ms` longer.
+`StepUsb(wait_ms)` first waits for a USB command in libxr's `WaitForWork` without holding a turn, and queues to run it once it is there. A turn is held only while one command runs and is handed over in arrival order (`TurnQueue`); the holder cannot get ahead of a transport already queued, so no transport's `DAP_Info` or busy reply depends on another transport's idle time. This needs libxr's `WaitForWork`.
 
 ### Serial link
 

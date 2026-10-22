@@ -2,42 +2,51 @@
 #pragma once
 
 // 唯一的命令执行器：探针上所有进入 libxr DAP 实例的调用（USB 的 Step 和其他传输的
-// ExecuteExternal）都经过这里，持同一把锁，每次只有一条命令在执行；执行时记下命令属于哪条
-// 传输。它装在 DAP 实例上的命令钩子先问 SessionOwner 这条传输能不能执行（不能就回忙），
-// 再交给平台的转发器（例如 CH32 的无线）、厂商扩展，其余的标准命令由 libxr 执行。
-// 执行过的命令记进 DapActivity。装钩子时也把厂商命令的长度函数交给 libxr（SetCommandHook
+// ExecuteExternal）都经过这里，每次只有一条命令在执行；执行时记下命令属于哪条传输。
+// 执行的轮次先到先得、直接交给排在前面的（TurnQueue），只在执行一条命令时持有：USB 等
+// 命令时不持有（先在 libxr 的 WaitForWork 里等，有命令了才排队执行 Step(0)），所以
+// DAP_Info 和“忙”回复不取决于别的传输什么时候空闲。它装在 DAP 实例上的命令钩子先问
+// SessionOwner 这条传输能不能执行（不能就回忙）， 再交给平台的转发器（例如 CH32
+// 的无线）、厂商扩展，其余的标准命令由 libxr 执行。 执行过的命令记进
+// DapActivity。装钩子时也把厂商命令的长度函数交给 libxr（SetCommandHook
 // 的第三个参数，需要 libxr 11b48cb4 或之后），DAP_ExecuteCommands / DAP_QueueCommands
 // 里因此可以放厂商命令，与 CMSIS-DAP 参考实现相同。
 //
 // The single command executor: every call into the libxr DAP instance on the probe
-// (USB's Step and the other transports' ExecuteExternal) goes through here under one
-// lock, so one command runs at a time, and it notes which transport the command belongs
-// to. The command hook it installs on the DAP instance first asks SessionOwner whether
-// that transport may run (busy reply otherwise), then hands the command to the
-// platform's forwarder (for example the CH32 radio) and the vendor extension; libxr runs
-// the remaining standard commands. Commands that ran are recorded in DapActivity. The
-// hook is installed together with the vendor length function (the third argument of
-// SetCommandHook, libxr 11b48cb4 or later), so vendor commands may sit inside
-// DAP_ExecuteCommands / DAP_QueueCommands, as in the CMSIS-DAP reference implementation.
+// (USB's Step and the other transports' ExecuteExternal) goes through here, one command
+// at a time, and it notes which transport the command belongs to. Turns are first come
+// first served and handed straight to the next in line (TurnQueue), and are held only
+// while one command runs: USB does not hold one while waiting for a command (it waits in
+// libxr's WaitForWork first and queues to run Step(0) once a command is there), so
+// DAP_Info and busy replies never depend on another transport's idle time. The command
+// hook it installs on the DAP instance first asks SessionOwner whether that transport may
+// run (busy reply otherwise), then hands the command to the platform's forwarder (for
+// example the CH32 radio) and the vendor extension; libxr runs the remaining standard
+// commands. Commands that ran are recorded in DapActivity. The hook is installed together
+// with the vendor length function (the third argument of SetCommandHook, libxr 11b48cb4
+// or later), so vendor commands may sit inside DAP_ExecuteCommands / DAP_QueueCommands,
+// as in the CMSIS-DAP reference implementation.
 
 #include <cstdint>
 
 #include "libxr_def.hpp"
-#include "mutex.hpp"
+#include "semaphore.hpp"
+#include "thread.hpp"
 #include "timebase.hpp"
 #include "xrdap/activity/dap_activity.hpp"
 #include "xrdap/protocol/dap_ids.hpp"
 #include "xrdap/session/busy_reply.hpp"
 #include "xrdap/session/session_owner.hpp"
+#include "xrdap/session/turn_queue.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
 
 namespace XrDap
 {
 
 /// @brief 命令执行器 / Command executor.
-/// @tparam DapT libxr DAP 类（提供 Step、ExecuteExternal、带长度钩子的 SetCommandHook）/
-///         libxr DAP class (providing Step, ExecuteExternal and SetCommandHook with the
-///         length hook).
+/// @tparam DapT libxr DAP 类（提供 WaitForWork、Step、ExecuteExternal、带长度钩子的
+///         SetCommandHook）/ libxr DAP class (providing WaitForWork, Step,
+///         ExecuteExternal and SetCommandHook with the length hook).
 template <typename DapT>
 class Executor
 {
@@ -67,30 +76,36 @@ class Executor
     forwarder_ctx_ = ctx;
   }
 
-  /// @brief USB：做一次 libxr DAP 的工作（等一条 USB 命令并执行）/ USB: do one unit of
-  ///        libxr DAP work (wait for a USB command and run it).
-  /// @param wait_ms 等命令的最长时间；锁在等待期间也被持有，其他传输最多多等这么久 /
-  ///        Longest wait for a command; the lock is held while waiting, so other
-  ///        transports wait at most this much longer.
+  /// @brief USB：等一条 USB 命令（或绑定、解绑），有了就排队执行 / USB: wait for a USB
+  ///        command (or a bind or unbind) and queue to run it once there.
+  /// @param wait_ms 等命令的最长时间；等待时不占执行轮次 / Longest wait for a command;
+  ///        no turn is held while waiting.
+  /// @return OK 做了一件事；TIMEOUT 期限内没有命令 / OK when something was done;
+  ///         TIMEOUT when no command came in time.
   /// @note 平台的 DAP 线程（或单循环的主循环）里调用 / Call from the platform's DAP
   ///       thread (or the single main loop).
   LibXR::ErrorCode StepUsb(uint32_t wait_ms)
   {
-    LibXR::Mutex::LockGuard guard(mutex_);
+    if (dap_.WaitForWork(wait_ms) != LibXR::ErrorCode::OK)
+    {
+      return LibXR::ErrorCode::TIMEOUT;
+    }
+    Turn turn(*this, Transport::USB);
     current_ = Transport::USB;
-    const LibXR::ErrorCode ec = dap_.Step(wait_ms);
+    const LibXR::ErrorCode ec = dap_.Step(0);
     current_ = Transport::NONE;
     return ec;
   }
 
-  /// @brief 别的传输：同步执行一条命令 / Other transports: run one command
-  ///        synchronously.
-  /// @note 传输自己的任务里调用，不能在中断里 / Call from the transport's own task, not
-  ///       from an interrupt.
+  /// @brief 别的传输：排队等到轮次，同步执行一条命令 / Other transports: queue for a
+  ///        turn and run one command synchronously.
+  /// @note 传输自己的任务里调用，不能在中断里；调用前已收齐命令，不要在持有输入时等待 /
+  ///       Call from the transport's own task, not from an interrupt, with the command
+  ///       already received; never wait for input inside it.
   void Execute(Transport t, const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                uint16_t& out)
   {
-    LibXR::Mutex::LockGuard guard(mutex_);
+    Turn turn(*this, t);
     current_ = t;
     out = 0U;
     (void)dap_.ExecuteExternal(req, len, resp, cap, out);
@@ -112,6 +127,41 @@ class Executor
   }
 
  private:
+  /// 一条命令的执行轮次：构造时排队等到，析构时交给下一个 / The turn for one command:
+  /// queued for and taken on construction, handed to the next on destruction.
+  class Turn
+  {
+   public:
+    Turn(Executor& e, Transport t) : e_(e)
+    {
+      TurnQueue::Arrival a = e_.turns_.Arrive(t);
+      while (a == TurnQueue::Arrival::FULL)
+      {
+        LibXR::Thread::Sleep(1);
+        a = e_.turns_.Arrive(t);
+      }
+      if (a == TurnQueue::Arrival::QUEUED)
+      {
+        (void)e_.Wake(t).Wait(UINT32_MAX);
+      }
+    }
+    ~Turn()
+    {
+      const Transport next = e_.turns_.Leave();
+      if (next != Transport::NONE)
+      {
+        e_.Wake(next).Post();
+      }
+    }
+    Turn(const Turn&) = delete;
+    Turn& operator=(const Turn&) = delete;
+
+   private:
+    Executor& e_;
+  };
+
+  LibXR::Semaphore& Wake(Transport t) { return wake_[static_cast<uint8_t>(t)]; }
+
   static bool Hook(void* ctx, const uint8_t* req, uint16_t len, uint8_t* resp,
                    uint16_t cap, uint16_t& out)
   {
@@ -178,7 +228,10 @@ class Executor
   Forwarder forwarder_ = nullptr;
   void* forwarder_ctx_ = nullptr;
 
-  LibXR::Mutex mutex_;
+  TurnQueue turns_;
+  /// 每条传输一个，交接轮次时唤醒排队的任务 / One per transport; wakes the queued task
+  /// on a hand-over.
+  LibXR::Semaphore wake_[static_cast<uint8_t>(Transport::RADIO) + 1U];
   Transport current_ = Transport::NONE;
 };
 

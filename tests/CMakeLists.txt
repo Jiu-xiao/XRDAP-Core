@@ -28,6 +28,7 @@ add_test(NAME xrdap_core_unit COMMAND xrdap_core_unit)
 
 if(DEFINED LIBXR_DIR)
   set(LIBXR_SYSTEM linux)
+  set(LIBXR_DRIVER linux)
   add_subdirectory("${LIBXR_DIR}" libxr EXCLUDE_FROM_ALL)
   add_library(xrdap_core_compile OBJECT ${XRDAP_CORE_SOURCES}
                                         "${CMAKE_CURRENT_LIST_DIR}/compile/all_headers.cpp")
@@ -46,4 +47,15 @@ if(DEFINED LIBXR_DIR)
   endforeach()
   list(REMOVE_DUPLICATES XRDAP_LIBXR_USB_DIRS)
   target_include_directories(xrdap_core_compile PRIVATE ${XRDAP_LIBXR_USB_DIRS})
+
+  # 多线程下的执行器，用 libxr 的 Linux 系统层运行 / The executor with threads, run on
+  # libxr's Linux system layer.
+  add_executable(xrdap_core_threads "${CMAKE_CURRENT_LIST_DIR}/threads/executor_wait_test.cpp"
+                                    ${XRDAP_CORE_SOURCES})
+  target_include_directories(xrdap_core_threads PRIVATE "${CMAKE_CURRENT_LIST_DIR}/stub"
+                                                        ${XRDAP_CORE_INCLUDE_DIRS}
+                                                        ${XRDAP_LIBXR_USB_DIRS})
+  target_link_libraries(xrdap_core_threads PRIVATE xr pthread)
+  target_compile_options(xrdap_core_threads PRIVATE -Wall -Wextra)
+  add_test(NAME xrdap_core_threads COMMAND xrdap_core_threads)
 endif()

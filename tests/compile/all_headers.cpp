@@ -13,6 +13,7 @@
 #include "xrdap/session/busy_reply.hpp"
 #include "xrdap/session/executor.hpp"
 #include "xrdap/session/session_owner.hpp"
+#include "xrdap/session/turn_queue.hpp"
 #include "xrdap/swd/f1_gpio.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
 #include "xrdap/vendor/frame_ring.hpp"
@@ -33,6 +34,7 @@ struct FakeDap
   using Hook = bool (*)(void*, const uint8_t*, uint16_t, uint8_t*, uint16_t, uint16_t&);
   using LengthHook = bool (*)(void*, const uint8_t*, uint16_t, uint16_t&);
   void SetCommandHook(Hook, void*, LengthHook) {}
+  LibXR::ErrorCode WaitForWork(uint32_t) { return LibXR::ErrorCode::OK; }
   LibXR::ErrorCode Step(uint32_t) { return LibXR::ErrorCode::OK; }
   LibXR::ErrorCode ExecuteExternal(const uint8_t*, uint16_t, uint8_t*, uint16_t,
                                    uint16_t& out)

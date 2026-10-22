@@ -162,7 +162,7 @@ usb_dap.Create<XrDap::Executor<Dap>*>(
     "dap_usb", 4096, LibXR::Thread::Priority::HIGH);
 ```
 
-`StepUsb(wait_ms)` 在等命令时也持有执行器的锁，别的传输最多多等 `wait_ms`。
+`StepUsb(wait_ms)` 先在 libxr 的 `WaitForWork` 里等 USB 命令，等待时不占执行轮次；有了命令才排队执行。执行轮次只在执行一条命令时持有，按到达先后交接（`TurnQueue`），持有者不能抢在已经排队的传输前面，所以任何传输的 `DAP_Info` 和“忙”回复都不取决于别的传输什么时候空闲。需要 libxr 提供 `WaitForWork`。
 
 ### 串口链路
 
