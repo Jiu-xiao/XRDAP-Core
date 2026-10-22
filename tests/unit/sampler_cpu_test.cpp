@@ -33,14 +33,24 @@ struct Result
   uint32_t max_latency = 0;  // 命令最长的回应时间 / longest command latency
 };
 
-// period：节拍周期；frame：读一帧的耗时；command：一条命令要的 CPU 时间，每 2 ms 来一条。
-// period: tick period; frame: cost of one frame; command: CPU time one command needs,
-// one every 2 ms.
-Result Simulate(uint32_t period, uint32_t frame, uint32_t command, uint32_t run_us)
+// 一个核上的耗时 / Costs on one core.
+struct Costs
+{
+  uint32_t period;  // 节拍周期 / tick period
+  uint32_t frame;   // 读一帧 / reading one frame
+  uint32_t wake =
+      4U;  // 中断之后切到采样任务、取链路锁 / switch to sampling, take the lock
+  uint32_t resume =
+      0U;  // 命令任务每次重新拿到 CPU 的切换 / command task switching back in
+};
+
+// 命令每 2 ms 来一条，要 command us 的 CPU。帧的占用和 Sampler::Service 一样从节拍中断
+// 唤醒的那一刻量到读完，包括唤醒和取锁 / One command every 2 ms needing command us of
+// CPU. A frame's busy time is measured as Sampler::Service does, from the moment the
+// tick interrupt woke the task to the end of the read, wake and locking included.
+Result Simulate(const Costs& c, uint32_t command, uint32_t run_us)
 {
   constexpr uint32_t kIsrUs = 1U;  // 中断本身 / the interrupt itself
-  constexpr uint32_t kWakeUs =
-      4U;  // 切到采样任务、取锁、看账目 / switch in, lock, account
   constexpr uint32_t kCommandEvery = 2000U;
 
   Result r;
@@ -50,6 +60,10 @@ Result Simulate(uint32_t period, uint32_t frame, uint32_t command, uint32_t run_
   uint32_t wake_at = 0U;  // 中断在计数到这里时唤醒 / interrupt wakes at this count
   uint32_t posts = 1U;    // 信号量；开始采样时 Post 一次 / semaphore; Start posts once
   bool again = false;     // 不等信号量再跑一圈 / run again without waiting
+  uint32_t woke_tick = UINT32_MAX;
+  uint32_t woke_t = 0U;
+  uint32_t frame_start = 0U;
+  uint32_t frame_tick = 0U;
   uint32_t isr_left = 0U;
   uint32_t sampler_left = 0U;
   bool in_frame = false;
@@ -57,6 +71,8 @@ Result Simulate(uint32_t period, uint32_t frame, uint32_t command, uint32_t run_
   uint32_t cmd_left = 0U;
   uint32_t cmd_since = 0U;
   bool cmd_pending = false;
+  bool cmd_was_running = false;
+  uint32_t resume_left = 0U;
 
   // 一帧或一次空醒结束：定下一次唤醒的计数 / A frame or an empty wake ends: set the
   // count of the next wake.
@@ -68,13 +84,15 @@ Result Simulate(uint32_t period, uint32_t frame, uint32_t command, uint32_t run_
 
   for (uint32_t t = 1; t <= run_us; ++t)
   {
-    if (t % period == 0U)
+    if (t % c.period == 0U)
     {
       ++count;
       ++r.ticks;
       isr_left += kIsrUs;
       if (TickWakes(count, wake_at))
       {
+        woke_tick = count;
+        woke_t = t;
         ++posts;
       }
     }
@@ -88,6 +106,7 @@ Result Simulate(uint32_t period, uint32_t frame, uint32_t command, uint32_t run_
     if (isr_left > 0U)
     {
       --isr_left;
+      cmd_was_running = false;
       continue;
     }
     if (sampler_left == 0U && !in_frame && !in_wake && (again || posts > 0U))
@@ -102,10 +121,11 @@ Result Simulate(uint32_t period, uint32_t frame, uint32_t command, uint32_t run_
       }
       ++r.wakes;
       in_wake = true;
-      sampler_left = kWakeUs;
+      sampler_left = c.wake;
     }
     if (sampler_left > 0U)
     {
+      cmd_was_running = false;
       if (--sampler_left == 0U)
       {
         if (in_wake)
@@ -118,7 +138,9 @@ Result Simulate(uint32_t period, uint32_t frame, uint32_t command, uint32_t run_
             r.skipped += step.skipped;
             r.last_tick = step.tick;
             in_frame = true;
-            sampler_left = frame;
+            frame_start = t;
+            frame_tick = step.tick;
+            sampler_left = c.frame;
           }
           else
           {
@@ -128,13 +150,33 @@ Result Simulate(uint32_t period, uint32_t frame, uint32_t command, uint32_t run_
         else if (in_frame)
         {
           in_frame = false;
-          account.OnDone(count, frame, period);
+          uint32_t start = frame_start;
+          if (woke_tick == frame_tick && frame_start - woke_t <= c.period)
+          {
+            start = woke_t;
+          }
+          account.OnDone(count, t - start, c.period);
           settle();
         }
       }
       continue;
     }
-    if (cmd_pending && --cmd_left == 0U)
+    if (!cmd_pending)
+    {
+      cmd_was_running = false;
+      continue;
+    }
+    if (!cmd_was_running)
+    {
+      cmd_was_running = true;
+      resume_left = c.resume;
+    }
+    if (resume_left > 0U)
+    {
+      --resume_left;
+      continue;
+    }
+    if (--cmd_left == 0U)
     {
       cmd_pending = false;
       ++r.commands;
@@ -145,13 +187,10 @@ Result Simulate(uint32_t period, uint32_t frame, uint32_t command, uint32_t run_
   return r;
 }
 
-void CheckServed(uint32_t period, uint32_t frame)
+void CheckServed(const Costs& c, uint32_t command)
 {
   constexpr uint32_t kRunUs = 200000U;
-  // 命令占 10% 的 CPU，低于保证的约 1/5 减去节拍中断 / Commands use 10% of the CPU,
-  // below the guaranteed about 1/5 minus the tick interrupts.
-  constexpr uint32_t kCommandUs = 200U;
-  const Result r = Simulate(period, frame, kCommandUs, kRunUs);
+  const Result r = Simulate(c, command, kRunUs);
   // 命令每 2 ms 一条，全部在下一条到来前回应 / One command every 2 ms, each answered
   // before the next arrives.
   CHECK_EQ(r.commands, kRunUs / 2000U - 1U);
@@ -164,25 +203,42 @@ void CheckServed(uint32_t period, uint32_t frame)
   // only for ticks it samples (plus the start and a few empty wakes).
   CHECK(r.wakes <= r.sampled + r.sampled / 8U + 2U);
 }
+
+// 命令占 10% 的 CPU，低于保证的约 1/5 减去节拍中断 / Commands use 10% of the CPU,
+// below the guaranteed about 1/5 minus the tick interrupts.
+constexpr uint32_t kLightCommandUs = 200U;
 }  // namespace
 
 TEST(CommandsServedWhenFrameJustUnderTwoPeriods)
 {
   // 一帧比两个周期略短：旧规则下下一拍紧接着帧结束到来 / A frame just under two
   // periods: under the old rule the next tick came right after the frame ended.
-  CheckServed(50U, 95U);
+  CheckServed({50U, 95U}, kLightCommandUs);
 }
 
-TEST(CommandsServedWhenFrameSlightlyLongerThanPeriod) { CheckServed(25U, 30U); }
+TEST(CommandsServedWhenFrameSlightlyLongerThanPeriod)
+{
+  CheckServed({25U, 30U}, kLightCommandUs);
+}
 
-TEST(CommandsServedAtShortPeriodLongFrame) { CheckServed(25U, 300U); }
+TEST(CommandsServedAtShortPeriodLongFrame) { CheckServed({25U, 300U}, kLightCommandUs); }
 
-TEST(CommandsServedAtTenMicroseconds) { CheckServed(10U, 40U); }
+TEST(CommandsServedAtTenMicroseconds) { CheckServed({10U, 40U}, kLightCommandUs); }
+
+TEST(CommandsServedWhenWakeCostsAlmostAsMuchAsTheRead)
+{
+  // r2 S3 串口、1 个条目、50 us：读帧本身很短，唤醒、切换和取锁又占了一截，命令任务每次
+  // 重新拿到 CPU 也要切换。只量读帧时每拍都采，命令几乎拿不到 CPU / r2 S3 serial, 1
+  // item, 50 us: the read itself is short, the wake, switch and lock take another chunk,
+  // and the command task pays a switch each time it gets the CPU back. Timing only the
+  // read samples every tick and commands get almost no CPU.
+  CheckServed({50U, 25U, 12U, 6U}, 300U);
+}
 
 TEST(EveryTickSampledWhenFrameIsShort)
 {
   // 周期 1 ms、一帧 100 us：一拍都不跳 / Period 1 ms, 100 us frames: no tick skipped.
-  const Result r = Simulate(1000U, 100U, 300U, 100000U);
+  const Result r = Simulate({1000U, 100U}, 300U, 100000U);
   CHECK_EQ(r.skipped, 0U);
   CHECK(r.sampled >= 99U);
 }

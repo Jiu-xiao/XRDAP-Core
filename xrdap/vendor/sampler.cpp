@@ -121,6 +121,7 @@ bool Sampler::Service(TickTimer& timer)
       timer.Stop();
     }
     ticks_.store(0U, std::memory_order_relaxed);
+    woke_tick_.store(UINT32_MAX, std::memory_order_relaxed);
     count = 0U;
     account_.Begin();
     run_gen_ = gen;
@@ -131,9 +132,26 @@ bool Sampler::Service(TickTimer& timer)
   const TickAccount::Step step = account_.OnWake(count);
   if (step.sample)
   {
-    const uint64_t t0 = NowUs();
+    const auto t0 = static_cast<uint32_t>(NowUs());
     SampleTick(step);
-    const auto busy = static_cast<uint32_t>(NowUs() - t0);
+    // 占用从节拍中断唤醒的那一刻算起，包括唤醒、切换任务和取链路锁的时间：只量读帧的
+    // 时间会少算，周期接近一帧时留给命令的间隙就只是纸面上的。没有这一拍的中断时刻时
+    // （开始时的节拍 0、不等唤醒接着做的一拍）从读帧开始算。
+    // Busy time counts from the moment the tick interrupt woke us, including the wake,
+    // the task switch and taking the link lock: timing only the frame read undercounts,
+    // and with a period close to one frame the gap left to commands exists only on
+    // paper. Without this tick's interrupt time (tick 0 at the start, a tick done
+    // without waiting for a wake) it counts from the start of the frame read.
+    uint32_t start = t0;
+    if (woke_tick_.load(std::memory_order_acquire) == step.tick)
+    {
+      const uint32_t woke = woke_us_.load(std::memory_order_relaxed);
+      if (t0 - woke <= period_us_)
+      {
+        start = woke;
+      }
+    }
+    const uint32_t busy = static_cast<uint32_t>(NowUs()) - start;
     account_.OnDone(ticks_.load(std::memory_order_relaxed), busy, period_us_);
 
     if (!keep_(keep_ctx_))

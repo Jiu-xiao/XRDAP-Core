@@ -32,7 +32,7 @@ This repository touches no peripherals. Time, mutexes and semaphores come from l
 | Platform supplies | Notes |
 |---|---|
 | `xrdap_port.hpp` | the sample ring size `Port::kRingBytes` and its spinlock `Port::SpinLock` |
-| tick timer | implements `Vendor::TickTimer`; its interrupt calls `DapVendor::OnTickIsr()` |
+| tick timer | implements `Vendor::TickTimer`; its interrupt calls `DapVendor::OnTickIsr()`, which reads libxr's `Timebase`, so the time base must be readable from an interrupt |
 | threads | the sampling task, the USB DAP thread, the serial thread (ESP pins them to the core that drives SWD) |
 | session ends | USB reset count, TCP disconnect, radio session id and ping |
 | lights | driver, pins and the query whether USB is configured |

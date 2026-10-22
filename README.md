@@ -32,7 +32,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 | 平台提供 | 说明 |
 |---|---|
 | `xrdap_port.hpp` | 采样帧缓冲大小 `Port::kRingBytes` 和它的自旋锁 `Port::SpinLock` |
-| 节拍定时器 | 实现 `Vendor::TickTimer`，中断里调用 `DapVendor::OnTickIsr()` |
+| 节拍定时器 | 实现 `Vendor::TickTimer`，中断里调用 `DapVendor::OnTickIsr()`；它会读 libxr 的 `Timebase`，时基须能在中断里读 |
 | 线程 | 采样任务、USB 的 DAP 线程、串口线程（ESP 要固定到 SWD 所在的核） |
 | 会话的结束 | USB 复位计数、TCP 断开、无线会话号和 ping |
 | 灯 | 驱动、引脚和 USB 是否已配置的查询 |

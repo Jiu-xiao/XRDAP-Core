@@ -36,6 +36,7 @@
 #include <cstdint>
 
 #include "semaphore.hpp"
+#include "timebase.hpp"
 #include "xrdap/vendor/frame_ring.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/tick_account.hpp"
@@ -105,17 +106,24 @@ class Sampler
     return ring_.Take(dst, limit);
   }
 
-  /// @brief 节拍定时器中断调用：计数加 1；任务方式下计数到达下一个要采的节拍时唤醒
-  ///        采样任务 / Called by the tick timer interrupt: adds 1 to the count; in task
-  ///        mode wakes the sampling task when the count reaches the next tick to sample.
-  /// @note 中断上下文 / Interrupt context.
+  /// @brief 节拍定时器中断调用：计数加 1；计数到达下一个要采的节拍时记下这一刻，任务
+  ///        方式下唤醒采样任务 / Called by the tick timer interrupt: adds 1 to the count;
+  ///        when the count reaches the next tick to sample, notes the time and, in task
+  ///        mode, wakes the sampling task.
+  /// @note 中断上下文；平台的时基须能在中断里读 / Interrupt context; the platform's time
+  ///       base must be readable from an interrupt.
   void OnTickIsr()
   {
     const uint32_t count = ticks_.fetch_add(1U, std::memory_order_relaxed) + 1U;
-    if (task_mode_.load(std::memory_order_relaxed) &&
-        TickWakes(count, wake_at_.load(std::memory_order_relaxed)))
+    if (TickWakes(count, wake_at_.load(std::memory_order_relaxed)))
     {
-      wake_.PostFromCallback(true);
+      woke_us_.store(static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds()),
+                     std::memory_order_relaxed);
+      woke_tick_.store(count, std::memory_order_release);
+      if (task_mode_.load(std::memory_order_relaxed))
+      {
+        wake_.PostFromCallback(true);
+      }
     }
   }
 
@@ -152,6 +160,10 @@ class Sampler
   /// 中断在计数到这里时唤醒采样任务 / The interrupt wakes the sampling task at this
   /// count.
   std::atomic<uint32_t> wake_at_{0U};
+  /// 中断唤醒时的节拍和时刻（µs 低 32 位），这一拍的占用从这里算起 / Tick and time
+  /// (low 32 bits of µs) of the interrupt's wake; that tick's busy time counts from here.
+  std::atomic<uint32_t> woke_tick_{0U};
+  std::atomic<uint32_t> woke_us_{0U};
   std::atomic<bool> task_mode_{false};
   LibXR::Semaphore wake_{0};
 
