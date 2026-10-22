@@ -16,6 +16,7 @@
 #include "xrdap/vendor/dap_vendor.hpp"
 #include "xrdap/vendor/frame_ring.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
+#include "xrdap/vendor/request_length.hpp"
 #include "xrdap/vendor/sampler.hpp"
 #include "xrdap/vendor/vendor_protocol.hpp"
 
@@ -38,8 +39,19 @@ struct FakeDap
     return LibXR::ErrorCode::OK;
   }
 };
+
+// 另带长度钩子的 libxr（feat/xrdap-r2 之后）/ libxr with the length hook as well (after
+// feat/xrdap-r2).
+struct FakeDapWithLength : FakeDap
+{
+  using LengthHook = bool (*)(void*, const uint8_t*, uint16_t, uint16_t&);
+  void SetCommandLengthHook(LengthHook, void*) {}
+};
+static_assert(!XrDap::Detail::HasLengthHook<FakeDap>::value);
+static_assert(XrDap::Detail::HasLengthHook<FakeDapWithLength>::value);
 }  // namespace
 
 template class XrDap::Executor<FakeDap>;
+template class XrDap::Executor<FakeDapWithLength>;
 
 template class XrDap::SerialLink<XrDap::Executor<FakeDap>, 64U>;

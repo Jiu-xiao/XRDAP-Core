@@ -102,6 +102,15 @@ class DapVendor
   ///       commands run; only one is supported.
   void SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler, void* ctx);
 
+  /// @brief DAP_ExecuteCommands / DAP_QueueCommands 里一条厂商命令的请求字节数：0x80 到
+  ///        0x85，以及挂上的 0x86 / Request bytes of one vendor command inside
+  ///        DAP_ExecuteCommands / DAP_QueueCommands: 0x80 to 0x85, and 0x86 when
+  ///        attached.
+  /// @return 不是这些命令或内容不完整时 false / False for other commands or incomplete
+  ///         content.
+  /// @note 纯解析，任何上下文 / Pure parsing, any context.
+  bool RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len) const;
+
  private:
   static bool KeepSampling(void* ctx);
 

@@ -6,6 +6,7 @@
 #include "timebase.hpp"
 #include "xrdap/protocol/dap_ids.hpp"
 #include "xrdap/vendor/reply_space.hpp"
+#include "xrdap/vendor/request_length.hpp"
 #include "xrdap/vendor/sub_start.hpp"
 
 namespace XrDap
@@ -98,6 +99,19 @@ DapVendor::Result DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t
     connected_session_.store(0U, std::memory_order_release);
   }
   return Result::PASS;
+}
+
+bool DapVendor::RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len) const
+{
+  len = 0U;
+  if (req == nullptr || avail < 1U)
+  {
+    return false;
+  }
+  const uint8_t cmd = req[0];
+  const bool known = (cmd >= kFirstCmd && cmd <= kLastCmd) ||
+                     (extra_handler_ != nullptr && cmd == extra_cmd_ && cmd == kWifiCmd);
+  return known && Vendor::RequestLength(req, avail, len);
 }
 
 bool DapVendor::IsVendor(uint8_t cmd) const
