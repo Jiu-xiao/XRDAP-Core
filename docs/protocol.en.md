@@ -278,7 +278,7 @@ The items due are derived from k and each item's div and phase, so they are not 
 
 - When sampling wakes, every tick between the last one sampled and the current count that was not sampled counts as skipped and accumulates in the skipped tick count; the tick index then has a gap. The probe does not make up ticks and does not lower the rate or drop items by itself.
 - When the next tick arrives while a tick is still being read, that tick is not made up; sampling waits for the one after it.
-- After each frame, the next tick to sample is at least `busy + gap` after this frame's tick, with gap = `max(15 µs, period / 8, busy / 4)` and busy counted from the moment the tick interrupt woke sampling to the end of this frame's read, the wake, task switch and link lock included; the ticks in between count as skipped.
+- After each frame, the next tick to sample is at least `busy + gap` after this frame's tick, with gap = `max(15 µs, period / 8, busy / 4)` and busy counted, with a sampling task, from the moment the tick interrupt woke sampling to the end of this frame's read, the wake, task switch and link lock included (a single-loop probe counts from the start of the read, since the wait after the interrupt is the main loop running commands); the ticks in between count as skipped.
 - So the probe answers commands at any period: between two frames the other tasks on the same core (DAP commands, serial, TCP) get at least that gap, about 1/5 of the core or more. A period shorter than a frame only adds skipped ticks; commands still get the CPU.
 
 #### Reading too slowly
