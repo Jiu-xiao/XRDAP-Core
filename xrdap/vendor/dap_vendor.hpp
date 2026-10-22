@@ -108,7 +108,8 @@ class DapVendor
   ///        attached.
   /// @return 不是这些命令或内容不完整时 false / False for other commands or incomplete
   ///         content.
-  /// @note 纯解析，任何上下文 / Pure parsing, any context.
+  /// @note 纯解析，不取锁，任何上下文（包括中断）/ Pure parsing with no lock, any
+  ///       context (interrupts included).
   bool RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len) const;
 
  private:

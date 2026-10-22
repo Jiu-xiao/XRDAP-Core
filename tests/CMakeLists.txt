@@ -35,4 +35,21 @@ if(DEFINED LIBXR_DIR)
                                                         ${XRDAP_CORE_INCLUDE_DIRS})
   target_link_libraries(xrdap_core_compile PRIVATE xr)
   target_compile_options(xrdap_core_compile PRIVATE -Wall -Wextra)
+  # libxr 的 SetCommandHook 带长度钩子时打开，检查执行器认得出它 / Turn on when libxr's
+  # SetCommandHook takes the length hook, to check the executor recognises it.
+  option(XRDAP_EXPECT_LENGTH_HOOK "libxr SetCommandHook takes a length hook" OFF)
+  if(XRDAP_EXPECT_LENGTH_HOOK)
+    target_compile_definitions(xrdap_core_compile PRIVATE XRDAP_EXPECT_LENGTH_HOOK)
+    # libxr 的 Linux 系统层不带 USB 设备驱动，这里只为取得 DAP 类的声明加上它们的目录 /
+    # libxr's Linux system layer leaves out the USB device drivers; their directories are
+    # added only to get the DAP class declaration.
+    file(GLOB_RECURSE XRDAP_LIBXR_USB_HEADERS "${LIBXR_DIR}/src/driver/usb/*.hpp"
+         "${LIBXR_DIR}/src/driver/debug/*.hpp")
+    foreach(header ${XRDAP_LIBXR_USB_HEADERS})
+      get_filename_component(dir "${header}" DIRECTORY)
+      list(APPEND XRDAP_LIBXR_USB_DIRS "${dir}")
+    endforeach()
+    list(REMOVE_DUPLICATES XRDAP_LIBXR_USB_DIRS)
+    target_include_directories(xrdap_core_compile PRIVATE ${XRDAP_LIBXR_USB_DIRS})
+  endif()
 endif()

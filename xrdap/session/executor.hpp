@@ -5,9 +5,9 @@
 // ExecuteExternal）都经过这里，持同一把锁，每次只有一条命令在执行；执行时记下命令属于哪条
 // 传输。它装在 DAP 实例上的命令钩子先问 SessionOwner 这条传输能不能执行（不能就回忙），
 // 再交给平台的转发器（例如 CH32 的无线）、厂商扩展，其余的标准命令由 libxr 执行。
-// 执行过的命令记进 DapActivity。libxr 提供长度钩子（SetCommandLengthHook）时，执行器
-// 也把厂商命令的请求长度告诉它，DAP_ExecuteCommands / DAP_QueueCommands 里因此可以放
-// 厂商命令（CMSIS-DAP 参考实现也允许）。
+// 执行过的命令记进 DapActivity。libxr 的 SetCommandHook 接受第三个参数（长度钩子）时，
+// 执行器也把厂商命令的请求长度告诉它，DAP_ExecuteCommands / DAP_QueueCommands
+// 里因此可以放 厂商命令（CMSIS-DAP 参考实现也允许）。
 //
 // The single command executor: every call into the libxr DAP instance on the probe
 // (USB's Step and the other transports' ExecuteExternal) goes through here under one
@@ -16,7 +16,8 @@
 // that transport may run (busy reply otherwise), then hands the command to the
 // platform's forwarder (for example the CH32 radio) and the vendor extension; libxr runs
 // the remaining standard commands. Commands that ran are recorded in DapActivity. When
-// libxr offers a length hook (SetCommandLengthHook), the executor also tells it the
+// libxr's SetCommandHook takes a third argument (the length hook), the executor also
+// tells it the
 // request length of vendor commands, so vendor commands may sit inside
 // DAP_ExecuteCommands / DAP_QueueCommands (the CMSIS-DAP reference implementation allows
 // this too).
@@ -39,15 +40,16 @@ namespace XrDap
 
 namespace Detail
 {
-/// libxr 的 DAP 类是否有 SetCommandLengthHook / Whether the libxr DAP class has
-/// SetCommandLengthHook.
+/// libxr 的 SetCommandHook 是否带长度钩子参数 / Whether libxr's SetCommandHook takes the
+/// length hook argument.
 template <typename T, typename = void>
 struct HasLengthHook : std::false_type
 {
 };
 template <typename T>
-struct HasLengthHook<T, std::void_t<decltype(std::declval<T&>().SetCommandLengthHook(
-                            nullptr, static_cast<void*>(nullptr)))>> : std::true_type
+struct HasLengthHook<T, std::void_t<decltype(std::declval<T&>().SetCommandHook(
+                            nullptr, static_cast<void*>(nullptr), nullptr))>>
+    : std::true_type
 {
 };
 }  // namespace Detail
@@ -73,10 +75,13 @@ class Executor
   Executor(DapT& dap, SessionOwner& session, DapVendor& vendor, DapActivity& activity)
       : dap_(dap), session_(session), vendor_(vendor), activity_(activity)
   {
-    dap_.SetCommandHook(&Executor::Hook, this);
     if constexpr (Detail::HasLengthHook<DapT>::value)
     {
-      dap_.SetCommandLengthHook(&Executor::LengthHook, this);
+      dap_.SetCommandHook(&Executor::Hook, this, &Executor::LengthHook);
+    }
+    else
+    {
+      dap_.SetCommandHook(&Executor::Hook, this);
     }
   }
 
@@ -139,9 +144,11 @@ class Executor
     return static_cast<Executor*>(ctx)->OnCommand(req, len, resp, cap, out);
   }
 
-  // libxr 解析 DAP_ExecuteCommands / DAP_QueueCommands 时问厂商命令的长度；纯解析 /
-  // libxr asks for a vendor command's length while parsing DAP_ExecuteCommands /
-  // DAP_QueueCommands; pure parsing.
+  // libxr 解析 DAP_ExecuteCommands / DAP_QueueCommands 时问厂商命令的长度。接收端扫描
+  // 命令时也会调用，可能在 USB 中断里，所以只做解析：不取锁、不阻塞 / libxr asks for a
+  // vendor command's length while parsing DAP_ExecuteCommands / DAP_QueueCommands. The
+  // receive-side command scan calls it too, possibly in the USB interrupt, so it only
+  // parses: no lock, no blocking.
   static bool LengthHook(void* ctx, const uint8_t* req, uint16_t avail, uint16_t& len)
   {
     return static_cast<Executor*>(ctx)->vendor_.RequestLength(req, avail, len);

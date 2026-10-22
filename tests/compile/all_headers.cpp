@@ -40,12 +40,12 @@ struct FakeDap
   }
 };
 
-// 另带长度钩子的 libxr（feat/xrdap-r2 之后）/ libxr with the length hook as well (after
-// feat/xrdap-r2).
+// SetCommandHook 另带长度钩子的 libxr / libxr whose SetCommandHook also takes the
+// length hook.
 struct FakeDapWithLength : FakeDap
 {
   using LengthHook = bool (*)(void*, const uint8_t*, uint16_t, uint16_t&);
-  void SetCommandLengthHook(LengthHook, void*) {}
+  void SetCommandHook(Hook, void*, LengthHook) {}
 };
 static_assert(!XrDap::Detail::HasLengthHook<FakeDap>::value);
 static_assert(XrDap::Detail::HasLengthHook<FakeDapWithLength>::value);
@@ -53,5 +53,14 @@ static_assert(XrDap::Detail::HasLengthHook<FakeDapWithLength>::value);
 
 template class XrDap::Executor<FakeDap>;
 template class XrDap::Executor<FakeDapWithLength>;
+
+#ifdef XRDAP_EXPECT_LENGTH_HOOK
+// 用带长度钩子的 libxr 编译时，检测必须认出真正的 DAP 类，否则厂商命令进不了容器 / When
+// built against libxr with the length hook, detection must recognise the real DAP class,
+// or vendor commands cannot enter containers.
+#include "daplink_v2.hpp"
+static_assert(
+    XrDap::Detail::HasLengthHook<LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>>::value);
+#endif
 
 template class XrDap::SerialLink<XrDap::Executor<FakeDap>, 64U>;
