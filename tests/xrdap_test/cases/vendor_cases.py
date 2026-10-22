@@ -193,14 +193,19 @@ def keeps_up(vendor, items, period, tried):
 
 def search_min_period(vendor, items):
     """SPEC 2.3: double from 25 us to the first period that keeps up (P), then from P/2 up in
-    25 us steps; the first period that keeps up is the minimum."""
+    25 us steps; the first period that keeps up is the minimum. A period fails only when two
+    runs in a row fail, so one host read pause (a burst of dropped frames) does not move P."""
+
+    def holds(period, tried):
+        return keeps_up(vendor, items, period, tried) or keeps_up(vendor, items, period, tried)
+
     tried, period = [], R.SEARCH_STEP_US
-    while not keeps_up(vendor, items, period, tried):
+    while not holds(period, tried):
         period *= 2
         if period > 1_000_000:
             return None, tried
     top, period = period, max(R.SEARCH_STEP_US, period // 2)
-    while period < top and not keeps_up(vendor, items, period, tried):
+    while period < top and not holds(period, tried):
         period += R.SEARCH_STEP_US
     return min(period, top), tried
 

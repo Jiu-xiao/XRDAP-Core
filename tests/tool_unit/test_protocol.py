@@ -97,7 +97,25 @@ class MinimumPeriodSearch(unittest.TestCase):
         finally:
             V.keeps_up = real
         self.assertEqual(best, 350)
-        self.assertEqual(calls, [25, 50, 100, 200, 400, 200, 225, 250, 275, 300, 325, 350])
+        self.assertEqual(calls, [25, 25, 50, 50, 100, 100, 200, 200, 400, 200, 200, 225, 225,
+                                 250, 250, 275, 275, 300, 300, 325, 325, 350])
+
+    def test_one_failed_run_is_retried(self):
+        from xrdap_test.cases import vendor_cases as V
+
+        flaky = {200: [False, True]}  # 200 us: a burst of drops once, then fine
+
+        def keeps_up(vendor, items, period, tried):
+            if period in flaky and flaky[period]:
+                return flaky[period].pop(0)
+            return period >= 150
+
+        real, V.keeps_up = V.keeps_up, keeps_up
+        try:
+            best, _ = V.search_min_period(None, [])
+        finally:
+            V.keeps_up = real
+        self.assertEqual(best, 150)
 
 
 class Coverage(unittest.TestCase):

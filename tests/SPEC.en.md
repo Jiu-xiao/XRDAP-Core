@@ -86,7 +86,7 @@ The counter is the `counter` of the target profile; if there is none, DWT CYCCNT
 
 ### 2.3 Rule for finding the minimum sampling period
 
-The probe does not estimate the time needed (decision B9); whether it keeps up is judged only from the result of a run. A period "keeps up" when: the run lasts 3 s with the host reading frames without pause, skipped ticks 0, buffer dropped frames 0, failed items 0, no gap in the tick sequence, and after stopping the remaining bytes of the buffer are read empty in one read. Starting from 25 µs, the period is doubled each time until the first period P that keeps up; then, starting from P/2, 25 µs is added each time, and the first period that keeps up is the minimum period. The same rule is used for all probes and links.
+The probe does not estimate the time needed (decision B9); whether it keeps up is judged only from the result of a run. A period "keeps up" when: the run lasts 3 s with the host reading frames without pause, skipped ticks 0, buffer dropped frames 0, failed items 0, no gap in the tick sequence, and after stopping the remaining bytes of the buffer are read empty in one read. A period that fails once is run again at once and counts as not keeping up only when both runs fail (one burst of dropped frames from a pause in the host's reads does not change the result). Starting from 25 µs, the period is doubled each time until the first period P that keeps up; then, starting from P/2, 25 µs is added each time, and the first period that keeps up is the minimum period. The same rule is used for all probes and links.
 
 ### 2.4 Polling
 
