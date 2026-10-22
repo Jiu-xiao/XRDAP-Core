@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 每个公开头文件都能单独编译（只在 libxr 编译检查里构建）/ Every public header compiles
 // on its own (built only by the libxr compile check).
+#include "daplink_v2.hpp"
 #include "xrdap/activity/dap_activity.hpp"
 #include "xrdap/light/status_light.hpp"
 #include "xrdap/probe/chip_uid.hpp"
@@ -30,7 +31,8 @@ namespace
 struct FakeDap
 {
   using Hook = bool (*)(void*, const uint8_t*, uint16_t, uint8_t*, uint16_t, uint16_t&);
-  void SetCommandHook(Hook, void*) {}
+  using LengthHook = bool (*)(void*, const uint8_t*, uint16_t, uint16_t&);
+  void SetCommandHook(Hook, void*, LengthHook) {}
   LibXR::ErrorCode Step(uint32_t) { return LibXR::ErrorCode::OK; }
   LibXR::ErrorCode ExecuteExternal(const uint8_t*, uint16_t, uint8_t*, uint16_t,
                                    uint16_t& out)
@@ -39,28 +41,13 @@ struct FakeDap
     return LibXR::ErrorCode::OK;
   }
 };
-
-// SetCommandHook 另带长度钩子的 libxr / libxr whose SetCommandHook also takes the
-// length hook.
-struct FakeDapWithLength : FakeDap
-{
-  using LengthHook = bool (*)(void*, const uint8_t*, uint16_t, uint16_t&);
-  void SetCommandHook(Hook, void*, LengthHook) {}
-};
-static_assert(!XrDap::Detail::HasLengthHook<FakeDap>::value);
-static_assert(XrDap::Detail::HasLengthHook<FakeDapWithLength>::value);
 }  // namespace
 
 template class XrDap::Executor<FakeDap>;
-template class XrDap::Executor<FakeDapWithLength>;
-
-#ifdef XRDAP_EXPECT_LENGTH_HOOK
-// 用带长度钩子的 libxr 编译时，检测必须认出真正的 DAP 类，否则厂商命令进不了容器 / When
-// built against libxr with the length hook, detection must recognise the real DAP class,
-// or vendor commands cannot enter containers.
-#include "daplink_v2.hpp"
-static_assert(
-    XrDap::Detail::HasLengthHook<LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>>::value);
-#endif
 
 template class XrDap::SerialLink<XrDap::Executor<FakeDap>, 64U>;
+
+// 真正的 libxr DAP 类：执行器对它的调用（包括带长度钩子的 SetCommandHook）都要能编译 /
+// The real libxr DAP class: every executor call into it (SetCommandHook with the length
+// hook included) must compile.
+template class XrDap::Executor<LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>>;

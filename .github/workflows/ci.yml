@@ -18,8 +18,10 @@ jobs:
   host-tests:
     runs-on: ubuntu-latest
     env:
-      # libxr 提交与各固件当前钉住的一致 / The libxr commit the firmwares pin today.
-      LIBXR_COMMIT: 0a9cca11340a1261d65a651659ff8d25e45b6486
+      # 需要的 libxr：SetCommandHook 带厂商命令长度钩子（feat/xrdap-r2-swd-loop）/ The
+      # libxr required: SetCommandHook with the vendor length hook
+      # (feat/xrdap-r2-swd-loop).
+      LIBXR_COMMIT: 11b48cb44067d006a5f9744789ea6dccc7d2c282
     steps:
       - uses: actions/checkout@v4
       - name: libxr

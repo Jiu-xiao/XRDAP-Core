@@ -5,9 +5,9 @@
 // ExecuteExternal）都经过这里，持同一把锁，每次只有一条命令在执行；执行时记下命令属于哪条
 // 传输。它装在 DAP 实例上的命令钩子先问 SessionOwner 这条传输能不能执行（不能就回忙），
 // 再交给平台的转发器（例如 CH32 的无线）、厂商扩展，其余的标准命令由 libxr 执行。
-// 执行过的命令记进 DapActivity。libxr 的 SetCommandHook 接受第三个参数（长度钩子）时，
-// 执行器也把厂商命令的请求长度告诉它，DAP_ExecuteCommands / DAP_QueueCommands
-// 里因此可以放 厂商命令（CMSIS-DAP 参考实现也允许）。
+// 执行过的命令记进 DapActivity。装钩子时也把厂商命令的长度函数交给 libxr（SetCommandHook
+// 的第三个参数，需要 libxr 11b48cb4 或之后），DAP_ExecuteCommands / DAP_QueueCommands
+// 里因此可以放厂商命令，与 CMSIS-DAP 参考实现相同。
 //
 // The single command executor: every call into the libxr DAP instance on the probe
 // (USB's Step and the other transports' ExecuteExternal) goes through here under one
@@ -15,16 +15,12 @@
 // to. The command hook it installs on the DAP instance first asks SessionOwner whether
 // that transport may run (busy reply otherwise), then hands the command to the
 // platform's forwarder (for example the CH32 radio) and the vendor extension; libxr runs
-// the remaining standard commands. Commands that ran are recorded in DapActivity. When
-// libxr's SetCommandHook takes a third argument (the length hook), the executor also
-// tells it the
-// request length of vendor commands, so vendor commands may sit inside
-// DAP_ExecuteCommands / DAP_QueueCommands (the CMSIS-DAP reference implementation allows
-// this too).
+// the remaining standard commands. Commands that ran are recorded in DapActivity. The
+// hook is installed together with the vendor length function (the third argument of
+// SetCommandHook, libxr 11b48cb4 or later), so vendor commands may sit inside
+// DAP_ExecuteCommands / DAP_QueueCommands, as in the CMSIS-DAP reference implementation.
 
 #include <cstdint>
-#include <type_traits>
-#include <utility>
 
 #include "libxr_def.hpp"
 #include "mutex.hpp"
@@ -38,25 +34,10 @@
 namespace XrDap
 {
 
-namespace Detail
-{
-/// libxr 的 SetCommandHook 是否带长度钩子参数 / Whether libxr's SetCommandHook takes the
-/// length hook argument.
-template <typename T, typename = void>
-struct HasLengthHook : std::false_type
-{
-};
-template <typename T>
-struct HasLengthHook<T, std::void_t<decltype(std::declval<T&>().SetCommandHook(
-                            nullptr, static_cast<void*>(nullptr), nullptr))>>
-    : std::true_type
-{
-};
-}  // namespace Detail
-
 /// @brief 命令执行器 / Command executor.
-/// @tparam DapT libxr DAP 类（提供 Step、ExecuteExternal、SetCommandHook）/ libxr DAP
-///         class (providing Step, ExecuteExternal and SetCommandHook).
+/// @tparam DapT libxr DAP 类（提供 Step、ExecuteExternal、带长度钩子的 SetCommandHook）/
+///         libxr DAP class (providing Step, ExecuteExternal and SetCommandHook with the
+///         length hook).
 template <typename DapT>
 class Executor
 {
@@ -75,14 +56,7 @@ class Executor
   Executor(DapT& dap, SessionOwner& session, DapVendor& vendor, DapActivity& activity)
       : dap_(dap), session_(session), vendor_(vendor), activity_(activity)
   {
-    if constexpr (Detail::HasLengthHook<DapT>::value)
-    {
-      dap_.SetCommandHook(&Executor::Hook, this, &Executor::LengthHook);
-    }
-    else
-    {
-      dap_.SetCommandHook(&Executor::Hook, this);
-    }
+    dap_.SetCommandHook(&Executor::Hook, this, &Executor::LengthHook);
   }
 
   /// @brief 设置平台转发器 / Set the platform forwarder.
