@@ -39,7 +39,7 @@ This repository touches no peripherals. Time, mutexes and semaphores come from l
 
 ## Integration
 
-libxr 11b48cb4 (`feat/xrdap-r2-swd-loop`) or later is required: `Executor` hands the vendor command length to libxr through its `SetCommandHook(hook, ctx, length)`, which lets vendor commands sit inside `DAP_ExecuteCommands`.
+libxr 8c261a7e (`feat/xrdap-r2-swd-loop`) or later is required: `Executor` hands the vendor command length to libxr through its `SetCommandHook(hook, ctx, length)`, which lets vendor commands sit inside `DAP_ExecuteCommands`, and `StepUsb` waits for USB commands in its `WaitForWork` without holding a turn.
 
 A firmware project includes `xrdap_core.cmake`, adds the sources to its own target and makes the libxr headers and the platform's `xrdap_port.hpp` visible to them:
 

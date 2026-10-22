@@ -39,7 +39,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 
 ## 接入
 
-需要 libxr 11b48cb4（`feat/xrdap-r2-swd-loop`）或之后：`Executor` 用它的 `SetCommandHook(hook, ctx, length)` 把厂商命令的长度交给 libxr，`DAP_ExecuteCommands` 里才能放厂商命令。
+需要 libxr 8c261a7e（`feat/xrdap-r2-swd-loop`）或之后：`Executor` 用它的 `SetCommandHook(hook, ctx, length)` 把厂商命令的长度交给 libxr，`DAP_ExecuteCommands` 里才能放厂商命令；`StepUsb` 用它的 `WaitForWork` 在不占执行轮次时等 USB 命令。
 
 固件工程 include `xrdap_core.cmake`，把源文件加进自己的目标，并保证这些源文件能找到 libxr 的头文件和平台的 `xrdap_port.hpp`：
 

@@ -18,10 +18,10 @@ jobs:
   host-tests:
     runs-on: ubuntu-latest
     env:
-      # 需要的 libxr：SetCommandHook 带厂商命令长度钩子（feat/xrdap-r2-swd-loop）/ The
-      # libxr required: SetCommandHook with the vendor length hook
-      # (feat/xrdap-r2-swd-loop).
-      LIBXR_COMMIT: 11b48cb44067d006a5f9744789ea6dccc7d2c282
+      # 需要的 libxr：SetCommandHook 带厂商命令长度钩子、DapLinkV2Class::WaitForWork
+      # （feat/xrdap-r2-swd-loop）/ The libxr required: SetCommandHook with the vendor
+      # length hook and DapLinkV2Class::WaitForWork (feat/xrdap-r2-swd-loop).
+      LIBXR_COMMIT: 8c261a7e8237c3158832898350446610b68fac13
     steps:
       - uses: actions/checkout@v4
       - name: libxr

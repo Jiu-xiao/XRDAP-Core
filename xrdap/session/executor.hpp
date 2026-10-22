@@ -3,14 +3,14 @@
 
 // 唯一的命令执行器：探针上所有进入 libxr DAP 实例的调用（USB 的 Step 和其他传输的
 // ExecuteExternal）都经过这里，每次只有一条命令在执行；执行时记下命令属于哪条传输。
-// 执行的轮次先到先得、直接交给排在前面的（TurnQueue），只在执行一条命令时持有：USB 等
-// 命令时不持有（先在 libxr 的 WaitForWork 里等，有命令了才排队执行 Step(0)），所以
-// DAP_Info 和“忙”回复不取决于别的传输什么时候空闲。它装在 DAP 实例上的命令钩子先问
-// SessionOwner 这条传输能不能执行（不能就回忙）， 再交给平台的转发器（例如 CH32
-// 的无线）、厂商扩展，其余的标准命令由 libxr 执行。 执行过的命令记进
-// DapActivity。装钩子时也把厂商命令的长度函数交给 libxr（SetCommandHook
-// 的第三个参数，需要 libxr 11b48cb4 或之后），DAP_ExecuteCommands / DAP_QueueCommands
-// 里因此可以放厂商命令，与 CMSIS-DAP 参考实现相同。
+// 执行的轮次先到先得、直接交给排在前面的（TurnQueue），只在执行一条命令时持有：USB
+// 等命令时不持有（先在 libxr 的 WaitForWork 里等，有命令了才排队执行 Step(0)），所以
+// DAP_Info 和“忙”回复不取决于别的传输什么时候空闲。
+// 它装在 DAP 实例上的命令钩子先问 SessionOwner 这条传输能不能执行（不能就回忙），再交给
+// 平台的转发器（例如 CH32 的无线）、厂商扩展，其余的标准命令由 libxr 执行。执行过的
+// 命令记进 DapActivity。装钩子时也把厂商命令的长度函数交给 libxr（SetCommandHook 的
+// 第三个参数），DAP_ExecuteCommands / DAP_QueueCommands 里因此可以放厂商命令，与
+// CMSIS-DAP 参考实现相同。需要 libxr 8c261a7e 或之后。
 //
 // The single command executor: every call into the libxr DAP instance on the probe
 // (USB's Step and the other transports' ExecuteExternal) goes through here, one command
@@ -18,14 +18,15 @@
 // first served and handed straight to the next in line (TurnQueue), and are held only
 // while one command runs: USB does not hold one while waiting for a command (it waits in
 // libxr's WaitForWork first and queues to run Step(0) once a command is there), so
-// DAP_Info and busy replies never depend on another transport's idle time. The command
-// hook it installs on the DAP instance first asks SessionOwner whether that transport may
-// run (busy reply otherwise), then hands the command to the platform's forwarder (for
-// example the CH32 radio) and the vendor extension; libxr runs the remaining standard
-// commands. Commands that ran are recorded in DapActivity. The hook is installed together
-// with the vendor length function (the third argument of SetCommandHook, libxr 11b48cb4
-// or later), so vendor commands may sit inside DAP_ExecuteCommands / DAP_QueueCommands,
-// as in the CMSIS-DAP reference implementation.
+// DAP_Info and busy replies never depend on another transport's idle time.
+// The command hook it installs on the DAP instance first asks SessionOwner whether that
+// transport may run (busy reply otherwise), then hands the command to the platform's
+// forwarder (for example the CH32 radio) and the vendor extension; libxr runs the
+// remaining standard commands. Commands that ran are recorded in DapActivity. The hook
+// is installed together with the vendor length function (the third argument of
+// SetCommandHook), so vendor commands may sit inside DAP_ExecuteCommands /
+// DAP_QueueCommands, as in the CMSIS-DAP reference implementation. Needs libxr 8c261a7e
+// or later.
 
 #include <cstdint>
 
