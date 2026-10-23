@@ -51,6 +51,7 @@ ORACLES = {
     "MC-01": "protocol 2",
     "MC-02": "protocol 3.1, decision B2",
     "MC-03": "protocol 3.1, decision B2",
+    "MC-04": "protocol 3.1, decision B2",
     "RAD-01": "measure",
     "RAD-02": "decision B3",
     "RAD-03": "measure",

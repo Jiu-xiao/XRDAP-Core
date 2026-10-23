@@ -148,6 +148,7 @@ SUB_READ 的 max_bytes 为 0xFFFF（探针按包长截断）。容量测试（VN
 | MC-01 | `auto` | tcp | protocol 2 | 第二个 TCP 客户端不被服务 |
 | MC-02 | `auto` | all | protocol 3.1, decision B2 | 第二条链路回"忙"，会话主人不受影响 |
 | MC-03 | `auto` | all | protocol 3.1, decision B2 | 会话主人更换 |
+| MC-04 | `auto` | all | protocol 3.1, decision B2 | 免占用命令：第二条链路的状态查询不需要、也不取得会话 |
 | RAD-01 | `auto` | radio | measure | 无线负载：重发率、失败数、往返时间 |
 | RAD-02 | `assisted` | radio | decision B3 | 配对在两块板断电后保持 |
 | RAD-03 | `manual` | radio | measure | 距离与干扰 |
@@ -321,6 +322,8 @@ STAB-08（决定 A4，串口 + `--link2` 为 TCP 或 USB）：串口会话不能
 MC-01（协议第 2 节，TCP）：客户端 A 连接并开始采样后，客户端 B 连接同一端口。通过：B 得不到服务（连接被拒或没有应答），A 照常应答，采样继续。
 
 MC-02（协议 3.1，决定 B2，`--link2`）：A、B 两条链路（例如 USB 和 TCP）连同一块探针，A 先连接成为会话主人。通过：B 的 DAP_Info 照常应答，B 的 `DAP_Transfer` 回 `05 FF`，B 的 READ 回 `81 05`；A 连续 5 s 读夹具中的 u32 和指针链（其间 B 不断发命令），没有一个值出错。
+
+MC-04（协议 3.1，决定 B2 的扩展，`--link2`）：A 连接成为会话主人后，B 发免占用命令：DAP_HostStatus 回 `01 00`，INFO 回 22 字节且状态为 0，探针有 Wi-Fi 功能位（INFO features 0x10）时 `86 00` 状态为 0；A 的读照常执行；B 的 `DAP_Transfer` 回 `05 FF`、READ 回 `81 05`；B 的一个 0x7F 容器（DAP_Info、HostStatus、INFO、DAP_Transfer）回 4 条应答，前三条正常，DAP_Transfer 为 `05 FF`，之后 A 仍是主人。A `DAP_Disconnect` 后没有主人，B 再发这些免占用命令，然后 A 的 `DAP_Connect` 回 `02 01`（B 没有因此成为主人）。
 
 MC-03（协议 3.1，决定 B2，`--link2`）：A 开始采样，B 的 READ 回 `81 05`；A 停止采样并 `DAP_Disconnect`（会话结束）；B 用 SUB_READ 读到 A 留下的帧（状态 0x02，带数据），再连接、开始采样 1 s。通过：每一步状态如上，B 至少采到 500 帧。
 

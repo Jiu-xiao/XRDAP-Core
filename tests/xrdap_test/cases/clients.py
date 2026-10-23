@@ -100,3 +100,57 @@ def mc_owner(ctx):
     finally:
         lk2.close()
     ctx.summary("busy, then owner change works")
+
+
+FEATURE_WIFI = 0x10  # INFO features bit 4: 0x86 Wi-Fi status / settings
+
+
+def free_commands(vendor_features):
+    """Status queries that need no session ownership (protocol 3.1): (name, request, check)."""
+    out = [("DAP_HostStatus", b"\x01\x00\x00", lambda r: r == b"\x01\x00"),
+           ("INFO", b"\x80", lambda r: len(r) == 22 and r[1] == OK)]
+    if vendor_features & FEATURE_WIFI:
+        out.append(("0x86 status", b"\x86\x00", lambda r: r[:2] == bytes([0x86, OK])))
+    return out
+
+
+@R.case("MC-04", "Free commands: status queries from a second link need no ownership and take none")
+def mc_free_commands(ctx):
+    """Decision B2 (extension), protocol 3.1: DAP_Info, DAP_HostStatus, the 0x7E/0x7F containers,
+    INFO and the read-only status ops run for a link that does not own the probe; every other
+    command stays busy for it, and a free command never makes it the owner."""
+    t = ctx.need_target()
+    spec2 = second_link(ctx)
+    lk2 = linkmod.open_link(spec2)
+    try:
+        with ctx.session() as (lk, dap, vendor):  # link A owns the probe from here
+            free = free_commands(vendor.info()["features"])
+            for name, request, ok in free:
+                r = lk2.xfer(request)
+                ctx.check(f"B: {name} answered while A owns the probe", ok(r), r[:4].hex(" "))
+            ctx.check("A still owns the probe: its read runs", dap.read32(t.at(t.V_U32)) == 0x89ABCDEF)
+            check_busy(ctx, lk2, "B")
+            # One 0x7F container from B: free commands answered, the owner-only one busy.
+            r = lk2.xfer(bytes([0x7F, 4, 0x00, 0xFF, 0x01, 0x00, 0x00, 0x80, 0x05, 0, 1, req(0, 1, 0)]))
+            ctx.check("B: container answers 4 commands", r[:2] == b"\x7F\x04", r[:4].hex(" "))
+            ctx.check("B: container DAP_Info and HostStatus answered",
+                      r[2:3] == b"\x00" and r[2 + 2 + r[3]:2 + 2 + r[3] + 2] == b"\x01\x00", r[:12].hex(" "))
+            at = 2 + 2 + r[3] + 2
+            ctx.check("B: container INFO answered", r[at] == 0x80 and r[at + 1] == OK, r[at:at + 2].hex(" "))
+            ctx.check("B: container DAP_Transfer busy", r[at + 22:at + 24] == b"\x05\xFF", r[at + 22:].hex(" "))
+            ctx.check("A is still the owner after B's container", dap.read32(t.at(t.V_U32)) == 0x89ABCDEF)
+            ctx.check("A disconnects", lk.xfer(b"\x03")[:2] == b"\x03\x00")
+        # No owner now: B's free commands must not make B the owner.
+        for name, request, ok in free:
+            lk2.xfer(request)
+        a = linkmod.open_link(ctx.spec)
+        try:
+            r = a.xfer(b"\x02\x01")
+            ctx.check("with no owner, B's free commands left the probe free: A connects", r == b"\x02\x01",
+                      r.hex(" "))
+            a.xfer(b"\x03")
+        finally:
+            a.close()
+    finally:
+        lk2.close()
+    ctx.summary(f"{len(free)} free commands served to B, owner-only busy, no ownership taken")

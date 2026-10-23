@@ -148,6 +148,7 @@ When the link column is `all`, the case applies to all links of section 1.1.
 | MC-01 | `auto` | tcp | protocol 2 | Second TCP client is not served |
 | MC-02 | `auto` | all | protocol 3.1, decision B2 | Second link answers "busy", session owner unaffected |
 | MC-03 | `auto` | all | protocol 3.1, decision B2 | Change of the session owner |
+| MC-04 | `auto` | all | protocol 3.1, decision B2 | Free commands: status queries from a second link need no session and take none |
 | RAD-01 | `auto` | radio | measure | Wireless load: retransmission rate, failure count, round-trip time |
 | RAD-02 | `assisted` | radio | decision B3 | Pairing persists after both boards are powered off |
 | RAD-03 | `manual` | radio | measure | Distance and interference |
@@ -321,6 +322,8 @@ STAB-08 (decision A4, serial + `--link2` over TCP or USB): a serial session must
 MC-01 (protocol section 2, TCP): after client A connects and starts sampling, client B connects to the same port. Pass: B is not served (connection refused or no response), A is still answered, and sampling continues.
 
 MC-02 (protocol 3.1, decision B2, `--link2`): two links A and B (for example USB and TCP) connect to the same probe, A connecting first and becoming the session owner. Pass: the DAP_Info of B is answered as usual, the `DAP_Transfer` of B gets `05 FF`, and the READ of B gets `81 05`; A continuously reads the u32 and the pointer chain in the fixture for 5 s (while B keeps sending commands), and not a single value is wrong.
+
+MC-04 (protocol 3.1, extension of decision B2, `--link2`): after A connects and owns the session, B sends the free commands: DAP_HostStatus answers `01 00`, INFO answers 22 bytes with status 0, and when the probe has the Wi-Fi feature bit (INFO features 0x10) `86 00` has status 0; A's read still runs; B's `DAP_Transfer` gets `05 FF` and its READ `81 05`; one 0x7F container from B (DAP_Info, HostStatus, INFO, DAP_Transfer) answers 4 commands, the first three normally and DAP_Transfer with `05 FF`, and A is still the owner afterwards. After A's `DAP_Disconnect` there is no owner; B sends the free commands again, and then A's `DAP_Connect` answers `02 01` (B did not become the owner).
 
 MC-03 (protocol 3.1, decision B2, `--link2`): A starts sampling, and the READ of B gets `81 05`; A stops sampling and sends `DAP_Disconnect` (the session ends); B reads the frames left by A with SUB_READ (status 0x02, with data), then connects and starts sampling for 1 s. Pass: every step has the status above, and B samples at least 500 frames.
 
