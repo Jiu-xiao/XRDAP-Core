@@ -4,7 +4,7 @@ import time
 
 from .. import link as linkmod
 from .. import runner as R
-from ..dap import Dap, req
+from ..dap import INFO_PRODUCT, Dap, req
 from ..vendor import BUSY, OK, STATE, Item, Vendor, capture, numbered
 
 
@@ -103,14 +103,21 @@ def mc_owner(ctx):
 
 
 FEATURE_WIFI = 0x10  # INFO features bit 4: 0x86 Wi-Fi status / settings
+RADIO_PRODUCT = "XR-DAP-V307"  # DAP_Info product of the radio probe (0x9F commands)
 
 
-def free_commands(vendor_features):
+def free_commands(vendor_features, product):
     """Status queries that need no session ownership (protocol 3.1): (name, request, check)."""
     out = [("DAP_HostStatus", b"\x01\x00\x00", lambda r: r == b"\x01\x00"),
            ("INFO", b"\x80", lambda r: len(r) == 22 and r[1] == OK)]
     if vendor_features & FEATURE_WIFI:
         out.append(("0x86 status", b"\x86\x00", lambda r: r[:2] == bytes([0x86, OK])))
+    if product == RADIO_PRODUCT:
+        # 0x9F 0x13 reads the local radio settings; 0x9F 0x30 wraps it for the peer and answers
+        # 01 without a peer, 04 when not paired (protocol 4).
+        out.append(("0x9F settings", b"\x9F\x13", lambda r: r[:2] == bytes([0x9F, OK])))
+        out.append(("0x9F peer settings", b"\x9F\x30\x9F\x13",
+                    lambda r: r[:1] == b"\x9F" and r[1] in (0x00, 0x01, 0x04)))
     return out
 
 
@@ -124,12 +131,16 @@ def mc_free_commands(ctx):
     lk2 = linkmod.open_link(spec2)
     try:
         with ctx.session() as (lk, dap, vendor):  # link A owns the probe from here
-            free = free_commands(vendor.info()["features"])
+            product = dap.info_str(INFO_PRODUCT)
+            free = free_commands(vendor.info()["features"], product)
             for name, request, ok in free:
                 r = lk2.xfer(request)
                 ctx.check(f"B: {name} answered while A owns the probe", ok(r), r[:4].hex(" "))
             ctx.check("A still owns the probe: its read runs", dap.read32(t.at(t.V_U32)) == 0x89ABCDEF)
             check_busy(ctx, lk2, "B")
+            if product == RADIO_PRODUCT:
+                r = lk2.xfer(b"\x9F\x14\x00")
+                ctx.check("B: 0x9F settings write -> 9F 05", r[:2] == b"\x9F\x05", r[:2].hex(" "))
             # One 0x7F container from B: free commands answered, the owner-only one busy.
             r = lk2.xfer(bytes([0x7F, 4, 0x00, 0xFF, 0x01, 0x00, 0x00, 0x80, 0x05, 0, 1, req(0, 1, 0)]))
             ctx.check("B: container answers 4 commands", r[:2] == b"\x7F\x04", r[:4].hex(" "))
