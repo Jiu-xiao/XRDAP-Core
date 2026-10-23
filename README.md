@@ -78,7 +78,7 @@ class SpinLock
 
 ### 会话主人和执行器
 
-所有 DAP 命令都经 `Executor` 进入 libxr 的 DAP 实例：USB 用 `StepUsb()`，别的传输用 `Execute()`。执行器持同一把锁，每次只执行一条命令，并记下命令属于哪条传输。第一条执行 `DAP_Info` 以外命令的传输成为会话主人；会话结束前别的传输回“忙”（标准命令回 `命令号 FF`，厂商命令回 `命令号 05`），`DAP_Info` 照常回复：
+所有 DAP 命令都经 `Executor` 进入 libxr 的 DAP 实例：USB 用 `StepUsb()`，别的传输用 `Execute()`。执行器每次只执行一条命令，并记下命令属于哪条传输。命令按 `session/command_class.hpp` 的一张表分两类：只读的状态和设置查询、状态灯（`DAP_Info`、`DAP_HostStatus`、厂商 INFO、0x86 查询、0x9F 0x13）不需要拥有探针，任何传输都照常执行；其余命令要拥有探针。第一条执行要拥有探针的命令的传输成为会话主人；会话结束前别的传输的这类命令回“忙”（标准命令回 `命令号 FF`，厂商命令回 `命令号 05`）：
 
 ```cpp
 #include "xrdap/session/executor.hpp"

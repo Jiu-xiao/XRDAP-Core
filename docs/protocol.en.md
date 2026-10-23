@@ -79,13 +79,18 @@ This section is protocol version 2 and is not compatible with version 1: version
 
 #### Session owner
 
-At any time one transport (USB, serial, TCP, radio remote) owns the probe and SWD; that transport is the session owner. When there is no owner, the first transport that runs a command other than `DAP_Info` becomes the owner and starts a session. From then on, commands from any other transport are answered busy and not run:
+At any time one transport (USB, serial, TCP, radio remote) owns the probe and SWD; that transport is the session owner. Commands fall into two classes:
+
+| Class | Commands |
+|---|---|
+| No ownership needed | `DAP_Info` (0x00); `DAP_HostStatus` (0x01, status light only); the `DAP_ExecuteCommands` (0x7F) and `DAP_QueueCommands` (0x7E) containers themselves, each command inside classed on its own; vendor INFO (0x80); 0x86 op 0 Wi-Fi status query (XRDAP-ESP); 0x9F 0x13 radio settings, pairing and role read (XRDAP-CH32V307) |
+| Ownership needed | every other command: connect, SWD, SWJ, reset and every standard command that touches the target, READ, WRITE, sampling (SUB_START, SUB_CTRL, SUB_READ), settings writes (0x86 save and clear; 0x9F role, settings, pairing and forwarding) |
+
+Commands that need no ownership run from any transport, never make that transport the owner and never make another transport busy. When there is no owner, the first transport that runs a command needing ownership becomes the owner and starts a session. From then on, commands needing ownership from any other transport are answered busy and not run:
 
 | Command | Reply |
 |---|---|
-| `DAP_Info` (0x00) | runs as usual |
-| `DAP_ExecuteCommands` (0x7F), `DAP_QueueCommands` (0x7E) | the container itself is handled as usual; every command inside is answered by this table |
-| other standard commands | `command FF` (DAP_ERROR) |
+| standard commands | `command FF` (DAP_ERROR) |
 | vendor commands 0x80 to 0x9F | `command 05` (busy) |
 
 With only 1 byte of reply space the reply is `FF` alone; with none there is no reply.
@@ -431,7 +436,7 @@ Inside `DAP_ExecuteCommands` the commands before used up the packet, and 5 bytes
 
 #### Another transport owns the probe
 
-USB is the owner; a READ over serial: `81 05`; a `DAP_Transfer` over serial: `05 FF`; a `DAP_Info` over serial: answered as usual.
+USB is the owner; a READ over serial: `81 05`; a `DAP_Transfer` over serial: `05 FF`; a `DAP_Info` or `DAP_HostStatus` over serial: answered as usual, and USB stays the owner.
 
 #### 0x86 query
 

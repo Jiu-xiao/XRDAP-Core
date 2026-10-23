@@ -14,6 +14,7 @@ set(XRDAP_CORE_PURE_SOURCES
     "${XRDAP_CORE_DIR}/xrdap/probe/probe_identity.cpp"
     "${XRDAP_CORE_DIR}/xrdap/serial/serial_frame.cpp"
     "${XRDAP_CORE_DIR}/xrdap/session/busy_reply.cpp"
+    "${XRDAP_CORE_DIR}/xrdap/session/command_class.cpp"
     "${XRDAP_CORE_DIR}/xrdap/session/session_owner.cpp"
     "${XRDAP_CORE_DIR}/xrdap/session/turn_queue.cpp"
     "${XRDAP_CORE_DIR}/xrdap/vendor/frame_ring.cpp"

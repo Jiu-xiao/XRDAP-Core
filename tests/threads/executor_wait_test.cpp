@@ -232,6 +232,12 @@ void BusyAnsweredWhileUsbOwnerWaits()
   const Answer info = TcpCommand(p, XrDap::Dap::kInfo);
   EXPECT(info.cmd == XrDap::Dap::kInfo);
   EXPECT(info.ms < 50.0);
+  // 状态灯命令不需要拥有探针：照常执行，不回忙，USB 仍是主人 / The status light command
+  // does not need to own the probe: it runs, is not busy, and USB stays the owner.
+  const Answer led = TcpCommand(p, XrDap::Dap::kHostStatus);
+  EXPECT(led.cmd == XrDap::Dap::kHostStatus);
+  EXPECT(led.status == 0x00U);
+  EXPECT(p.session.Owner() == XrDap::Transport::USB);
   std::printf("  BusyAnsweredWhileUsbOwnerWaits: busy %.2f ms, info %.2f ms\n", busy.ms,
               info.ms);
 }

@@ -8,19 +8,7 @@
 
 #include "check.hpp"
 
-using XrDap::RunsWithoutOwner;
 using XrDap::WriteBusyReply;
-
-TEST(OnlyInfoAndContainersRunWithoutOwner)
-{
-  CHECK(RunsWithoutOwner(0x00));   // DAP_Info
-  CHECK(RunsWithoutOwner(0x7E));   // DAP_QueueCommands
-  CHECK(RunsWithoutOwner(0x7F));   // DAP_ExecuteCommands
-  CHECK(!RunsWithoutOwner(0x01));  // DAP_HostStatus
-  CHECK(!RunsWithoutOwner(0x02));  // DAP_Connect
-  CHECK(!RunsWithoutOwner(0x05));  // DAP_Transfer
-  CHECK(!RunsWithoutOwner(0x80));  // INFO 也要主人 / vendor INFO needs the owner too
-}
 
 TEST(StandardCommandBusyIsDapError)
 {

@@ -78,7 +78,7 @@ class SpinLock
 
 ### Session owner and executor
 
-Every DAP command enters the libxr DAP instance through `Executor`: USB with `StepUsb()`, the other transports with `Execute()`. The executor holds one lock, runs one command at a time and notes which transport each command belongs to. The first transport that runs a command other than `DAP_Info` becomes the session owner; until its session ends the other transports get busy (`command FF` for standard commands, `command 05` for vendor commands), while `DAP_Info` is answered as usual:
+Every DAP command enters the libxr DAP instance through `Executor`: USB with `StepUsb()`, the other transports with `Execute()`. The executor runs one command at a time and notes which transport each command belongs to. One table in `session/command_class.hpp` puts commands in two classes: read-only status and settings queries and the status light (`DAP_Info`, `DAP_HostStatus`, vendor INFO, the 0x86 query, 0x9F 0x13) need no ownership and run from any transport; every other command needs to own the probe. The first transport that runs a command needing ownership becomes the session owner; until its session ends such commands from the other transports get busy (`command FF` for standard commands, `command 05` for vendor commands):
 
 ```cpp
 #include "xrdap/session/executor.hpp"

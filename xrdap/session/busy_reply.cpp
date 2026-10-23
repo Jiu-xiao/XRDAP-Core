@@ -13,11 +13,6 @@ constexpr uint8_t kVendorFirst = 0x80U;
 constexpr uint8_t kVendorLast = 0x9FU;
 }  // namespace
 
-bool RunsWithoutOwner(uint8_t cmd)
-{
-  return cmd == Dap::kInfo || cmd == Dap::kExecuteCommands || cmd == Dap::kQueueCommands;
-}
-
 void WriteBusyReply(uint8_t cmd, uint8_t* resp, uint16_t cap, uint16_t& out)
 {
   if (cap < 2U)
