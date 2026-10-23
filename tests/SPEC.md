@@ -323,7 +323,7 @@ MC-01（协议第 2 节，TCP）：客户端 A 连接并开始采样后，客户
 
 MC-02（协议 3.1，决定 B2，`--link2`）：A、B 两条链路（例如 USB 和 TCP）连同一块探针，A 先连接成为会话主人。通过：B 的 DAP_Info 照常应答，B 的 `DAP_Transfer` 回 `05 FF`，B 的 READ 回 `81 05`；A 连续 5 s 读夹具中的 u32 和指针链（其间 B 不断发命令），没有一个值出错。
 
-MC-04（协议 3.1，决定 B2 的扩展，`--link2`）：A 连接成为会话主人后，B 发免占用命令：DAP_HostStatus 回 `01 00`，INFO 回 22 字节且状态为 0，探针有 Wi-Fi 功能位（INFO features 0x10）时 `86 00` 状态为 0；DAP_Info 产品名为 `XR-DAP-V307`（无线探针，协议第 4 节）时 `9F 13` 状态为 0，`9F 30 9F 13`（读对端设置）回 `9F 00`、`9F 01`（没有对端）或 `9F 04`（未配对），而 B 的 `9F 14 xx`（写设置）回 `9F 05`；A 的读照常执行；B 的 `DAP_Transfer` 回 `05 FF`、READ 回 `81 05`；B 的一个 0x7F 容器（DAP_Info、HostStatus、INFO、DAP_Transfer）回 4 条应答，前三条正常，DAP_Transfer 为 `05 FF`，之后 A 仍是主人。A `DAP_Disconnect` 后没有主人，B 再发这些免占用命令，然后 A 的 `DAP_Connect` 回 `02 01`（B 没有因此成为主人）。
+MC-04（协议 3.1，决定 B2 的扩展，`--link2`）：A 连接成为会话主人后，B 发免占用命令：DAP_HostStatus 回 `01 00`，INFO 回 22 字节且状态为 0，探针有 Wi-Fi 功能位（INFO features 0x10）时 `86 00` 状态为 0；DAP_Info 产品名为 `XR-DAP-V307`（无线探针，协议第 4 节）时 `9F 13` 状态为 0，而 B 的 `9F 30 9F 13`（读对端设置，要经过可能正承载别的会话的无线链路）和 `9F 14 xx`（写设置）回 `9F 05`；A 的读照常执行；B 的 `DAP_Transfer` 回 `05 FF`、READ 回 `81 05`；B 的一个 0x7F 容器（DAP_Info、HostStatus、INFO、DAP_Transfer）回 4 条应答，前三条正常，DAP_Transfer 为 `05 FF`，之后 A 仍是主人。A `DAP_Disconnect` 后没有主人，B 再发这些免占用命令，然后 A 的 `DAP_Connect` 回 `02 01`（B 没有因此成为主人）。
 
 MC-03（协议 3.1，决定 B2，`--link2`）：A 开始采样，B 的 READ 回 `81 05`；A 停止采样并 `DAP_Disconnect`（会话结束）；B 用 SUB_READ 读到 A 留下的帧（状态 0x02，带数据），再连接、开始采样 1 s。通过：每一步状态如上，B 至少采到 500 帧。
 

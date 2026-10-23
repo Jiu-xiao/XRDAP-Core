@@ -113,11 +113,8 @@ def free_commands(vendor_features, product):
     if vendor_features & FEATURE_WIFI:
         out.append(("0x86 status", b"\x86\x00", lambda r: r[:2] == bytes([0x86, OK])))
     if product == RADIO_PRODUCT:
-        # 0x9F 0x13 reads the local radio settings; 0x9F 0x30 wraps it for the peer and answers
-        # 01 without a peer, 04 when not paired (protocol 4).
+        # 0x9F 0x13 reads the local radio settings (protocol 4).
         out.append(("0x9F settings", b"\x9F\x13", lambda r: r[:2] == bytes([0x9F, OK])))
-        out.append(("0x9F peer settings", b"\x9F\x30\x9F\x13",
-                    lambda r: r[:1] == b"\x9F" and r[1] in (0x00, 0x01, 0x04)))
     return out
 
 
@@ -139,8 +136,10 @@ def mc_free_commands(ctx):
             ctx.check("A still owns the probe: its read runs", dap.read32(t.at(t.V_U32)) == 0x89ABCDEF)
             check_busy(ctx, lk2, "B")
             if product == RADIO_PRODUCT:
-                r = lk2.xfer(b"\x9F\x14\x00")
-                ctx.check("B: 0x9F settings write -> 9F 05", r[:2] == b"\x9F\x05", r[:2].hex(" "))
+                # The peer read uses the radio link, which may carry another session: owner only.
+                for name, request in (("peer settings read", b"\x9F\x30\x9F\x13"), ("settings write", b"\x9F\x14\x00")):
+                    r = lk2.xfer(request)
+                    ctx.check(f"B: 0x9F {name} -> 9F 05", r[:2] == b"\x9F\x05", r[:2].hex(" "))
             # One 0x7F container from B: free commands answered, the owner-only one busy.
             r = lk2.xfer(bytes([0x7F, 4, 0x00, 0xFF, 0x01, 0x00, 0x00, 0x80, 0x05, 0, 1, req(0, 1, 0)]))
             ctx.check("B: container answers 4 commands", r[:2] == b"\x7F\x04", r[:4].hex(" "))
