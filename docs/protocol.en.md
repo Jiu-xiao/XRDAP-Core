@@ -83,7 +83,7 @@ At any time one transport (USB, serial, TCP, radio remote) owns the probe and SW
 
 | Class | Commands |
 |---|---|
-| No ownership needed | `DAP_Info` (0x00); `DAP_HostStatus` (0x01, status light only); the `DAP_ExecuteCommands` (0x7F) and `DAP_QueueCommands` (0x7E) containers themselves, each command inside classed on its own; vendor INFO (0x80); 0x86 op 0 Wi-Fi status query (XRDAP-ESP); 0x9F 0x13 radio settings, pairing and role read, and `9F 30 9F 13` reading the peer's over the radio (XRDAP-CH32V307) |
+| No ownership needed | `DAP_Info` (0x00); `DAP_HostStatus` (0x01, status light only); the `DAP_ExecuteCommands` (0x7F) and `DAP_QueueCommands` (0x7E) containers themselves, each command inside classed on its own; vendor INFO (0x80); 0x86 op 0 Wi-Fi status query (XRDAP-ESP); 0x9F 0x13 reading this probe's radio settings, pairing and role (XRDAP-CH32V307; 0x9F 0x30, forwarded over the radio, needs ownership) |
 | Ownership needed | every other command: connect, SWD, SWJ, reset and every standard command that touches the target, READ, WRITE, sampling (SUB_START, SUB_CTRL, SUB_READ), settings writes (0x86 save and clear; 0x9F role, settings, pairing and forwarding) |
 
 Commands that need no ownership run from any transport, never make that transport the owner and never make another transport busy. When there is no owner, the first transport that runs a command needing ownership becomes the owner and starts a session. From then on, commands needing ownership from any other transport are answered busy and not run:

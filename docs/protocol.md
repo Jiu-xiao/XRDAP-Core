@@ -83,7 +83,7 @@ CRC8 为反射多项式 `0x8C`、初值 `0xFF`；CRC32 为反射多项式 `0xEDB
 
 | 类 | 命令 |
 |---|---|
-| 不需要拥有探针 | `DAP_Info`（0x00）；`DAP_HostStatus`（0x01，只改状态灯）；`DAP_ExecuteCommands`（0x7F）、`DAP_QueueCommands`（0x7E）容器本身，里面的每条命令各自归类；厂商 INFO（0x80）；0x86 op 0 查询 Wi-Fi 状态（XRDAP-ESP）；0x9F 0x13 读射频设置、配对和角色，以及 `9F 30 9F 13` 经无线读对端的这些内容（XRDAP-CH32V307） |
+| 不需要拥有探针 | `DAP_Info`（0x00）；`DAP_HostStatus`（0x01，只改状态灯）；`DAP_ExecuteCommands`（0x7F）、`DAP_QueueCommands`（0x7E）容器本身，里面的每条命令各自归类；厂商 INFO（0x80）；0x86 op 0 查询 Wi-Fi 状态（XRDAP-ESP）；0x9F 0x13 读本机的射频设置、配对和角色（XRDAP-CH32V307；经无线转发的 0x9F 0x30 要拥有探针） |
 | 要拥有探针 | 其余所有命令：连接、SWD、SWJ、复位等一切碰目标的标准命令，READ、WRITE，采样（SUB_START、SUB_CTRL、SUB_READ），设置写入（0x86 保存和清除，0x9F 的角色、设置、配对和转发） |
 
 不需要拥有探针的命令任何传输都照常执行，不让这条传输成为主人，也不让别的传输变忙。没有主人时，第一条执行要拥有探针的命令的传输成为主人，开始一个会话。此后别的传输发来的要拥有探针的命令一律回“忙”，不执行：
