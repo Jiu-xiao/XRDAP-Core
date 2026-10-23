@@ -44,7 +44,7 @@ CRC8 为反射多项式 `0x8C`、初值 `0xFF`；CRC32 为反射多项式 `0xEDB
 
 请求和响应一一对应。上位机每次发一个请求，收到响应后再发下一个。没有响应内容的命令，响应帧的 n 为 0。
 
-固件的波特率为 4 000 000（XRDAP-ESP 的 S3 版 `firmware/esp32s3/main/config.hpp` 的 `kSerialBaud`；C3 版走 USB Serial/JTAG，波特率不起作用），8 位数据、无校验、1 位停止位、无流控。
+固件的波特率为 4 000 000（XRDAP-ESP 的 S2、S3 版 `firmware/esp32sx/main/config.hpp` 的 `kSerialBaud`；C3 版走 USB Serial/JTAG，波特率不起作用；传统 ESP32 版受板上 USB 转串口芯片限制为 921 600，见 `firmware/esp32/main/config.hpp`），8 位数据、无校验、1 位停止位、无流控。
 
 串口没有连接和断开的概念。串口作为会话主人时，5 秒内没有任何请求即结束会话，见 3.1 节。
 
@@ -466,7 +466,7 @@ USB 是主人时，经串口发来的 READ：`81 05`；经串口发来的 `DAP_T
 | Info ID | 含义 | 内容 |
 |---|---|---|
 | 0x01 | 厂商 | `XRobot` |
-| 0x02 | 产品 | ESP32-S3：`XR-DAP-S3`；ESP32-C3：`XR-DAP-C3`；ESP32：`XR-DAP-ESP32`；STM32F103：`XR-DAP-F103`；CH32V307：`XR-DAP-V307` |
+| 0x02 | 产品 | ESP32-S3：`XR-DAP-S3`；ESP32-S2：`XR-DAP-S2`；ESP32-C3：`XR-DAP-C3`；ESP32：`XR-DAP-ESP32`；STM32F103：`XR-DAP-F103`；CH32V307：`XR-DAP-V307` |
 | 0x03 | 序列号 | `XRobot-XRDAP-` 加芯片唯一标识的大写十六进制：ESP 为出厂 MAC（eFuse 中的 6 字节，12 位），例如 `XRobot-XRDAP-0123456789AB`；STM32F103 和 CH32V307 为 12 字节 UID（24 位） |
 | 0x04 | CMSIS-DAP 协议版本 | `2.0.0` |
 | 0x05、0x06 | 目标芯片厂商、名称 | 不提供（空） |
@@ -486,7 +486,7 @@ USB 是主人时，经串口发来的 READ：`81 05`；经串口发来的 `DAP_T
 | 服务 | `_xrdap._tcp`，端口为 TCP DAP 端口 3241 |
 | 实例名 | 序列号，例如 `XRobot-XRDAP-0123456789AB` |
 | TXT `serial` | 序列号 |
-| TXT `chip` | `esp32s3` 或 `esp32c3` |
+| TXT `chip` | `esp32s3`、`esp32s2`、`esp32c3` 或 `esp32` |
 | TXT `fw` | 固件版本，例如 `0.5.5` |
 
 OpenOCD 可以直接把主机名写进 `cmsis-dap tcp host`。上位机枚举 `_xrdap._tcp` 服务即可列出局域网内的探针，用 TXT 的 `serial` 与 USB、串口上的同一块探针对应。mDNS 启动失败只记日志，不影响 TCP 服务。
@@ -518,7 +518,7 @@ ESP32-C3 的 USB 口是 USB Serial/JTAG，电脑上是一个 CDC 串口，DAP �
 |---|---|
 | VID:PID、bcdDevice | 1D50:6199，0x0200（S3 真 USB 设备是 0x0100；Windows 按这三项缓存描述符） |
 | bcdUSB、速度 | 2.10（带 BOS），高速 |
-| 字符串 | 1 `XRobot`，2 `XR-DAP-S3 CMSIS-DAP` / `XR-DAP-C3 CMSIS-DAP`，3 序列号（同 DAP_Info），4 `CMSIS-DAP v2` |
+| 字符串 | 1 `XRobot`，2 `XR-DAP-<芯片> CMSIS-DAP`（`XR-DAP-S3`、`XR-DAP-S2`、`XR-DAP-C3`、`XR-DAP-ESP32`），3 序列号（同 DAP_Info），4 `CMSIS-DAP v2` |
 | 接口 | 一个，厂商类 0xFF，接口名为字符串 4 |
 | 端点 | Bulk OUT 0x01、Bulk IN 0x81，512 字节 |
 | BOS | MS OS 2.0 平台能力，厂商请求码 0x20；描述符集 162 字节：兼容 ID `WINUSB`，`DeviceInterfaceGUIDs` = `{CDB3B5AD-293B-4663-AA36-1AAE46463776}` |

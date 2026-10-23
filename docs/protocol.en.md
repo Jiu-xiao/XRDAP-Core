@@ -44,7 +44,7 @@ The probe parses frames by these rules:
 
 Requests and responses correspond one to one. The host sends one request at a time and sends the next after receiving the response. For a command with no response content, n in the response frame is 0.
 
-The firmware baud rate is 4 000 000 (`kSerialBaud` in XRDAP-ESP `firmware/esp32s3/main/config.hpp` for the S3; the C3 uses USB Serial/JTAG, where the baud rate has no effect), 8 data bits, no parity, 1 stop bit, no flow control.
+The firmware baud rate is 4 000 000 (`kSerialBaud` in XRDAP-ESP `firmware/esp32sx/main/config.hpp` for the S2 and S3; the C3 uses USB Serial/JTAG, where the baud rate has no effect; the classic ESP32 is limited to 921 600 by its on-board USB-UART chip, see `firmware/esp32/main/config.hpp`), 8 data bits, no parity, 1 stop bit, no flow control.
 
 A serial port has no notion of connecting or disconnecting. While serial owns the probe, 5 seconds without any request end the session, see section 3.1.
 
@@ -466,7 +466,7 @@ The firmware returns these strings in `DAP_Info` (`probe/probe_identity.hpp` in 
 | Info ID | Meaning | Content |
 |---|---|---|
 | 0x01 | Vendor | `XRobot` |
-| 0x02 | Product | ESP32-S3: `XR-DAP-S3`; ESP32-C3: `XR-DAP-C3`; ESP32: `XR-DAP-ESP32`; STM32F103: `XR-DAP-F103`; CH32V307: `XR-DAP-V307` |
+| 0x02 | Product | ESP32-S3: `XR-DAP-S3`; ESP32-S2: `XR-DAP-S2`; ESP32-C3: `XR-DAP-C3`; ESP32: `XR-DAP-ESP32`; STM32F103: `XR-DAP-F103`; CH32V307: `XR-DAP-V307` |
 | 0x03 | Serial number | `XRobot-XRDAP-` followed by the chip's unique id in upper-case hexadecimal: the factory MAC on ESP (6 bytes from eFuse, 12 digits), e.g. `XRobot-XRDAP-0123456789AB`; the 12-byte UID on STM32F103 and CH32V307 (24 digits) |
 | 0x04 | CMSIS-DAP protocol version | `2.0.0` |
 | 0x05, 0x06 | Target device vendor, name | Not provided (empty) |
@@ -486,7 +486,7 @@ Once the probe has an IP address it advertises itself on the LAN:
 | Service | `_xrdap._tcp`, on the TCP DAP port 3241 |
 | Instance name | The serial number, e.g. `XRobot-XRDAP-0123456789AB` |
 | TXT `serial` | The serial number |
-| TXT `chip` | `esp32s3` or `esp32c3` |
+| TXT `chip` | `esp32s3`, `esp32s2`, `esp32c3` or `esp32` |
 | TXT `fw` | Firmware version, e.g. `0.5.5` |
 
 OpenOCD accepts the host name directly in `cmsis-dap tcp host`. Host tools browse the `_xrdap._tcp` service to list the probes on the LAN and match them with the same probe on USB or serial through the TXT `serial`. An mDNS startup failure is only logged and does not affect the TCP service.
@@ -518,7 +518,7 @@ Device:
 |---|---|
 | VID:PID, bcdDevice | 1D50:6199, 0x0200 (the real USB device of the S3 uses 0x0100; Windows caches descriptors by these three items) |
 | bcdUSB, speed | 2.10 (with BOS), high speed |
-| Strings | 1 `XRobot`, 2 `XR-DAP-S3 CMSIS-DAP` / `XR-DAP-C3 CMSIS-DAP`, 3 serial number (same as DAP_Info), 4 `CMSIS-DAP v2` |
+| Strings | 1 `XRobot`, 2 `XR-DAP-<chip> CMSIS-DAP` (`XR-DAP-S3`, `XR-DAP-S2`, `XR-DAP-C3`, `XR-DAP-ESP32`), 3 serial number (same as DAP_Info), 4 `CMSIS-DAP v2` |
 | Interface | One, vendor class 0xFF, interface name is string 4 |
 | Endpoints | Bulk OUT 0x01, Bulk IN 0x81, 512 bytes |
 | BOS | MS OS 2.0 platform capability, vendor request code 0x20; descriptor set of 162 bytes: compatible ID `WINUSB`, `DeviceInterfaceGUIDs` = `{CDB3B5AD-293B-4663-AA36-1AAE46463776}` |
