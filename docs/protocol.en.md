@@ -37,6 +37,7 @@ Example: the complete frame for the request `DAP_Info(0xFF)` (query packet size;
 
 The probe parses frames by these rules:
 
+- Frames whose length is a multiple of 64 are followed by one 0x00 pad byte; receivers ignore bytes before 0x5A. A USB-serial bridge (CP210x, CH343, USB Serial/JTAG) carries data to the host in 64-byte full-speed bulk packets, and data that fills whole packets reaches the host program only when the next short packet arrives; the pad makes the last packet short. The probe pads its response frames this way.
 - If the header CRC8 is wrong, version is not 1, the topic is not `dap_req`, or data_len is smaller than 2 or larger than 2 + the packet size (from DAP_Info), the current candidate frame is discarded and parsing restarts at the next `0x5A` in the buffer.
 - A wrong trailing CRC8 likewise discards the frame and resynchronises.
 - A frame with n larger than the packet size or n + 2 larger than data_len is discarded without a response.

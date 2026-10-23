@@ -240,7 +240,7 @@ class SerialLink
     exec_.Execute(Transport::SERIAL, req, len, resp_, MaxPacket, out);
     const size_t frame = FramerT::PackResponse(
         resp_, out, static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds()), tx_frame_);
-    WriteFrame(frame);
+    WriteFrame(FramerT::AppendPad(tx_frame_, frame));
   }
 
   void WriteFrame(size_t len)
@@ -281,7 +281,7 @@ class SerialLink
   FramerT framer_;
   uint8_t rx_chunk_[kChunkSize] = {};
   alignas(8) uint8_t resp_[MaxPacket] = {};
-  alignas(8) uint8_t tx_frame_[FramerT::kFrameCapacity] = {};
+  alignas(8) uint8_t tx_frame_[FramerT::kTxCapacity] = {};
 
   std::atomic<uint32_t> rx_bytes_{0U};
   std::atomic<uint32_t> tx_bytes_{0U};

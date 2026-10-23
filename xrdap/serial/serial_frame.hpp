@@ -30,6 +30,10 @@ inline constexpr uint8_t kPrefix = 0x5AU;
 inline constexpr uint8_t kVersion = 0x01U;
 /// 帧头字节数 / Header bytes.
 inline constexpr size_t kHeaderSize = 16U;
+/// USB 全速 bulk 端点的包长 / Packet size of a USB full-speed bulk endpoint.
+inline constexpr size_t kUsbPacket = 64U;
+/// 补的字节 / The pad byte.
+inline constexpr uint8_t kPad = 0x00U;
 /// 请求 topic "dap_req" 的 CRC32 / CRC32 of the request topic "dap_req".
 inline constexpr uint32_t kRequestTopic = 0xDC8309C5U;
 /// 响应 topic "dap_resp" 的 CRC32 / CRC32 of the response topic "dap_resp".
@@ -140,6 +144,31 @@ class Framer
     const size_t body = kHeaderSize + payload;
     out[body] = Crc8(out, body);
     return body + 1U;
+  }
+
+  /// 发送缓冲至少要的字节数：一帧加一个补的字节 / Bytes a send buffer needs at least: a
+  /// frame plus one pad byte.
+  static constexpr size_t kTxCapacity = kFrameCapacity + 1U;
+
+  /// @brief 帧长为 64 的整数倍时在后面补一个 0x00。经 USB 转串口（CP210x、CH343、
+  ///        USB Serial/JTAG）送到主机时，刚好填满全速 bulk 包的数据要等下一个短包才
+  ///        交给主机程序；补的字节让最后一个包变短。接收端丢掉 0x5A 之前的字节 / Append
+  ///        one 0x00 after a frame whose length is a multiple of 64. Over a USB-serial
+  ///        bridge (CP210x, CH343, USB Serial/JTAG) data that fills full-speed bulk
+  ///        packets exactly reaches the host program only with the next short packet;
+  ///        the pad makes the last packet short. Receivers drop bytes before 0x5A.
+  /// @param out 至少 kTxCapacity 字节，前 len 字节是一帧 / At least kTxCapacity bytes,
+  ///        the first len of them one frame.
+  /// @return 要发出的字节数 / Bytes to send.
+  /// @note 纯函数，任何上下文 / Pure function, any context.
+  static size_t AppendPad(uint8_t* out, size_t len)
+  {
+    if (len % kUsbPacket != 0U)
+    {
+      return len;
+    }
+    out[len] = kPad;
+    return len + 1U;
   }
 
   /// 统计 / Statistics.

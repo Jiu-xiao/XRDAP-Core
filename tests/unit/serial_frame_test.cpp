@@ -145,3 +145,85 @@ TEST(FramesInsideABadFrameAreAllFound)
   CHECK_EQ(sink.requests.size(), 2U);
   CHECK_EQ(f.Stats().crc_errors, 1U);
 }
+
+namespace
+{
+// 一条 DAP 包为 n 字节的请求帧，帧长 19 + n / A request frame carrying an n-byte DAP
+// packet; the frame is 19 + n bytes long.
+std::vector<uint8_t> RequestFrame(uint16_t n, uint8_t fill)
+{
+  const uint32_t payload = 2U + n;
+  std::vector<uint8_t> f = {0x5A,
+                            static_cast<uint8_t>(payload),
+                            static_cast<uint8_t>(payload >> 8),
+                            0x00,
+                            0xC5,
+                            0x09,
+                            0x83,
+                            0xDC,
+                            0x00,
+                            0x00,
+                            0x00,
+                            0x00,
+                            0x00,
+                            0x00,
+                            0x01};
+  f.push_back(Crc8(f.data(), f.size()));
+  f.push_back(static_cast<uint8_t>(n));
+  f.push_back(static_cast<uint8_t>(n >> 8));
+  f.insert(f.end(), n, fill);
+  f.push_back(Crc8(f.data(), f.size()));
+  return f;
+}
+}  // namespace
+
+TEST(FrameOfWholeUsbPacketsGetsOnePadByte)
+{
+  // 帧长为 64 的整数倍时后面补一个 0x00：USB 全速 bulk 包刚好填满时，主机侧的 USB 转
+  // 串口读要等下一个短包才交出数据 / A frame whose length is a multiple of 64 is
+  // followed by one 0x00: when it fills USB full-speed bulk packets exactly, the host's
+  // USB-serial read waits for the next short packet before handing the data over.
+  uint8_t out[Framer<1024>::kTxCapacity];
+  const uint8_t dap[1024] = {};
+  for (uint16_t n = 0; n <= 1024; ++n)
+  {
+    const size_t frame = Framer<1024>::PackResponse(dap, n, 0U, out);
+    out[frame] = 0xEEU;
+    const size_t sent = Framer<1024>::AppendPad(out, frame);
+    if (frame % 64U == 0U)
+    {
+      CHECK_EQ(sent, frame + 1U);
+      CHECK_EQ(out[frame], 0x00U);
+    }
+    else
+    {
+      CHECK_EQ(sent, frame);
+      CHECK_EQ(out[frame], 0xEEU);
+    }
+  }
+}
+
+TEST(PaddedStreamYieldsTheSameRequests)
+{
+  // 接收端丢掉 0x5A 之前的字节：补过字节的流与不补时交出同样的请求 / The receiver drops
+  // bytes before 0x5A: a padded stream hands out the same requests as an unpadded one.
+  std::vector<uint8_t> stream;
+  for (uint16_t n : {45U, 2U, 109U, 45U})
+  {
+    std::vector<uint8_t> f = RequestFrame(n, static_cast<uint8_t>(n));
+    const size_t len = f.size();
+    f.resize(Framer<1024>::kTxCapacity);
+    f.resize(Framer<1024>::AppendPad(f.data(), len));
+    stream.insert(stream.end(), f.begin(), f.end());
+  }
+  CHECK_EQ(stream.size(), 64U + 1U + 21U + 128U + 1U + 64U + 1U);
+  Framer<1024> fr;
+  Sink sink;
+  CHECK_EQ(fr.Feed(stream.data(), stream.size(), sink), 4U);
+  CHECK_EQ(sink.requests.size(), 4U);
+  CHECK(sink.requests.size() == 4U && sink.requests[0].size() == 45U &&
+        sink.requests[2].size() == 109U && sink.requests[3][0] == 45U);
+  CHECK_EQ(fr.Stats().crc_errors, 0U);
+  CHECK_EQ(fr.Stats().header_errors, 0U);
+  CHECK_EQ(fr.Stats().dropped, 3U);  // 三个补的字节 / the three pad bytes
+}
