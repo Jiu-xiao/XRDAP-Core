@@ -96,7 +96,7 @@ class SerialLink
     {
       return LibXR::ErrorCode::NOT_SUPPORT;
     }
-    stop_.store(false, std::memory_order_release);
+    stop_.store(0U, std::memory_order_release);
     started_ = true;
     if (starter_ != nullptr)
     {
@@ -124,7 +124,7 @@ class SerialLink
     {
       return LibXR::ErrorCode::OK;
     }
-    stop_.store(true, std::memory_order_release);
+    stop_.store(1U, std::memory_order_release);
     exec_.EndSession(Transport::SERIAL);
     if (exited_.Wait(kStopTimeoutMs) != LibXR::ErrorCode::OK)
     {
@@ -160,7 +160,7 @@ class SerialLink
   ///       task.
   bool Poll()
   {
-    if (stop_.load(std::memory_order_acquire))
+    if (stop_.load(std::memory_order_acquire) != 0U)
     {
       return false;
     }
@@ -272,7 +272,7 @@ class SerialLink
 
   LibXR::Thread thread_{};
   bool started_ = false;
-  std::atomic<bool> stop_{false};
+  std::atomic<uint32_t> stop_{0U};
   LibXR::Semaphore wait_sem_{0U};
   LibXR::Semaphore read_sem_{0U};
   LibXR::Semaphore tx_sem_{0U};

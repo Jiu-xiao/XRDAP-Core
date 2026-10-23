@@ -25,6 +25,11 @@ target_link_options(xrdap_core_unit PRIVATE -fsanitize=address,undefined)
 
 enable_testing()
 add_test(NAME xrdap_core_unit COMMAND xrdap_core_unit)
+# 原子变量只用 32 位整数（见 word_atomics.cmake）/ Atomics are 32-bit integers only (see
+# word_atomics.cmake).
+add_test(NAME xrdap_core_word_atomics
+         COMMAND ${CMAKE_COMMAND} -DROOT=${XRDAP_CORE_ROOT} -P
+                 "${CMAKE_CURRENT_LIST_DIR}/word_atomics.cmake")
 
 if(DEFINED LIBXR_DIR)
   set(LIBXR_SYSTEM linux)

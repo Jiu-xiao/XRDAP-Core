@@ -54,8 +54,8 @@ uint8_t Sampler::Start(const SubItemList& items, uint32_t period_us, bool stop_o
 
   ring_.Reset();
   gen_.fetch_add(1U, std::memory_order_acq_rel);
-  active_.store(true, std::memory_order_release);
-  if (task_mode_.load(std::memory_order_relaxed))
+  active_.store(1U, std::memory_order_release);
+  if (task_mode_.load(std::memory_order_relaxed) != 0U)
   {
     wake_.Post();
   }
@@ -64,8 +64,8 @@ uint8_t Sampler::Start(const SubItemList& items, uint32_t period_us, bool stop_o
 
 void Sampler::Stop()
 {
-  active_.store(false, std::memory_order_release);
-  if (task_mode_.load(std::memory_order_relaxed))
+  active_.store(0U, std::memory_order_release);
+  if (task_mode_.load(std::memory_order_relaxed) != 0U)
   {
     wake_.Post();
   }
@@ -89,7 +89,7 @@ const Sampler::ApCsw* Sampler::FindCsw(uint8_t ap) const
 
 void Sampler::RunTask(TickTimer& timer)
 {
-  task_mode_.store(true, std::memory_order_relaxed);
+  task_mode_.store(1U, std::memory_order_relaxed);
   for (;;)
   {
     (void)wake_.Wait(UINT32_MAX);
@@ -106,7 +106,7 @@ bool Sampler::Service(TickTimer& timer)
 {
   uint32_t count = ticks_.load(std::memory_order_relaxed);
   MemAp::Lock lock(mem_);
-  if (!active_.load(std::memory_order_acquire))
+  if (active_.load(std::memory_order_acquire) == 0U)
   {
     if (timer_on_)
     {
@@ -160,7 +160,7 @@ bool Sampler::Service(TickTimer& timer)
     // loop the time from the interrupt to here is the main loop finishing its current
     // command, not a sampling cost, so the interrupt time is used in task mode only.
     uint32_t start = t0;
-    if (task_mode_.load(std::memory_order_relaxed) &&
+    if (task_mode_.load(std::memory_order_relaxed) != 0U &&
         woke_tick_.load(std::memory_order_acquire) == step.tick)
     {
       const uint32_t woke = woke_us_.load(std::memory_order_relaxed);
@@ -175,7 +175,7 @@ bool Sampler::Service(TickTimer& timer)
 
     if (!keep_(keep_ctx_))
     {
-      active_.store(false, std::memory_order_release);
+      active_.store(0U, std::memory_order_release);
       timer.Stop();
       timer_on_ = false;
       return false;

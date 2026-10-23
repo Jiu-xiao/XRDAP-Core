@@ -52,7 +52,7 @@ class DapActivity
     if (wired)
     {
       last_wired_ms_.store(now_ms, std::memory_order_relaxed);
-      any_wired_.store(true, std::memory_order_relaxed);
+      any_wired_.store(1U, std::memory_order_relaxed);
     }
     commands_.fetch_add(1U, std::memory_order_relaxed);
     if (req[0] == Dap::kHostStatus && len >= 3U)
@@ -62,17 +62,17 @@ class DapActivity
       // "running" light, other types are neither; status 1 on, 0 off.
       if (req[1] == Dap::kHostStatusConnected)
       {
-        connected_.store(req[2] != 0U, std::memory_order_relaxed);
+        connected_.store(req[2] != 0U ? 1U : 0U, std::memory_order_relaxed);
       }
       else if (req[1] == Dap::kHostStatusRunning)
       {
-        running_.store(req[2] != 0U, std::memory_order_relaxed);
+        running_.store(req[2] != 0U ? 1U : 0U, std::memory_order_relaxed);
       }
     }
     else if (req[0] == Dap::kDisconnect)
     {
-      connected_.store(false, std::memory_order_relaxed);
-      running_.store(false, std::memory_order_relaxed);
+      connected_.store(0U, std::memory_order_relaxed);
+      running_.store(0U, std::memory_order_relaxed);
     }
   }
 
@@ -82,11 +82,11 @@ class DapActivity
     const bool quiet =
         Since(now_ms, last_ms_.load(std::memory_order_relaxed)) > kHostQuietMs;
     const bool wired =
-        any_wired_.load(std::memory_order_relaxed) &&
+        any_wired_.load(std::memory_order_relaxed) != 0U &&
         Since(now_ms, last_wired_ms_.load(std::memory_order_relaxed)) <= kHostQuietMs;
     return State{commands_.load(std::memory_order_relaxed),
-                 !quiet && connected_.load(std::memory_order_relaxed),
-                 !quiet && running_.load(std::memory_order_relaxed), wired};
+                 !quiet && connected_.load(std::memory_order_relaxed) != 0U,
+                 !quiet && running_.load(std::memory_order_relaxed) != 0U, wired};
   }
 
  private:
@@ -102,9 +102,9 @@ class DapActivity
   std::atomic<uint32_t> commands_{0U};
   std::atomic<uint32_t> last_ms_{0U};
   std::atomic<uint32_t> last_wired_ms_{0U};
-  std::atomic<bool> any_wired_{false};
-  std::atomic<bool> connected_{false};
-  std::atomic<bool> running_{false};
+  std::atomic<uint32_t> any_wired_{0U};
+  std::atomic<uint32_t> connected_{0U};
+  std::atomic<uint32_t> running_{0U};
 };
 
 }  // namespace XrDap

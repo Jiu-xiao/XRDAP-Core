@@ -235,7 +235,7 @@ ctest --test-dir build --output-on-failure
 
 ## 代码风格
 
-C++17，clang-format 21.1.8，配置与 libxr 相同（`.clang-format`）。公开头文件带中英文 Doxygen 注释，并写明可以在哪个执行上下文里调用。
+C++17，clang-format 21.1.8，配置与 libxr 相同（`.clang-format`）。公开头文件带中英文 Doxygen 注释，并写明可以在哪个执行上下文里调用。原子变量只用 32 位整数（`std::atomic<uint32_t>`）：CH32V307 只有字宽的原子指令，测试 `xrdap_core_word_atomics` 会检查。
 
 ## 许可证
 

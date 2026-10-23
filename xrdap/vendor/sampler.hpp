@@ -94,7 +94,7 @@ class Sampler
 
   /// @brief 是否正在采样 / Whether sampling is running.
   /// @note 任何上下文 / Any context.
-  bool Active() const { return active_.load(std::memory_order_acquire); }
+  bool Active() const { return active_.load(std::memory_order_acquire) != 0U; }
 
   /// @brief 清空帧缓冲和计数 / Clear the frame buffer and the counters.
   /// @note DAP 执行上下文 / DAP execution context.
@@ -121,7 +121,7 @@ class Sampler
       woke_us_.store(static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds()),
                      std::memory_order_relaxed);
       woke_tick_.store(count, std::memory_order_release);
-      if (task_mode_.load(std::memory_order_relaxed))
+      if (task_mode_.load(std::memory_order_relaxed) != 0U)
       {
         wake_.PostFromCallback(true);
       }
@@ -140,7 +140,7 @@ class Sampler
   /// @note 命令的任务里 / The command's task.
   void CommandEnd()
   {
-    if (yield_.End() && task_mode_.load(std::memory_order_relaxed))
+    if (yield_.End() && task_mode_.load(std::memory_order_relaxed) != 0U)
     {
       wake_.Post();
     }
@@ -173,7 +173,7 @@ class Sampler
   KeepFn keep_;
   void* keep_ctx_;
 
-  std::atomic<bool> active_{false};
+  std::atomic<uint32_t> active_{0U};
   std::atomic<uint32_t> gen_{0U};
   std::atomic<uint32_t> ticks_{0U};
   /// 中断在计数到这里时唤醒采样任务 / The interrupt wakes the sampling task at this
@@ -183,7 +183,7 @@ class Sampler
   /// (low 32 bits of µs) of the interrupt's wake; that tick's busy time counts from here.
   std::atomic<uint32_t> woke_tick_{0U};
   std::atomic<uint32_t> woke_us_{0U};
-  std::atomic<bool> task_mode_{false};
+  std::atomic<uint32_t> task_mode_{0U};
   LibXR::Semaphore wake_{0};
 
   // 以下在 MemAp::Lock 里读写 / The members below are read and written under
