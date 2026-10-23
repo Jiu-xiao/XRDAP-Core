@@ -50,8 +50,16 @@ class CommandYield
   /// @note 命令的任务里，不能在中断里 / The command's task, not from an interrupt.
   bool End()
   {
-    return waiting_.fetch_sub(1U, std::memory_order_seq_cst) == 1U &&
-           parked_.load(std::memory_order_seq_cst) != 0U;
+    if (waiting_.fetch_sub(1U, std::memory_order_seq_cst) != 1U)
+    {
+      return false;
+    }
+    // 最后一条做完：这一轮让过的那一帧作废，下一条命令开始等时有自己的一帧。和采样同时
+    // 发生时最多多读一帧，仍在“一帧”之内 / The last one is done: the frame used up in
+    // this round is cleared, so the next command to start waiting has its own frame.
+    // Racing with sampling costs at most one more frame, still within the one frame.
+    used_.store(0U, std::memory_order_seq_cst);
+    return parked_.load(std::memory_order_seq_cst) != 0U;
   }
 
   /// @brief 停下后醒来：命令都做完了就结束停下 / A wake while parked: ends the park

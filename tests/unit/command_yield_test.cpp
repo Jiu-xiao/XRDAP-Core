@@ -108,6 +108,28 @@ TEST(FrameInProgressIsTheOneFrame)
   CHECK(Wake(a, y, 1).parked);
 }
 
+TEST(NextCommandGetsItsOwnFrame)
+{
+  // 上一条命令开始等时正在读一帧，做完后下一条命令在下一个节拍前开始等、当时没有帧在
+  // 读：它仍有自己的一帧，到期的节拍照常采（CH32 上背靠背的 SUB_READ 曾因此单拍跳过）/
+  // The previous command started waiting during a frame; after it is done the next one
+  // starts waiting before the next tick with no frame being read: it still has its own
+  // frame, and the due tick is sampled (back-to-back SUB_READs on the CH32 used to skip
+  // single ticks this way).
+  TickAccount a;
+  a.Begin();
+  CommandYield y;
+  CHECK(DecideWake(a, y, 0).step.sample);
+  y.Begin();  // 读帧当中 / while the frame is read
+  a.OnDone(0, 10U, 1000U);
+  y.FrameEnd();
+  CHECK(!y.End());
+  y.Begin();  // 没有帧在读 / no frame being read
+  const WakeDecision d = Wake(a, y, 1);
+  CHECK(d.step.sample);
+  CHECK(!d.parked);
+}
+
 TEST(RestartClearsThePark)
 {
   TickAccount a;
