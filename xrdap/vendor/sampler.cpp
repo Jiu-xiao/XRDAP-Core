@@ -11,6 +11,10 @@ namespace
 {
 uint64_t NowUs() { return static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds()); }
 
+// 停下时中断唤醒的计数放到很远处，实际上不会到 / While parked, the interrupt's wake count
+// is put far away, where it is never reached in practice.
+constexpr uint32_t kParkedTicks = 0x40000000U;
+
 void MarkFailed(uint8_t* marks, uint16_t i)
 {
   marks[i >> 3] |= static_cast<uint8_t>(1U << (i & 7U));
@@ -124,12 +128,22 @@ bool Sampler::Service(TickTimer& timer)
     woke_tick_.store(UINT32_MAX, std::memory_order_relaxed);
     count = 0U;
     account_.Begin();
+    yield_.Restart();
     run_gen_ = gen;
     timer.Start(period_us_);
     timer_on_ = true;
   }
 
-  const TickAccount::Step step = account_.OnWake(count);
+  const WakeDecision decision = DecideWake(account_, yield_, count);
+  if (decision.parked)
+  {
+    // 给命令让路：中断不再按计数唤醒，最后一条命令做完时 CommandEnd 唤醒 / Yielding to
+    // commands: the interrupt no longer wakes on the count; CommandEnd wakes us when the
+    // last command has run.
+    wake_at_.store(count + kParkedTicks, std::memory_order_relaxed);
+    return false;
+  }
+  const TickAccount::Step& step = decision.step;
   if (step.sample)
   {
     const auto t0 = static_cast<uint32_t>(NowUs());
@@ -157,6 +171,7 @@ bool Sampler::Service(TickTimer& timer)
     }
     const uint32_t busy = static_cast<uint32_t>(NowUs()) - start;
     account_.OnDone(ticks_.load(std::memory_order_relaxed), busy, period_us_);
+    yield_.FrameEnd();
 
     if (!keep_(keep_ctx_))
     {

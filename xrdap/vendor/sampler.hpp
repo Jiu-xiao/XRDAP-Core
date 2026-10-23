@@ -37,6 +37,7 @@
 
 #include "semaphore.hpp"
 #include "timebase.hpp"
+#include "xrdap/vendor/command_yield.hpp"
 #include "xrdap/vendor/frame_ring.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/tick_account.hpp"
@@ -127,6 +128,24 @@ class Sampler
     }
   }
 
+  /// @brief 一条命令开始等执行：之后采样最多再读一帧就让路，直到命令都做完 / A command
+  ///        starts waiting to run: sampling then reads at most one more frame and yields
+  ///        until every command has run.
+  /// @note 命令的任务里，排队等执行轮次之前 / The command's task, before it queues for an
+  ///       execution turn.
+  void CommandBegin() { yield_.Begin(); }
+
+  /// @brief 一条命令执行完；最后一条做完时唤醒让路的采样 / A command has run; the last
+  ///        one wakes sampling that yielded.
+  /// @note 命令的任务里 / The command's task.
+  void CommandEnd()
+  {
+    if (yield_.End() && task_mode_.load(std::memory_order_relaxed))
+    {
+      wake_.Post();
+    }
+  }
+
   /// @brief 任务方式：采样任务的函数体，不返回 / Task mode: body of the sampling task;
   ///        never returns.
   /// @note 平台建的采样任务里调用 / Call from the platform's sampling task.
@@ -181,6 +200,7 @@ class Sampler
   uint32_t run_gen_ = 0U;
   bool timer_on_ = false;
   TickAccount account_;
+  CommandYield yield_;
 
   FrameRing ring_;
 };

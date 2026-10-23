@@ -135,6 +135,9 @@ class Executor
    public:
     Turn(Executor& e, Transport t) : e_(e)
     {
+      // 从排队起就算在等：采样最多再读一帧就让路 / Waiting counts from queueing on:
+      // sampling reads at most one more frame, then yields.
+      e_.vendor_.CommandBegin();
       TurnQueue::Arrival a = e_.turns_.Arrive(t);
       while (a == TurnQueue::Arrival::FULL)
       {
@@ -153,6 +156,7 @@ class Executor
       {
         e_.Wake(next).Post();
       }
+      e_.vendor_.CommandEnd();
     }
     Turn(const Turn&) = delete;
     Turn& operator=(const Turn&) = delete;

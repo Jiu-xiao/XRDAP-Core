@@ -88,6 +88,16 @@ class DapVendor
   ///       that drives SWD.
   [[noreturn]] void RunSamplerTask(Vendor::TickTimer& timer) { sampler_.RunTask(timer); }
 
+  /// @brief 一条命令开始等执行 / A command starts waiting to run.
+  /// @note 执行器在命令排队等执行轮次之前调用 / Called by the executor before the command
+  ///       queues for an execution turn.
+  void CommandBegin() { sampler_.CommandBegin(); }
+
+  /// @brief 一条命令执行完 / A command has run.
+  /// @note 执行器在交出执行轮次之后调用 / Called by the executor after it hands over the
+  ///       execution turn.
+  void CommandEnd() { sampler_.CommandEnd(); }
+
   /// @brief 节拍定时器中断调用 / Called by the tick timer interrupt.
   /// @note 中断上下文 / Interrupt context.
   void OnTickIsr() { sampler_.OnTickIsr(); }

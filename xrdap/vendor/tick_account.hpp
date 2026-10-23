@@ -69,6 +69,15 @@ class TickAccount
   /// @param period_us 周期 / Period.
   void OnDone(uint32_t count_after, uint32_t busy_us, uint32_t period_us);
 
+  /// @brief 计数为 count 时是否有节拍要采（OnWake 会采）/ Whether a tick is due at
+  ///        count (OnWake would sample it).
+  bool Due(uint32_t count) const;
+
+  /// @brief 放弃到 count 为止到期的节拍，下一个要采的是 count + 1；放弃的在下次采时计入
+  ///        跳拍 / Give up the ticks due up to count; the next to sample is count + 1,
+  ///        and the ones given up count as skipped at the next sample.
+  void Defer(uint32_t count);
+
   /// @brief 下一个要采的节拍 / Next tick to sample.
   uint32_t Next() const { return next_; }
 

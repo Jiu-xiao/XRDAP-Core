@@ -11,6 +11,19 @@ void TickAccount::Begin()
   next_ = 0U;
 }
 
+bool TickAccount::Due(uint32_t count) const
+{
+  return TickDue(count, next_) && !(has_last_ && count == last_);
+}
+
+void TickAccount::Defer(uint32_t count)
+{
+  if (TickDue(count, next_))
+  {
+    next_ = count + 1U;
+  }
+}
+
 TickAccount::Step TickAccount::OnWake(uint32_t count)
 {
   // 计数没走到下一个要采的节拍：停止或开始时的唤醒，或多余的一次唤醒。
