@@ -16,6 +16,7 @@ ORACLES = {
     "DAP-02": "cmsis-dap",
     "DAP-03": "cmsis-dap, protocol 2",
     "DAP-04": "cmsis-dap",
+    "DAP-05": "cmsis-dap, protocol 1, protocol 2, hardware",
     "TOOL-01": "hardware, measure",
     "TOOL-02": "hardware, measure",
     "TOOL-03": "hardware, measure",

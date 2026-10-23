@@ -3,6 +3,7 @@ branch catalogue (SPEC section 4.2)."""
 
 import struct
 
+from .. import link
 from .. import runner as R
 from ..dap import (ACK_FAULT, ACK_OK, AP_DRW, AP_TAR, DP_CTRL_STAT, DP_RDBUFF, DP_SELECT,
                    MATCH_MASK, MATCH_VALUE, TIMESTAMP, req)
@@ -170,3 +171,65 @@ def dap_commands(ctx):
         r = lk.xfer(b"\x3F")
         ctx.check("unknown command -> FF", r == b"\xFF", r.hex(" "))
         ctx.summary("command set as expected")
+
+
+def execute_of_length(n, tar):
+    """ExecuteCommands whose response is exactly n bytes (n >= 12): one DAP_Transfer that writes
+    TAR and reads DRW k times (3 + 4k), for an even n a second DAP_Transfer with one DP read
+    (7), then HostStatus (2) to make up the rest. The ExecuteCommands header adds 2."""
+    rest = n - 2 - 3 - (0 if n % 2 else 7)
+    reads, pad = rest // 4, (rest % 4) // 2
+    cmds = [bytes([0x05, 0, 1 + reads, req(1, 0, AP_TAR)]) + struct.pack("<I", tar)
+            + bytes([req(1, 1, AP_DRW)]) * reads]
+    if n % 2 == 0:
+        cmds.append(bytes([0x05, 0, 1, req(0, 1, DP_CTRL_STAT)]))
+    cmds += [b"\x01\x00\x00"] * pad
+    return bytes([0x7F, len(cmds)]) + b"".join(cmds)
+
+
+def resync(lk):
+    """After a missing response: send DAP_Info and drop everything up to its answer."""
+    lk.send(b"\x00\xFF")
+    for _ in range(20):
+        try:
+            if lk.recv(0.2)[:1] == b"\x00":
+                return
+        except TimeoutError:
+            pass
+
+
+@R.case("DAP-05", "Response lengths 12..packet size: every length arrives at once, link frame multiples included")
+def dap_response_lengths(ctx):
+    t = ctx.need_target()
+    with ctx.session() as (lk, dap, _):
+        p = dap.packet_size
+        # Frame bytes around each response on this link: serial wraps it in a Topic frame; USB packs
+        # it into MPS-sized packets (64 assumed for links without one).
+        overhead = len(link.pack_serial_request(b"")) if lk.kind == "serial" else 0
+        unit = getattr(lk, "mps", 64)
+        edge = {n for n in range(12, p + 1) if (n + overhead) % unit in (unit - 1, 0, 1)}
+        tar = t.at(t.BLOCK) & ~0x3FF
+        missing, wrong = {}, {}
+        for n in range(12, p + 1):
+            request = execute_of_length(n, tar)
+            for _ in range(5 if n in edge else 1):
+                try:
+                    r = lk.xfer(request, timeout=1.0)
+                except TimeoutError:
+                    missing[n] = missing.get(n, 0) + 1
+                    resync(lk)
+                    continue
+                if len(r) != n or r[:1] != b"\x7F":
+                    wrong[n] = f"{len(r)} B {r[:3].hex(' ')}"
+                    resync(lk)
+                    break
+        late = {**missing, **wrong}
+        ctx.metric("frame_overhead", overhead)
+        ctx.metric("edge_lengths", len(edge))
+        ctx.metric("missing", missing)
+        ctx.check("every response length arrives within 1 s", not missing,
+                  {n: ((n + overhead) % unit, v) for n, v in sorted(missing.items())})
+        ctx.check("every response complete and in order", not wrong, wrong)
+        ctx.summary(f"lengths 12..{p} ok" if not late else
+                    f"{len(late)} lengths missing, e.g. {sorted(late)[:6]} (frame mod {unit}: "
+                    f"{sorted({(n + overhead) % unit for n in late})})")

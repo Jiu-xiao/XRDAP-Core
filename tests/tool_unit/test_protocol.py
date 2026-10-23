@@ -118,6 +118,32 @@ class MinimumPeriodSearch(unittest.TestCase):
         self.assertEqual(best, 150)
 
 
+class ResponseLengthScan(unittest.TestCase):
+    @staticmethod
+    def response_length(request):
+        """Response length of an ExecuteCommands built from DAP_Transfer and DAP_HostStatus."""
+        pos, total = 2, 2
+        for _ in range(request[1]):
+            if request[pos] == 0x05:
+                pos, reads = pos + 3, 0
+                for _ in range(request[pos - 1]):
+                    reads += bool(request[pos] & 0x02)
+                    pos += 1 if request[pos] & 0x02 else 5
+                total += 3 + 4 * reads
+            else:
+                pos, total = pos + 3, total + 2
+        return total
+
+    def test_every_length_up_to_1024(self):
+        from xrdap_test.cases.dap_behavior import execute_of_length
+
+        for n in range(12, 1025):
+            request = execute_of_length(n, 0x20000000)
+            self.assertEqual(self.response_length(request), n)
+            self.assertLessEqual(request[2 + 2], 255)  # DAP_Transfer count
+            self.assertLessEqual(len(request), 1024)
+
+
 class Coverage(unittest.TestCase):
     def test_case_table_matches_registry(self):
         self.assertEqual(cli.cmd_coverage(None), 0)
