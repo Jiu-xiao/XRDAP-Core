@@ -48,6 +48,8 @@ TEST(ReadOnlySettingsQueriesAreFree)
 {
   CHECK(Class({0x86, 0x00}) == CommandClass::FREE);  // Wi-Fi 状态 / Wi-Fi status
   CHECK(Class({0x9F, 0x13}) == CommandClass::FREE);  // 射频设置 / radio settings
+  // 经无线读对端的设置 / The peer's settings over the radio.
+  CHECK(Class({0x9F, 0x30, 0x9F, 0x13}) == CommandClass::FREE);
 }
 
 TEST(SettingsWritesNeedTheOwner)
@@ -60,6 +62,9 @@ TEST(SettingsWritesNeedTheOwner)
     CHECK(Class({0x9F, op, 0x00}) == CommandClass::OWNER);
   }
   CHECK(Class({0x9F}) == CommandClass::OWNER);
+  // 转发给对端的其他命令要拥有探针 / Other commands forwarded to the peer need ownership.
+  CHECK(Class({0x9F, 0x30, 0x9F, 0x14, 0x01}) == CommandClass::OWNER);
+  CHECK(Class({0x9F, 0x30, 0x9F}) == CommandClass::OWNER);
 }
 
 TEST(TargetSwdAndSamplingNeedTheOwner)
