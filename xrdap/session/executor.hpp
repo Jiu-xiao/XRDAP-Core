@@ -202,30 +202,37 @@ class Executor
       WriteBusyReply(cmd, resp, cap, out);
       return true;
     }
-    const bool wired = t == Transport::USB || t == Transport::SERIAL;
     if (forwarder_ != nullptr && forwarder_(forwarder_ctx_, t, req, len, resp, cap, out))
     {
-      activity_.Observe(req, len, now, wired);
+      Ran(t, req, len, now);
       return true;
     }
     switch (vendor_.OnCommand(req, len, resp, cap, out))
     {
       case DapVendor::Result::HANDLED:
-        activity_.Observe(req, len, now, wired);
+        Ran(t, req, len, now);
         return true;
       case DapVendor::Result::REFUSED:
         return true;
       case DapVendor::Result::PASS:
         break;
     }
-    activity_.Observe(req, len, now, wired);
-    if (cmd == Dap::kDisconnect)
+    Ran(t, req, len, now);
+    return false;
+  }
+
+  // 一条命令执行了，不管由转发器、厂商扩展还是 libxr 执行：记进 DapActivity；
+  // DAP_Disconnect 结束主人的会话，别的传输随后可以接管。
+  // A command ran, whether the forwarder, the vendor extension or libxr ran it: record it
+  // in DapActivity; DAP_Disconnect ends the owner's session, and another transport may
+  // take over afterwards.
+  void Ran(Transport t, const uint8_t* req, uint16_t len, uint32_t now)
+  {
+    activity_.Observe(req, len, now, t == Transport::USB || t == Transport::SERIAL);
+    if (req[0] == Dap::kDisconnect)
     {
-      // DAP_Disconnect 结束主人的会话，别的传输随后可以接管 / DAP_Disconnect ends the
-      // owner's session; another transport may take over afterwards.
       session_.End(t);
     }
-    return false;
   }
 
   DapT& dap_;

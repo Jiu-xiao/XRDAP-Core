@@ -274,6 +274,40 @@ void TcpServedBetweenBackToBackUsbCommands()
   std::printf("  TcpServedBetweenBackToBackUsbCommands: worst %.2f ms\n", worst);
   EXPECT(worst < 25.0);
 }
+void ForwardedDisconnectEndsTheSession()
+{
+  // CH32 的无线主机把 USB 的命令全部交给转发器执行，DAP_Disconnect 也是：主人发的
+  // DAP_Disconnect 不管由谁执行都结束主人的会话（protocol 3.1），之后无线的命令不回忙。
+  // The CH32 radio host has its forwarder execute every USB command, DAP_Disconnect
+  // included: the owner's DAP_Disconnect ends its session whoever executes it (protocol
+  // 3.1), and radio commands are not busy afterwards.
+  Probe p;
+  p.exec.SetForwarder(
+      +[](void*, XrDap::Transport, const uint8_t* req, uint16_t, uint8_t* resp, uint16_t,
+          uint16_t& out)
+      {
+        resp[0] = req[0];
+        resp[1] = 0x00U;
+        out = 2U;
+        return true;
+      },
+      nullptr);
+  auto run = [&](XrDap::Transport t, uint8_t cmd)
+  {
+    const uint8_t req[2] = {cmd, 0x01};
+    uint8_t resp[8] = {};
+    uint16_t out = 0U;
+    p.exec.Execute(t, req, sizeof(req), resp, sizeof(resp), out);
+    return resp[1];
+  };
+  EXPECT(run(XrDap::Transport::USB, XrDap::Dap::kConnect) == 0x00U);
+  EXPECT(p.session.Owner() == XrDap::Transport::USB);
+  EXPECT(run(XrDap::Transport::USB, XrDap::Dap::kDisconnect) == 0x00U);
+  EXPECT(p.session.Owner() == XrDap::Transport::NONE);
+  EXPECT(run(XrDap::Transport::RADIO, XrDap::Dap::kConnect) == 0x00U);
+  EXPECT(p.session.Owner() == XrDap::Transport::RADIO);
+  std::printf("  ForwardedDisconnectEndsTheSession: done\n");
+}
 }  // namespace
 
 int main()
@@ -282,6 +316,7 @@ int main()
   TcpAnsweredWhileUsbWaits();
   BusyAnsweredWhileUsbOwnerWaits();
   TcpServedBetweenBackToBackUsbCommands();
+  ForwardedDisconnectEndsTheSession();
   std::printf("%d failed\n", g_failures);
   return g_failures == 0 ? 0 : 1;
 }
