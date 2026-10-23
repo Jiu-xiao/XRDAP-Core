@@ -63,12 +63,30 @@ def _usb_serial(dev):
         return None
 
 
+def _usb_product(dev):
+    import usb.core
+    import usb.util
+
+    try:
+        return usb.util.get_string(dev, dev.iProduct)
+    except (ValueError, usb.core.USBError, NotImplementedError):
+        return None
+
+
 def list_usb(vid_pid=DEFAULT_VID_PID):
+    """CMSIS-DAP probes with this VID:PID. Other devices share the VID:PID, so a device whose
+    product string is readable and lacks "CMSIS-DAP" (required by the CMSIS-DAP specification)
+    is left out; one whose string cannot be read (no access) is kept."""
     import usb.core
 
     devices = usb.core.find(find_all=True, idVendor=vid_pid[0], idProduct=vid_pid[1],
                             backend=_usb_backend())
-    return [(dev, _usb_serial(dev)) for dev in devices]
+    out = []
+    for dev in devices:
+        product = _usb_product(dev)
+        if product is None or "CMSIS-DAP" in product:
+            out.append((dev, _usb_serial(dev)))
+    return out
 
 
 class UsbLink(Link):
