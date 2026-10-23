@@ -38,9 +38,9 @@ class CommandYield
   void Begin()
   {
     waiting_.fetch_add(1U, std::memory_order_seq_cst);
-    if (framing_.load(std::memory_order_seq_cst))
+    if (framing_.load(std::memory_order_seq_cst) != 0U)
     {
-      used_.store(true, std::memory_order_seq_cst);
+      used_.store(1U, std::memory_order_seq_cst);
     }
   }
 
@@ -51,7 +51,7 @@ class CommandYield
   bool End()
   {
     return waiting_.fetch_sub(1U, std::memory_order_seq_cst) == 1U &&
-           parked_.load(std::memory_order_seq_cst);
+           parked_.load(std::memory_order_seq_cst) != 0U;
   }
 
   /// @brief 停下后醒来：命令都做完了就结束停下 / A wake while parked: ends the park
@@ -61,27 +61,27 @@ class CommandYield
   /// @note 只在采样的执行上下文里 / Sampling context only.
   bool Resume()
   {
-    if (!parked_.load(std::memory_order_seq_cst) ||
+    if (parked_.load(std::memory_order_seq_cst) == 0U ||
         waiting_.load(std::memory_order_seq_cst) != 0U)
     {
       return false;
     }
-    parked_.store(false, std::memory_order_seq_cst);
-    used_.store(false, std::memory_order_seq_cst);
+    parked_.store(0U, std::memory_order_seq_cst);
+    used_.store(0U, std::memory_order_seq_cst);
     return true;
   }
 
   /// 是否停下等命令 / Whether sampling is parked waiting for commands.
-  bool Parked() const { return parked_.load(std::memory_order_seq_cst); }
+  bool Parked() const { return parked_.load(std::memory_order_seq_cst) != 0U; }
 
   /// @brief 要开始读一帧：先标记，再用 MaySample 问能不能读 / About to read a frame:
   ///        mark it first, then ask MaySample whether it may be read.
   /// @note 只在采样的执行上下文里 / Sampling context only.
-  void FrameStart() { framing_.store(true, std::memory_order_seq_cst); }
+  void FrameStart() { framing_.store(1U, std::memory_order_seq_cst); }
 
   /// @brief 一帧读完或不读了 / A frame was read or will not be read.
   /// @note 只在采样的执行上下文里 / Sampling context only.
-  void FrameEnd() { framing_.store(false, std::memory_order_seq_cst); }
+  void FrameEnd() { framing_.store(0U, std::memory_order_seq_cst); }
 
   /// @brief 到期的节拍能不能采：没有命令在等时能；有命令在等时只能再采一帧 / Whether a
   ///        due tick may be sampled: yes with no command waiting; with commands waiting
@@ -93,21 +93,21 @@ class CommandYield
   {
     if (waiting_.load(std::memory_order_seq_cst) == 0U)
     {
-      used_.store(false, std::memory_order_seq_cst);
+      used_.store(0U, std::memory_order_seq_cst);
       return true;
     }
-    if (!used_.exchange(true, std::memory_order_seq_cst))
+    if (used_.exchange(1U, std::memory_order_seq_cst) == 0U)
     {
       return true;
     }
-    parked_.store(true, std::memory_order_seq_cst);
+    parked_.store(1U, std::memory_order_seq_cst);
     // 先标记停下再看一次：最后一条命令若在这之前做完，它没看到标记，不会唤醒采样。
     // Mark parked, then look again: a last command that finished before that did not
     // see the mark and will not wake sampling.
     if (waiting_.load(std::memory_order_seq_cst) == 0U)
     {
-      parked_.store(false, std::memory_order_seq_cst);
-      used_.store(false, std::memory_order_seq_cst);
+      parked_.store(0U, std::memory_order_seq_cst);
+      used_.store(0U, std::memory_order_seq_cst);
       return true;
     }
     return false;
@@ -117,19 +117,23 @@ class CommandYield
   /// @note 只在采样的执行上下文里 / Sampling context only.
   void Restart()
   {
-    parked_.store(false, std::memory_order_seq_cst);
-    used_.store(false, std::memory_order_seq_cst);
-    framing_.store(false, std::memory_order_seq_cst);
+    parked_.store(0U, std::memory_order_seq_cst);
+    used_.store(0U, std::memory_order_seq_cst);
+    framing_.store(0U, std::memory_order_seq_cst);
   }
 
  private:
+  // 标志用 32 位：QingKe V4（CH32V307）只有字宽的原子指令，单字节的 exchange 会变成
+  // 链接不到的 libatomic 调用 / Flags are 32-bit: QingKe V4 (CH32V307) has word-sized
+  // atomic instructions only, and a one-byte exchange becomes a libatomic call that does
+  // not link.
   std::atomic<uint32_t> waiting_{0U};
-  std::atomic<bool> parked_{false};
+  std::atomic<uint32_t> parked_{0U};
   /// 有命令在等以来读过或正在读一帧 / A frame was read or is being read since a command
   /// started waiting.
-  std::atomic<bool> used_{false};
+  std::atomic<uint32_t> used_{0U};
   /// 正在读一帧 / A frame is being read.
-  std::atomic<bool> framing_{false};
+  std::atomic<uint32_t> framing_{0U};
 };
 
 /// 一次醒来的决定 / Decision on one wake.
