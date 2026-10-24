@@ -21,7 +21,7 @@ jobs:
       # 需要的 libxr：SetCommandHook 带厂商命令长度钩子、WaitForWork、SetSessionResetGate
       # （feat/xrdap-r2-swd-loop）/ The libxr required: SetCommandHook with the vendor
       # length hook, WaitForWork and SetSessionResetGate (feat/xrdap-r2-swd-loop).
-      LIBXR_COMMIT: f96473d6bc45345f3e5fddbd2025684a3cde7ef9
+      LIBXR_COMMIT: 6497a26e63a2c9eaa3060bb090baf1eada7f4d3b
     steps:
       - uses: actions/checkout@v4
       - name: libxr
