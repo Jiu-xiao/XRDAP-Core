@@ -11,7 +11,7 @@
 // 其余的标准命令由 libxr 执行。执行过的命令记进 DapActivity。装钩子时也把厂商命令的
 // 长度函数交给 libxr（SetCommandHook 的第三个参数），DAP_ExecuteCommands /
 // DAP_QueueCommands 里因此可以放厂商命令，与 CMSIS-DAP 参考实现相同。需要 libxr
-// 8c261a7e 或之后。
+// 1c06b874 或之后。
 //
 // The single command executor: every call into the libxr DAP instance on the probe
 // (USB's Step and the other transports' ExecuteExternal) goes through here, one command
@@ -27,7 +27,7 @@
 // Commands that ran are recorded in DapActivity. The hook is installed together with the
 // vendor length function (the third argument of SetCommandHook), so vendor commands may
 // sit inside DAP_ExecuteCommands / DAP_QueueCommands, as in the CMSIS-DAP reference
-// implementation. Needs libxr 8c261a7e or later.
+// implementation. Needs libxr 1c06b874 or later.
 
 #include <cstdint>
 

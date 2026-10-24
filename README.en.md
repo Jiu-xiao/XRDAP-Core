@@ -39,7 +39,7 @@ This repository touches no peripherals. Time, mutexes and semaphores come from l
 
 ## Integration
 
-libxr 8c261a7e (`feat/xrdap-r2-swd-loop`) or later is required: `Executor` hands the vendor command length to libxr through its `SetCommandHook(hook, ctx, length)`, which lets vendor commands sit inside `DAP_ExecuteCommands`, and `StepUsb` waits for USB commands in its `WaitForWork` without holding a turn.
+libxr 1c06b874 (`feat/xrdap-r2-swd-loop`) or later is required: `Executor` hands the vendor command length to libxr through its `SetCommandHook(hook, ctx, length)`, which lets vendor commands sit inside `DAP_ExecuteCommands`, `StepUsb` waits for USB commands in its `WaitForWork` without holding a turn, and its `SetSessionResetGate` lets a USB attach or detach reset SWD only when USB owns the probe or nobody does.
 
 A firmware project includes `xrdap_core.cmake`, adds the sources to its own target and makes the libxr headers and the platform's `xrdap_port.hpp` visible to them:
 
