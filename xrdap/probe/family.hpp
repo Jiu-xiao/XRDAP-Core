@@ -30,5 +30,7 @@ inline constexpr uint16_t kBcdF103 = 0x0400U;
 /// ESP32-S2 的 USB 设备（描述符布局与 S3 相同）/ The ESP32-S2 USB device (same
 /// descriptor layout as the S3).
 inline constexpr uint16_t kBcdEsp32S2 = 0x0500U;
+/// CH32V305 板（CH32V305-LINKE）/ The CH32V305 board (CH32V305-LINKE).
+inline constexpr uint16_t kBcdCh32V305 = 0x0600U;
 
 }  // namespace XrDap::Family
