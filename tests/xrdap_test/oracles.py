@@ -9,6 +9,7 @@ Tokens: cmsis-dap | arm | protocol <section> | decision <id> | hardware | measur
 ORACLES = {
     "SWD-01": "cmsis-dap, measure",
     "SWD-02": "cmsis-dap",
+    "SWD-03": "decision V305-1",
     "PERF-01": "measure",
     "PERF-02": "measure, cmsis-dap",
     "PERF-03": "measure, cmsis-dap",

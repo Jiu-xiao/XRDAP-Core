@@ -102,6 +102,17 @@ def do_run(args, out_dir):
                 ctx.log("scratch RAM restored")
             except Exception as exc:
                 ctx.log(f"scratch RAM NOT restored: {exc}")
+        # End the session so the next client on another link is not left busy: USB has no lease
+        # and keeps its ownership until a DAP_Disconnect or a bus reset.
+        try:
+            end = linkmod.open_link(args.link)
+            try:
+                end.xfer(bytes([0x84, 0x00]))
+                end.xfer(bytes([0x03]))
+            finally:
+                end.close()
+        except Exception as exc:
+            ctx.log(f"final DAP_Disconnect not sent: {exc}")
     meta["tools"] = {k: v for r in results for k, v in r.metrics.items()
                      if k in ("openocd", "probe-rs", "pyocd")}
     R.write_result(out_dir, meta, results)

@@ -199,6 +199,9 @@ class TopicParser:
     def __init__(self, topic=TOPIC_RESP):
         self.buf = bytearray()
         self.topic = topic
+        # Diagnostics: bytes dropped while searching for a frame (pad bytes included), headers
+        # rejected after a 0x5A, and frames whose data CRC failed.
+        self.skipped = self.bad_headers = self.crc_errors = 0
 
     def feed(self, data: bytes):
         self.buf.extend(data)
@@ -206,19 +209,25 @@ class TopicParser:
         while True:
             start = self.buf.find(b"\x5A")
             if start < 0:
+                self.skipped += len(self.buf)
                 self.buf.clear()
                 return out
+            self.skipped += start
             del self.buf[:start]
             if len(self.buf) < 16:
                 return out
             data_len = int.from_bytes(self.buf[1:4], "little")
             if self.buf[14] != 1 or data_len > 2 + 4096 or crc8(self.buf[:15]) != self.buf[15]:
+                self.bad_headers += 1
+                self.skipped += 1
                 del self.buf[:1]
                 continue
             total = 16 + data_len + 1
             if len(self.buf) < total:
                 return out
             if crc8(self.buf[:16 + data_len]) != self.buf[16 + data_len]:
+                self.crc_errors += 1
+                self.skipped += 1
                 del self.buf[:1]
                 continue
             topic = int.from_bytes(self.buf[4:8], "little")

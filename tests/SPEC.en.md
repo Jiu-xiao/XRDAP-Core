@@ -106,6 +106,7 @@ When the link column is `all`, the case applies to all links of section 1.1.
 |---|---|---|---|---|
 | SWD-01 | `auto` | all | cmsis-dap, measure | SWD clock sweep: actual clock estimate, data integrity at each clock, highest stable clock |
 | SWD-02 | `auto` | all | cmsis-dap | Pipelining depth 1 to N: response order and data |
+| SWD-03 | `auto` | all | decision V305-1 | Robustness: more requests in flight than the advertised packet count are all answered in order |
 | PERF-01 | `auto` | all | measure | Round-trip time: DAP_Info and one DP read, median / p99 |
 | PERF-02 | `auto` | all | measure, cmsis-dap | Block read/write throughput: 4 MHz, 10 MHz, highest stable clock |
 | PERF-03 | `auto` | all | measure, cmsis-dap | Small-data access: 4 B and 64 B operations per second at random addresses |
@@ -173,6 +174,8 @@ Each entry gives the purpose, the setup and the pass criteria. Where no setup is
 SWD-01 Clock sweep. At each requested clock of section 2.1: reconnect; use `DAP_ExecuteCommands` to pack N 256-bit and N 64-bit `DAP_SWJ_Sequence` commands (the two packet kinds have almost the same transfer overhead); take the difference of the mean times of the fastest fifth of each, and divide by N × 192 clocks to get the actual clock (this is the bit rate of `DAP_SWJ_Sequence`; when the firmware implements the sequence path and the transfer path differently, the two clocks may differ, and the speed of the transfer path is reflected by the throughput at the same clock); then run `--rounds` (default 20) rounds of random-data block write and read-back (1 KiB per block below 1 MHz, 4 KiB from 1 MHz up; at most 5 s per clock, at least one round), compared by CRC32. For each clock the actual clock, the number of failed rounds and the throughput are recorded, together with the highest requested clock without errors (the highest stable clock). Pass (`cmsis-dap`: at every clock the probe accepts, the transfers must be correct): 0 errors at every clock; the actual clock and the highest stable clock are only recorded.
 
 SWD-02 Pipelining depth. Depth d runs from 1 to min(the packet count reported by DAP_Info 0xFE, the depth the link allows): the serial link is request-response by protocol, so the depth is only 1. At each depth, 256 word-read requests (write TAR plus read DRW) are sent, always keeping d in flight. Pass: at each depth the responses arrive in send order and all values are correct.
+
+SWD-03 Beyond the advertised packet count (robustness; the oracle is user decision V305-1, not the CMSIS-DAP specification, which forbids the host from exceeding the packet count reported by DAP_Info 0xFE; SWD-02 and every pipelined read or write keep to that limit). 256 word-read requests are sent while always keeping the advertised count + 2 in flight. Pass: every request is answered, none is lost, the responses arrive in send order with correct values, and the link is still request-response afterwards.
 
 ### 4.2 Standard DAP performance and behaviour
 

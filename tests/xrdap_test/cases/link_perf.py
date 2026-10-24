@@ -124,6 +124,31 @@ def swd_pipelining(ctx):
         ctx.summary(f"depth 1..{top} ok, {rates[top]} req/s at {top}")
 
 
+@R.case("SWD-03", "Robustness: more requests in flight than the advertised packet count, all answered in order")
+def swd_overrun(ctx):
+    """Robustness, not CMSIS-DAP conformance (the specification forbids the host from exceeding the
+    advertised packet count): decision V305-1 asks that a probe still answers every request, in
+    order, with nothing lost, when a host does."""
+    t = ctx.need_target()
+    with ctx.session() as (lk, dap, _):
+        depth = dap.packet_count + 2
+        ctx.metric("advertised_packet_count", dap.packet_count)
+        ctx.metric("depth", depth)
+        requests = [read_word_request(t.at(t.WORDS + 4 * (i % 32))) for i in range(256)]
+        try:
+            responses = pipeline(lk, requests, depth)
+        except TimeoutError:
+            responses = None
+        ctx.check(f"256 responses at depth {depth}, none lost", responses is not None)
+        if responses is not None:
+            bad = [i for i, r in enumerate(responses)
+                   if len(r) < 7 or r[2] != 1 or int.from_bytes(r[3:7], "little") != 0x5A000000 | i % 32]
+            ctx.check("responses in order with the right data", not bad, f"first bad {bad[:3]}" if bad else "")
+        ctx.check("link still in step afterwards", lk.xfer(b"\x00\xFF")[:1] == b"\x00")
+        ctx.summary(f"depth {depth} (advertised {dap.packet_count}): "
+                    + ("all answered in order" if responses is not None else "responses lost"))
+
+
 @R.case("PERF-01", "Round trip: DAP_Info and one DP read, median / p99")
 def perf_rtt(ctx):
     with ctx.session(fixture=False) as (lk, dap, _):
