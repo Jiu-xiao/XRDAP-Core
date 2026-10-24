@@ -1,0 +1,12 @@
+# Target profile format. Keep real profiles next to your own results, not in this repository,
+# and pass them with --target PATH. The addresses are placeholders.
+name = "example-cortex-m4"
+dpidr = 0x2BA01477                      # optional: TGT-01 compares it
+openocd_target = "target/your-chip.cfg"  # OpenOCD target script (TOOL-01, STAB-02, STAB-08)
+probe_rs_chip = "YOUR-CHIP"             # probe-rs --chip (TOOL-02)
+pyocd_target = "your_chip"              # pyOCD -t (TOOL-03)
+scratch = { base = 0x20001000, size = 0x4400 }     # RAM the tool may overwrite; restored after the run
+dump = { base = 0x08000000, size = 0x20000 }       # region read by the TOOL cases
+flash_test = { base = 0x0801C000, size = 0x4000 }  # flash the TOOL cases and STAB-02 may erase
+# counter = 0x20000000        # optional: a u32 the target program increments (cores without CYCCNT)
+# fault_address = 0xFFFFF000  # optional: an address whose read faults

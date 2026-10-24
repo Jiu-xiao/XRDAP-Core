@@ -2,116 +2,191 @@
 
 [中文](README.md)
 
-Firmware code shared by the XR-DAP family of CMSIS-DAP probes, built on [libxr](https://github.com/xrobot-org/libxr). It holds the XR vendor extension (multi-address read/write, pointer-chain reads, periodic sampling on the probe), the status light rule of the whole family and the probe identity. Each probe firmware uses this repository as a git submodule:
+Firmware code shared by the XR-DAP family of CMSIS-DAP probes, built on [libxr](https://github.com/xrobot-org/libxr). It holds the XR vendor extension (multi-address read/write, pointer-chain reads, periodic sampling on the probe), the session owner and command executor that let one transport drive the probe at a time, the serial DAP link, the status light rule of the whole family, the probe identity and the family constants. Each probe firmware uses this repository as a git submodule:
 
 | Firmware | Chip | How sampling runs |
 |---|---|---|
-| [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3, ESP32-C3, ESP32 | sampling task, woken by a gptimer |
+| [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3, ESP32-C3, ESP32 | sampling task, ticks counted by a gptimer |
 | [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8) | STM32F103 (STLINK-V2 board) | polled from the main loop, no RTOS |
-| XRDAP-CH32V307 | CH32V307 | sampling task, woken by TIM7 |
+| XRDAP-CH32V307 | CH32V307 | sampling task, ticks counted by TIM7 |
 
-The host tool is [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host). The protocol between probe and host is in [docs/protocol.en.md](docs/protocol.en.md): section 3 is the vendor extension, section 4 the probe identity.
+The host tool is [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host). The protocol between probe and host is in [docs/protocol.en.md](docs/protocol.en.md): section 1 is the serial frame, section 3 the vendor extension (protocol version 2) and the session owner, section 4 the probe identity.
 
 ## Contents
 
-| Directory | Contents |
-|---|---|
-| `vendor/` | `DapVendor` (commands 0x80 to 0x85, attached to the command hook of the libxr DAP class), `MemAp` (MEM-AP access along pointer chains over SWD), `Sampler` and `FrameRing` (sampling on the probe), `DapActivity` (DAP activity and the host state reported by DAP_HostStatus) |
-| `light/` | `StatusLight`: computes the colour and level of the light at each moment from the link, the settings and DAP activity |
-| `probe/` | `SetProbeInfo`, `FormatSerial`: DAP_Info strings and the serial rule |
-| `docs/` | protocol document |
+Headers are included as `xrdap/<module>/<file>.hpp`:
 
-This repository does not touch hardware. Time, mutexes and semaphores come from libxr's `Timebase`, `Mutex` and `Semaphore`, which all three platforms have; what libxr has no common abstraction for is supplied by the platform: creating the sampling task (ESP pins it to the core that drives SWD), the tick timer (`Vendor::TickTimer`), the LED driver and pins, and the query whether USB is configured.
+| Module | Contents |
+|---|---|
+| `session/` | `SessionOwner`: which transport (USB, serial, TCP, radio) owns the probe and when its session ends; `Executor`: every call into the libxr DAP instance goes through it, and a transport that is not the owner gets busy |
+| `vendor/` | `DapVendor` (commands 0x80 to 0x85), `MemAp` (MEM-AP access along pointer chains over SWD), `Sampler`, `TickAccount`, `FrameRing` (sampling on the probe), request checks and reply space |
+| `serial/` | `Framer` (assembles and packs serial frames), `SerialLink` (the serial worker thread) |
+| `activity/` | `DapActivity`: DAP activity and the host state reported by DAP_HostStatus |
+| `light/` | `StatusLight`: computes the colour and level of the light at each moment from the link, the settings and DAP activity |
+| `probe/` | `SetProbeInfo`, `FormatSerial` (DAP_Info strings and the serial rule), `family.hpp` (VID:PID and each board's bcdDevice), `chip_uid.hpp` (the STM32F1/CH32V3 unique id) |
+| `protocol/` | CMSIS-DAP command ids and status values |
+| `swd/` | `F1Gpio`: the register-level SWD pin shared by the STM32F1 and the CH32V3 |
+
+This repository touches no peripherals. Time, mutexes and semaphores come from libxr's `Timebase`, `Mutex` and `Semaphore`; what libxr has no common abstraction for is supplied by the platform:
+
+| Platform supplies | Notes |
+|---|---|
+| `xrdap_port.hpp` | the sample ring size `Port::kRingBytes` and its spinlock `Port::SpinLock` |
+| tick timer | implements `Vendor::TickTimer`; its interrupt calls `DapVendor::OnTickIsr()` |
+| threads | the sampling task, the USB DAP thread, the serial thread (ESP pins them to the core that drives SWD) |
+| session ends | USB reset count, TCP disconnect, radio session id and ping |
+| lights | driver, pins and the query whether USB is configured |
 
 ## Integration
 
-A firmware project includes `xrdap_core.cmake`, adds the sources to its own target and makes the libxr headers visible to them:
+A firmware project includes `xrdap_core.cmake`, adds the sources to its own target and makes the libxr headers and the platform's `xrdap_port.hpp` visible to them:
 
 ```cmake
 include(${CMAKE_CURRENT_SOURCE_DIR}/third_party/xrdap-core/xrdap_core.cmake)
 target_sources(app.elf PRIVATE ${XRDAP_CORE_SOURCES})
-target_include_directories(app.elf PRIVATE ${XRDAP_CORE_INCLUDE_DIRS})
+target_include_directories(app.elf PRIVATE ${XRDAP_CORE_INCLUDE_DIRS} port)
 ```
 
-An ESP-IDF project passes `XRDAP_CORE_SOURCES` and `XRDAP_CORE_INCLUDE_DIRS` to `idf_component_register`. The sampling ring buffer is 4 KB by default; platforms with more RAM raise it with a compile definition, and INFO reports the actual size:
+An ESP-IDF project passes `XRDAP_CORE_SOURCES` and `XRDAP_CORE_INCLUDE_DIRS` to `idf_component_register`.
 
-```cmake
-target_compile_definitions(${COMPONENT_LIB} PRIVATE XRDAP_RING_BYTES=16384)
+`xrdap_port.hpp` gives the size of the sample ring (a power of two, reported by INFO) and its lock. Sampling and SUB_READ both hold the lock briefly (at most a 1 KB copy), and it must not block: a blocking mutex would put the highest-priority sampling task to sleep while SUB_READ copies, and ticks would be late at short periods. The dual-core ESP32 parts use a portMUX, a single-core RTOS a critical section, a single-loop probe a no-op:
+
+```cpp
+// xrdap_port.hpp (single-core FreeRTOS)
+#pragma once
+#include <cstdint>
+
+#include "FreeRTOS.h"
+#include "task.h"
+
+namespace XrDap::Port
+{
+inline constexpr uint32_t kRingBytes = 4096;
+
+class SpinLock
+{
+ public:
+  void Lock() { taskENTER_CRITICAL(); }
+  void Unlock() { taskEXIT_CRITICAL(); }
+};
+}  // namespace XrDap::Port
 ```
 
 ## Usage
 
-### Identity
+### Session owner and executor
 
-The serial is the prefix `XRobot-XRDAP-` followed by the chip's unique id in upper-case hex, identical to the USB device serial, so host tools recognise one probe across USB, serial and TCP:
+Every DAP command enters the libxr DAP instance through `Executor`: USB with `StepUsb()`, the other transports with `Execute()`. The executor holds one lock, runs one command at a time and notes which transport each command belongs to. The first transport that runs a command other than `DAP_Info` becomes the session owner; until its session ends the other transports get busy (`command FF` for standard commands, `command 05` for vendor commands), while `DAP_Info` is answered as usual:
 
 ```cpp
-#include "probe_identity.hpp"
+#include "xrdap/session/executor.hpp"
 
-static char serial[XrDap::SerialBufferSize(12)];
-XrDap::FormatSerial(chip_uid, 12, serial);  // XRobot-XRDAP-0123456789ABCDEF01234567
-XrDap::SetProbeInfo(dap, {"XR-DAP-F103", "STLINK-V2", serial, "0.6.0"});
+static XrDap::SessionOwner session;
+static XrDap::DapVendor vendor(swd, session);
+static XrDap::DapActivity activity;
+static XrDap::Executor<Dap> exec(dap, session, vendor, activity);  // installs the hook
+
+session.SetLease(XrDap::Transport::SERIAL, XrDap::kSerialLeaseMs);  // serial: 5 s silence ends it
+session.SetUsbResetSource(&BusResetCount, &usb);  // a changed count ends the USB session
 ```
+
+`BusResetCount` stands for the platform function that returns the USB bus reset count. Each transport ends its session its own way:
+
+```cpp
+// TCP server: every request
+exec.Execute(XrDap::Transport::TCP, req, len, resp, sizeof(resp), out);
+// client disconnected
+exec.EndSession(XrDap::Transport::TCP);
+
+// Radio remote: run the commands the peer sends; a ping with an unchanged session id
+// refreshes the lease, a changed or zero session id ends the session
+exec.Execute(XrDap::Transport::RADIO, req, len, resp, sizeof(resp), out);
+exec.TouchSession(XrDap::Transport::RADIO);
+exec.EndSession(XrDap::Transport::RADIO);
+```
+
+When a session ends, sampling stops and the extension commands need a new `DAP_Connect`.
 
 ### Single-loop probe
 
-A probe without an RTOS handles DAP commands in its main loop and calls `Poll()` between two commands. After every tick control returns to the main loop, which handles one command, so sampling does not starve DAP commands. When USB goes away it calls `OnTransportClosed()`: sampling stops and the extension commands need a new `DAP_Connect`:
+A probe without an RTOS alternates USB commands and sampling in its main loop. The tick timer only counts ticks in its interrupt, and `Poll()` samples a tick once it sees a new one:
 
 ```cpp
-#include "dap_vendor.hpp"
+#include "xrdap/session/executor.hpp"
 
-static XrDap::DapVendor vendor(swd, kDapPacketSize);
-dap.SetCommandHook(&XrDap::DapVendor::Hook, &vendor);
+class TimTick final : public XrDap::Vendor::TickTimer
+{
+ public:
+  void Start(uint32_t period_us) override { HwTimerStart(period_us); }
+  void Stop() override { HwTimerStop(); }
+};
+static TimTick tick;
 
-bool usb_up = false;
+extern "C" void TIM2_IRQHandler()
+{
+  HwTimerClear();
+  vendor.OnTickIsr();
+}
+
 for (;;)
 {
-  const bool up = dap.IsInited();
-  if (usb_up && !up)
-  {
-    vendor.OnTransportClosed();
-  }
-  usb_up = up;
-  vendor.Poll();
-  (void)dap.Step(vendor.Sampling() ? 0 : 1);  // no waiting in Step while sampling
+  vendor.Poll(tick);
+  (void)exec.StepUsb(vendor.Sampling() ? 0 : 1);  // no waiting in Step while sampling
 }
 ```
 
+`HwTimerStart`, `HwTimerStop` and `HwTimerClear` stand for the platform's own timer code: count at 1 µs and interrupt every `period_us`.
+
 ### Probe with an RTOS
 
-The platform implements `Vendor::TickTimer`: `Start()` makes a hardware timer interrupt once per period from `start_us` on and call `WakeSamplerFromIsr()` in the interrupt; when the timer cannot do it (for example the period exceeds its counter) it returns `false` and the sampling task wakes every 1 ms instead. `Start()` and `Stop()` are both called from the sampling task, so the timer interrupt is allocated on the sampling core. The sampling task should have the highest priority on the core that drives SWD; it blocks between ticks and other tasks run in the gaps:
+The sampling task blocks on a semaphore; the tick interrupt and a stop both wake it, and it should have the highest priority on the core that drives SWD. The USB DAP thread calls `StepUsb()` in a loop:
 
 ```cpp
-#include "dap_vendor.hpp"
-
-class TimerTick final : public XrDap::Vendor::TickTimer
-{
- public:
-  explicit TimerTick(XrDap::DapVendor& vendor) : vendor_(vendor) {}
-
-  bool Start(uint64_t start_us, uint32_t period_us) override
-  {
-    // count at 1 MHz, reload at period_us, counter starts at (now - start_us) % period_us
-    return HwTimerStart(start_us, period_us, &TimerTick::OnIrq, this);
-  }
-  void Stop() override { HwTimerStop(); }
-
- private:
-  static void OnIrq(void* ctx) { static_cast<TimerTick*>(ctx)->vendor_.WakeSamplerFromIsr(); }
-  XrDap::DapVendor& vendor_;
-};
-
-static XrDap::DapVendor vendor(swd, kDapPacketSize);
-static TimerTick tick(vendor);
 static LibXR::Thread sampler;
 sampler.Create<XrDap::DapVendor*>(
-    &vendor, [](XrDap::DapVendor* v) { v->RunSamplerTask(&tick); }, "dap_sampler", 3072,
+    &vendor, [](XrDap::DapVendor* v) { v->RunSamplerTask(tick); }, "dap_sampler", 3072,
     LibXR::Thread::Priority::REALTIME);
-vendor.SetUsbResetSource(&BusResetCount, &usb);  // USB-started sampling stops on a bus reset
-dap.SetCommandHook(&XrDap::DapVendor::Hook, &vendor);
+
+static LibXR::Thread usb_dap;
+usb_dap.Create<XrDap::Executor<Dap>*>(
+    &exec,
+    [](XrDap::Executor<Dap>* e)
+    {
+      for (;;)
+      {
+        (void)e->StepUsb(1);
+      }
+    },
+    "dap_usb", 4096, LibXR::Thread::Priority::HIGH);
 ```
 
-`HwTimerStart`, `HwTimerStop` and `BusResetCount` stand for the platform's own timer and USB code. A probe with several transports calls `SetTransport()` before executing DAP commands; the serial link calls `NotifySerialActivity()` on every request, and serial-started sampling stops after 5 s without one; a network server calls `OnNetworkClientConnected()` when a client connects and `OnTransportClosed()` when it leaves. DAP commands that do not go through `Hook()` (for example those forwarded to a radio peer) are counted as DAP activity with `Observe()`.
+`StepUsb(wait_ms)` keeps the executor's lock while it waits for a command, so other transports wait at most `wait_ms` longer.
+
+### Serial link
+
+```cpp
+#include "xrdap/serial/serial_link.hpp"
+
+static XrDap::SerialLink<XrDap::Executor<Dap>, 1024> link(exec, uart);
+link.Start();  // creates the worker with LibXR::Thread
+```
+
+When the thread that runs DAP must be pinned to one core, supply a starter with `SetThreadStarter()` before `Start()`. Without an RTOS no thread is needed: call `link.Feed(data, len)` outside an interrupt; it returns the number of requests it ran.
+
+### Identity and family constants
+
+```cpp
+#include "xrdap/probe/chip_uid.hpp"
+#include "xrdap/probe/family.hpp"
+#include "xrdap/probe/probe_identity.hpp"
+
+static char serial[XrDap::SerialBufferSize(XrDap::kF1ChipUidBytes)];
+XrDap::FormatSerial(XrDap::F1ChipUid(), XrDap::kF1ChipUidBytes, serial);
+XrDap::SetProbeInfo(dap, {"XR-DAP-F103", "STLINK-V2", serial, "0.6.0"});
+// USB device descriptor: XrDap::Family::kUsbVid, kUsbPid, kBcdF103
+```
+
+The serial is the prefix `XRobot-XRDAP-` followed by the chip's unique id in upper-case hex, identical to the USB device serial.
 
 ### Status light
 
@@ -131,7 +206,7 @@ dap.SetCommandHook(&XrDap::DapVendor::Hook, &vendor);
 The host state is cleared by `DAP_Disconnect` or 5 s without commands. `Frame::level` is in permille of the LED's peak and includes the activity pulse; an on/off-only LED goes dark while `Frame::pulse` is above 500:
 
 ```cpp
-#include "status_light.hpp"
+#include "xrdap/light/status_light.hpp"
 
 XrDap::Light::StatusLight rule(NowMs());
 for (;;)
@@ -139,16 +214,28 @@ for (;;)
   const uint32_t now = NowMs();
   const auto link = usb_configured() ? XrDap::Light::Link::WIRED : XrDap::Light::Link::NONE;
   const XrDap::Light::Frame f =
-      rule.Update(link, XrDap::Light::Setting::NONE, vendor.Activity().Read(now), now);
+      rule.Update(link, XrDap::Light::Setting::NONE, activity.Read(now), now);
   const uint32_t level = kPeak * f.level / 1000;  // kPeak: the LED's peak level, 0 to 255
   SetLed(f.color.r * level / 255, f.color.g * level / 255, f.color.b * level / 255);
   Sleep(20);
 }
 ```
 
+## Tests
+
+`tests/` builds the pure logic that depends on neither hardware nor libxr (session owner, busy replies, reply space, SUB_START checks, tick accounting, frame ring, item parsing, serial frames, DAP activity, serial numbers) on a PC and runs it with ctest under AddressSanitizer and UBSan; the oracles come from the protocol document, the CMSIS-DAP specification and the user's decisions. Given a libxr path, every source and public header is also compiled against libxr's Linux system layer:
+
+```bash
+cmake -S tests -B build -DLIBXR_DIR=<libxr>
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Tests on real probes are separate: the test specification of the whole family, [tests/SPEC.en.md](tests/SPEC.en.md), and the tool that runs it, `xrdap_test` ([usage](tests/README.en.md)), which runs the same cases against any XR-DAP probe over USB, serial, TCP, USB/IP or the wireless pair.
+
 ## Code style
 
-C++17, clang-format 21.1.8 with libxr's configuration (`.clang-format`). Public headers carry bilingual Doxygen comments.
+C++17, clang-format 21.1.8 with libxr's configuration (`.clang-format`). Public headers carry bilingual Doxygen comments and state the execution context they may be called from.
 
 ## License
 
