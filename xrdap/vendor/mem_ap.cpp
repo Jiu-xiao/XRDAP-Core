@@ -35,6 +35,11 @@ constexpr uint32_t kCtrlStatErrors = (1U << 1) | (1U << 5) | (1U << 7);
 // WDERRCLR, ORUNERRCLR.
 constexpr uint32_t kAbortClearAll = 0x1EU;
 
+// 先取返回码、再判 ack：TxnOk(swd_.Xxx(ack), ack) 这种写法里两个实参的求值顺序没有规定，
+// 不开优化时会先读到调用前的 ack（NO_ACK），于是把成功的传输判成失败。
+// Take the error code first and judge the ack after: in `TxnOk(swd_.Xxx(ack), ack)` the
+// argument evaluation order is unspecified, and without optimisation the ack is read before
+// the call (NO_ACK), which turns a good transfer into a failure.
 bool TxnOk(LibXR::ErrorCode ec, Ack ack)
 {
   return ec == LibXR::ErrorCode::OK && ack == Ack::OK;
@@ -89,29 +94,32 @@ bool MemAp::ReadCsw(uint8_t ap, uint32_t& csw)
   for (int attempt = 0; attempt < 2; ++attempt)
   {
     Ack ack = Ack::NO_ACK;
-    if (TxnOk(swd_.SetSelectCached(select, ack), ack) &&
-        TxnOk(swd_.ApReadTxn(kApCsw, csw, ack), ack))
+    // 事务先执行、再按它的 ack 判定，见 TxnOk 的注释 / Run the transfer first, judge its
+    // ack after; see the comment on TxnOk.
+    const auto STEP = [&ack](LibXR::ErrorCode ec) { return TxnOk(ec, ack); };
+
+    bool ok = STEP(swd_.SetSelectCached(select, ack)) &&
+              STEP(swd_.ApReadTxn(kApCsw, csw, ack));
+    if (ok && (csw & kCswHprot1) != 0U)
     {
-      if ((csw & kCswHprot1) != 0U)
+      return true;
+    }
+    if (ok)
+    {
+      uint32_t idr = 0U;
+      ok = STEP(swd_.SetSelectCached(select | kSelectBankIdr, ack)) &&
+           STEP(swd_.ApReadTxn(kApIdr, idr, ack)) &&
+           STEP(swd_.SetSelectCached(select, ack));
+      if (ok)
       {
+        const uint32_t type = idr & 0xFU;
+        const bool mem_ap = ((idr >> 13) & 0xFU) == 8U;
+        if (mem_ap && (type == 1U || type == 5U || type == 8U))
+        {
+          csw |= kCswAhbProt;
+        }
         return true;
       }
-      uint32_t idr = 0U;
-      if (!TxnOk(swd_.SetSelectCached(select | kSelectBankIdr, ack), ack) ||
-          !TxnOk(swd_.ApReadTxn(kApIdr, idr, ack), ack) ||
-          !TxnOk(swd_.SetSelectCached(select, ack), ack))
-      {
-        ClearSticky();
-        swd_.InvalidateSelectCache();
-        continue;
-      }
-      const uint32_t type = idr & 0xFU;
-      const bool mem_ap = ((idr >> 13) & 0xFU) == 8U;
-      if (mem_ap && (type == 1U || type == 5U || type == 8U))
-      {
-        csw |= kCswAhbProt;
-      }
-      return true;
     }
     ClearSticky();
     swd_.InvalidateSelectCache();
@@ -132,7 +140,8 @@ bool MemAp::SetSize(ApState& st, uint8_t size)
     return true;
   }
   Ack ack = Ack::NO_ACK;
-  if (!TxnOk(swd_.ApWriteTxn(kApCsw, csw, ack), ack))
+  const LibXR::ErrorCode EC = swd_.ApWriteTxn(kApCsw, csw, ack);
+  if (!TxnOk(EC, ack))
   {
     st.written = false;
     ClearSticky();
@@ -146,8 +155,14 @@ bool MemAp::SetSize(ApState& st, uint8_t size)
 bool MemAp::ReadWord(uint32_t addr, uint32_t& val)
 {
   Ack ack = Ack::NO_ACK;
-  if (!TxnOk(swd_.ApWriteTxn(kApTar, addr, ack), ack) ||
-      !TxnOk(swd_.ApReadTxn(kApDrw, val, ack), ack))
+  const LibXR::ErrorCode TAR = swd_.ApWriteTxn(kApTar, addr, ack);
+  if (!TxnOk(TAR, ack))
+  {
+    ClearSticky();
+    return false;
+  }
+  const LibXR::ErrorCode DRW = swd_.ApReadTxn(kApDrw, val, ack);
+  if (!TxnOk(DRW, ack))
   {
     ClearSticky();
     return false;
@@ -168,14 +183,15 @@ bool MemAp::CheckCtrlStat()
 {
   Ack ack = Ack::NO_ACK;
   uint32_t rb = 0U;
-  if (!TxnOk(swd_.DpReadRdbuffTxn(rb, ack), ack))
+  const LibXR::ErrorCode DRAIN = swd_.DpReadRdbuffTxn(rb, ack);
+  if (!TxnOk(DRAIN, ack))
   {
     ClearSticky();
     return false;
   }
   uint32_t cs = 0U;
-  if (!TxnOk(swd_.DpReadTxn(DpReadReg::CTRL_STAT, cs, ack), ack) ||
-      (cs & kCtrlStatErrors) != 0U)
+  const LibXR::ErrorCode CS = swd_.DpReadTxn(DpReadReg::CTRL_STAT, cs, ack);
+  if (!TxnOk(CS, ack) || (cs & kCtrlStatErrors) != 0U)
   {
     ClearSticky();
     return false;
@@ -186,8 +202,14 @@ bool MemAp::CheckCtrlStat()
 bool MemAp::WriteWord(uint32_t addr, uint32_t val)
 {
   Ack ack = Ack::NO_ACK;
-  if (!TxnOk(swd_.ApWriteTxn(kApTar, addr, ack), ack) ||
-      !TxnOk(swd_.ApWriteTxn(kApDrw, val, ack), ack))
+  const LibXR::ErrorCode TAR = swd_.ApWriteTxn(kApTar, addr, ack);
+  if (!TxnOk(TAR, ack))
+  {
+    ClearSticky();
+    return false;
+  }
+  const LibXR::ErrorCode DRW = swd_.ApWriteTxn(kApDrw, val, ack);
+  if (!TxnOk(DRW, ack))
   {
     ClearSticky();
     return false;
