@@ -34,6 +34,8 @@ struct FakeDap
   using Hook = bool (*)(void*, const uint8_t*, uint16_t, uint8_t*, uint16_t, uint16_t&);
   using LengthHook = bool (*)(void*, const uint8_t*, uint16_t, uint16_t&);
   void SetCommandHook(Hook, void*, LengthHook) {}
+  using SessionResetGate = bool (*)(void*);
+  void SetSessionResetGate(SessionResetGate, void*) {}
   LibXR::ErrorCode WaitForWork(uint32_t) { return LibXR::ErrorCode::OK; }
   LibXR::ErrorCode Step(uint32_t) { return LibXR::ErrorCode::OK; }
   LibXR::ErrorCode ExecuteExternal(const uint8_t*, uint16_t, uint8_t*, uint16_t,

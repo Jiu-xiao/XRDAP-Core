@@ -48,8 +48,9 @@ namespace XrDap
 
 /// @brief 命令执行器 / Command executor.
 /// @tparam DapT libxr DAP 类（提供 WaitForWork、Step、ExecuteExternal、带长度钩子的
-///         SetCommandHook）/ libxr DAP class (providing WaitForWork, Step,
-///         ExecuteExternal and SetCommandHook with the length hook).
+///         SetCommandHook 和 SetSessionResetGate）/ libxr DAP class (providing
+///         WaitForWork, Step, ExecuteExternal, SetCommandHook with the length hook and
+///         SetSessionResetGate).
 template <typename DapT>
 class Executor
 {
@@ -69,6 +70,7 @@ class Executor
       : dap_(dap), session_(session), vendor_(vendor), activity_(activity)
   {
     dap_.SetCommandHook(&Executor::Hook, this, &Executor::LengthHook);
+    dap_.SetSessionResetGate(&Executor::MayResetSession, this);
   }
 
   /// @brief 设置平台转发器 / Set the platform forwarder.
@@ -173,6 +175,17 @@ class Executor
                    uint16_t cap, uint16_t& out)
   {
     return static_cast<Executor*>(ctx)->OnCommand(req, len, resp, cap, out);
+  }
+
+  // USB 绑定或解绑后 libxr 要复位 SWD 的会话状态时来问：只在 USB 拥有探针或没有主人时
+  // 复位，别的传输拥有探针时它的 SWD 状态不动。在 Step 线程里、执行轮次之内调用 /
+  // libxr asks before resetting the SWD session state after a USB bind or unbind: reset
+  // only when USB owns the probe or nobody does; while another transport owns it, its SWD
+  // state is left alone. Called in the Step thread, within an execution turn.
+  static bool MayResetSession(void* ctx)
+  {
+    const Transport owner = static_cast<Executor*>(ctx)->session_.Owner();
+    return owner == Transport::USB || owner == Transport::NONE;
   }
 
   // libxr 解析 DAP_ExecuteCommands / DAP_QueueCommands 时问厂商命令的长度。接收端扫描

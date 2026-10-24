@@ -72,6 +72,25 @@ class FakeDap
     ctx_ = ctx;
   }
 
+  using SessionResetGate = bool (*)(void*);
+  void SetSessionResetGate(SessionResetGate gate, void* ctx)
+  {
+    gate_ = gate;
+    gate_ctx_ = ctx;
+  }
+
+  // 像 libxr 一样：USB 绑定或解绑后，Step 线程按门的回答复位 SWD 的会话状态 / As libxr
+  // does: after a USB bind or unbind the Step thread resets the SWD session state as the
+  // gate allows.
+  void Rebind()
+  {
+    if (gate_ == nullptr || gate_(gate_ctx_))
+    {
+      swd_open_ = false;
+    }
+  }
+  bool swd_open_ = true;
+
   ErrorCode WaitForWork(uint32_t timeout_ms)
   {
     if (usb_.Wait(timeout_ms) != ErrorCode::OK)
@@ -130,6 +149,8 @@ class FakeDap
 
   Hook hook_ = nullptr;
   void* ctx_ = nullptr;
+  SessionResetGate gate_ = nullptr;
+  void* gate_ctx_ = nullptr;
   LibXR::Semaphore usb_{0};
   uint8_t usb_cmd_ = XrDap::Dap::kInfo;
 };
@@ -308,6 +329,28 @@ void ForwardedDisconnectEndsTheSession()
   EXPECT(p.session.Owner() == XrDap::Transport::RADIO);
   std::printf("  ForwardedDisconnectEndsTheSession: done\n");
 }
+
+void UsbRebindLeavesAnotherOwnersSwdAlone()
+{
+  // USB 绑定或解绑只属于 USB 自己的会话：无线拥有探针时不复位 SWD，USB 拥有或没有主人
+  // 时照常复位（CH32 上开关一次 USB 曾让无线会话的 DP 读一直回 ACK 7）/ A USB bind or
+  // unbind belongs to USB's own session: with the radio owning the probe SWD is not
+  // reset, with USB owning it or nobody it is (opening and closing USB once on the CH32
+  // used to make every DP read of the radio session answer ACK 7).
+  Probe p;
+  const uint8_t connect[2] = {XrDap::Dap::kConnect, 0x01};
+  uint8_t resp[8] = {};
+  uint16_t out = 0U;
+  p.exec.Execute(XrDap::Transport::RADIO, connect, sizeof(connect), resp, sizeof(resp),
+                 out);
+  EXPECT(p.session.Owner() == XrDap::Transport::RADIO);
+  p.dap.Rebind();
+  EXPECT(p.dap.swd_open_);
+  p.exec.EndSession(XrDap::Transport::RADIO);
+  p.dap.Rebind();
+  EXPECT(!p.dap.swd_open_);
+  std::printf("  UsbRebindLeavesAnotherOwnersSwdAlone: done\n");
+}
 }  // namespace
 
 int main()
@@ -317,6 +360,7 @@ int main()
   BusyAnsweredWhileUsbOwnerWaits();
   TcpServedBetweenBackToBackUsbCommands();
   ForwardedDisconnectEndsTheSession();
+  UsbRebindLeavesAnotherOwnersSwdAlone();
   std::printf("%d failed\n", g_failures);
   return g_failures == 0 ? 0 : 1;
 }
