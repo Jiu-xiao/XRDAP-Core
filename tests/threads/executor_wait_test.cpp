@@ -17,6 +17,7 @@
 #include "semaphore.hpp"
 #include "xrdap/activity/dap_activity.hpp"
 #include "xrdap/protocol/dap_ids.hpp"
+#include "xrdap/serial/serial_link.hpp"
 #include "xrdap/session/executor.hpp"
 #include "xrdap/session/session_owner.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
@@ -351,6 +352,20 @@ void UsbRebindLeavesAnotherOwnersSwdAlone()
   EXPECT(!p.dap.swd_open_);
   std::printf("  UsbRebindLeavesAnotherOwnersSwdAlone: done\n");
 }
+void SerialWriteResultsAreUnambiguous()
+{
+  // 串口链路不带完成通知地写：OK 表示已进队列、一定发出，不重试；FULL 和 BUSY 表示没进
+  // 队列，重试；别的返回值丢帧。阻塞写的 TIMEOUT 含义不定，链路不用它 / The serial link
+  // writes without completion notification: OK means queued and it will be sent, no
+  // retry; FULL and BUSY mean nothing was queued, retry; any other value drops the frame.
+  // A blocking write's TIMEOUT is ambiguous, and the link does not use it.
+  using Link = XrDap::SerialLink<XrDap::Executor<FakeDap>, 64U>;
+  EXPECT(Link::TxStepFor(ErrorCode::OK) == Link::TxStep::QUEUED);
+  EXPECT(Link::TxStepFor(ErrorCode::FULL) == Link::TxStep::RETRY);
+  EXPECT(Link::TxStepFor(ErrorCode::BUSY) == Link::TxStep::RETRY);
+  EXPECT(Link::TxStepFor(ErrorCode::NOT_SUPPORT) == Link::TxStep::FAILED);
+  std::printf("  SerialWriteResultsAreUnambiguous: done\n");
+}
 }  // namespace
 
 int main()
@@ -361,6 +376,7 @@ int main()
   TcpServedBetweenBackToBackUsbCommands();
   ForwardedDisconnectEndsTheSession();
   UsbRebindLeavesAnotherOwnersSwdAlone();
+  SerialWriteResultsAreUnambiguous();
   std::printf("%d failed\n", g_failures);
   return g_failures == 0 ? 0 : 1;
 }

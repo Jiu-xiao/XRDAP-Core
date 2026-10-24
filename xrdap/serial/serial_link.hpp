@@ -204,6 +204,29 @@ class SerialLink
     return true;
   }
 
+  /// 一次不带完成通知的写的结果 / Outcome of one write without completion notification.
+  enum class TxStep : uint8_t
+  {
+    QUEUED,  ///< 已复制进队列，会发出 / Copied into the queue; it will be sent.
+    RETRY,   ///< 没进队列，稍后重试 / Not queued; retry later.
+    FAILED,  ///< 写不了，丢掉这一帧 / Cannot write; the frame is dropped.
+  };
+
+  /// @brief 把写端口的返回值归类 / Classify the write port's return value.
+  /// @note 纯函数，任何上下文 / Pure function, any context.
+  static constexpr TxStep TxStepFor(LibXR::ErrorCode ec)
+  {
+    if (ec == LibXR::ErrorCode::OK)
+    {
+      return TxStep::QUEUED;
+    }
+    if (ec == LibXR::ErrorCode::FULL || ec == LibXR::ErrorCode::BUSY)
+    {
+      return TxStep::RETRY;
+    }
+    return TxStep::FAILED;
+  }
+
   /// @brief 统计快照 / Statistics snapshot.
   /// @note 任何任务，帧统计在执行时可能正被更新 / Any task; frame counts may be updating
   ///       meanwhile.
@@ -245,18 +268,25 @@ class SerialLink
 
   void WriteFrame(size_t len)
   {
-    // 写端口放不下时立即返回 FULL，这里自己重试到超时 / The write port returns FULL at
-    // once when the queue cannot take the frame, so this retries up to the timeout.
+    // 不带完成通知地写：返回 OK 时这一帧已复制进写端口的队列、一定会发出；FULL、BUSY
+    // 时什么都没进队列，可以重试。阻塞写的 TIMEOUT 含义不定（可能已排队、也可能没交出），
+    // 重试会重发、当作已发会丢帧，所以不用它。
+    // Write without completion notification: on OK the frame has been copied into the
+    // write port's queue and will be sent; on FULL or BUSY nothing was queued, so a retry
+    // is safe. A blocking write's TIMEOUT is ambiguous (maybe queued, maybe not
+    // submitted): retrying would send twice and assuming sent would lose the frame, so
+    // it is not used.
     for (uint32_t waited = 0U;; ++waited)
     {
-      LibXR::WriteOperation op(tx_sem_, kTxTimeoutMs);
+      LibXR::WriteOperation op;
       const LibXR::ErrorCode ec = uart_.Write(LibXR::ConstRawData(tx_frame_, len), op);
-      if (ec == LibXR::ErrorCode::OK)
+      const TxStep step = TxStepFor(ec);
+      if (step == TxStep::QUEUED)
       {
         tx_bytes_.fetch_add(static_cast<uint32_t>(len), std::memory_order_relaxed);
         return;
       }
-      if (ec != LibXR::ErrorCode::FULL || waited >= kTxTimeoutMs)
+      if (step == TxStep::FAILED || waited >= kTxTimeoutMs)
       {
         tx_errors_.fetch_add(1U, std::memory_order_relaxed);
         return;
@@ -275,7 +305,6 @@ class SerialLink
   std::atomic<uint32_t> stop_{0U};
   LibXR::Semaphore wait_sem_{0U};
   LibXR::Semaphore read_sem_{0U};
-  LibXR::Semaphore tx_sem_{0U};
   LibXR::Semaphore exited_{0U};
 
   FramerT framer_;
