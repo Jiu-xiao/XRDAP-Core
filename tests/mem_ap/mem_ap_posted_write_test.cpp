@@ -6,12 +6,13 @@
 // 永远只回当前的粘滞位，不结算。期望：故障报在写它的那个条目上（0x1F），下一个条目照常写
 // 进去（0x00 且值落地）。
 //
-// V305-2: a MEM-AP write is posted, so a bus fault may only come back on the next AP access,
-// while a DP CTRL/STAT read does not wait for the AP transaction. This test models that with
-// a fake SWD: a DRW write always answers OK and records "submitted"; success or failure only
-// shows up as FAULT on the next AP access or DP RDBUFF read, and a CTRL/STAT read only
-// returns the sticky bits as they are now. The failure must be reported on the item that
-// wrote it (0x1F) and the next item must still be written (0x00 with the value in memory).
+// V305-2: a MEM-AP write is posted, so a bus fault may only come back on the next AP
+// access, while a DP CTRL/STAT read does not wait for the AP transaction. This test
+// models that with a fake SWD: a DRW write always answers OK and records "submitted";
+// success or failure only shows up as FAULT on the next AP access or DP RDBUFF read, and
+// a CTRL/STAT read only returns the sticky bits as they are now. The failure must be
+// reported on the item that wrote it (0x1F) and the next item must still be written (0x00
+// with the value in memory).
 
 #include <cstdint>
 #include <cstdio>
@@ -105,8 +106,8 @@ class FakeMemApSwd final : public LibXR::Debug::Swd
   bool trace = false;
 
  private:
-  /// 结算上一次 posted 写：成功即无事，失败回 FAULT / Settle the last posted write: nothing
-  /// to do on success, FAULT when it failed.
+  /// 结算上一次 posted 写：成功即无事，失败回 FAULT / Settle the last posted write:
+  /// nothing to do on success, FAULT when it failed.
   bool Settle(Ack& ack)
   {
     if (!pending_.valid)
@@ -309,8 +310,8 @@ TEST(WriteToGoodAddressSucceeds)
 }
 
 // V305-2：写到会出总线故障的地址，故障必须报在这个条目上，下一个条目要照常写进去 /
-// V305-2: writing to an address that faults must report it on that item and leave the next
-// item working.
+// V305-2: writing to an address that faults must report it on that item and leave the
+// next item working.
 TEST(WriteFaultIsReportedOnTheItemThatWroteIt)
 {
   FakeMemApSwd swd;

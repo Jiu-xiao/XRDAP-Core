@@ -38,8 +38,8 @@ constexpr uint32_t kAbortClearAll = 0x1EU;
 // 先取返回码、再判 ack：TxnOk(swd_.Xxx(ack), ack) 这种写法里两个实参的求值顺序没有规定，
 // 不开优化时会先读到调用前的 ack（NO_ACK），于是把成功的传输判成失败。
 // Take the error code first and judge the ack after: in `TxnOk(swd_.Xxx(ack), ack)` the
-// argument evaluation order is unspecified, and without optimisation the ack is read before
-// the call (NO_ACK), which turns a good transfer into a failure.
+// argument evaluation order is unspecified, and without optimisation the ack is read
+// before the call (NO_ACK), which turns a good transfer into a failure.
 bool TxnOk(LibXR::ErrorCode ec, Ack ack)
 {
   return ec == LibXR::ErrorCode::OK && ack == Ack::OK;
@@ -98,8 +98,8 @@ bool MemAp::ReadCsw(uint8_t ap, uint32_t& csw)
     // ack after; see the comment on TxnOk.
     const auto STEP = [&ack](LibXR::ErrorCode ec) { return TxnOk(ec, ack); };
 
-    bool ok = STEP(swd_.SetSelectCached(select, ack)) &&
-              STEP(swd_.ApReadTxn(kApCsw, csw, ack));
+    bool ok =
+        STEP(swd_.SetSelectCached(select, ack)) && STEP(swd_.ApReadTxn(kApCsw, csw, ack));
     if (ok && (csw & kCswHprot1) != 0U)
     {
       return true;
@@ -176,9 +176,9 @@ bool MemAp::ReadWord(uint32_t addr, uint32_t& val)
 // 粘滞错误位。
 // The write is posted and a DP CTRL/STAT read does not wait for the AP transaction: a bus
 // fault that arrives after that read is missed and lands on the next item (the TAR write
-// returns FAULT), so the final recovery write never happens. Read DP RDBUFF first, which is
-// held off with WAIT until the posted write completes and answers FAULT when it failed,
-// then look at the sticky error bits in CTRL/STAT.
+// returns FAULT), so the final recovery write never happens. Read DP RDBUFF first, which
+// is held off with WAIT until the posted write completes and answers FAULT when it
+// failed, then look at the sticky error bits in CTRL/STAT.
 bool MemAp::CheckCtrlStat()
 {
   Ack ack = Ack::NO_ACK;
