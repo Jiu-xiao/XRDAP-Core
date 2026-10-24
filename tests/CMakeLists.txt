@@ -63,4 +63,16 @@ if(DEFINED LIBXR_DIR)
   target_link_libraries(xrdap_core_threads PRIVATE xr pthread)
   target_compile_options(xrdap_core_threads PRIVATE -Wall -Wextra)
   add_test(NAME xrdap_core_threads COMMAND xrdap_core_threads)
+
+  # MEM-AP 写路径：假 SWD 模拟 posted 写和迟到的故障（V305-2）/ MEM-AP write path against a
+  # fake SWD that models a posted write and a late fault (V305-2).
+  add_executable(xrdap_mem_ap_test
+                 "${CMAKE_CURRENT_LIST_DIR}/mem_ap/mem_ap_posted_write_test.cpp"
+                 "${XRDAP_CORE_ROOT}/xrdap/vendor/mem_ap.cpp")
+  target_include_directories(xrdap_mem_ap_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/stub"
+                                                       ${XRDAP_CORE_INCLUDE_DIRS}
+                                                       ${XRDAP_LIBXR_USB_DIRS})
+  target_link_libraries(xrdap_mem_ap_test PRIVATE xr pthread)
+  target_compile_options(xrdap_mem_ap_test PRIVATE -Wall -Wextra)
+  add_test(NAME xrdap_mem_ap_test COMMAND xrdap_mem_ap_test)
 endif()
