@@ -107,6 +107,8 @@ The session ends in the following cases; afterwards any transport may become the
 
 While serial owns the probe, the host sends a request at least every 5 seconds (SUB_READ will do).
 
+USB attaching and detaching (the host opening or closing USB, a re-enumeration) belongs to USB's own session: the probe resets its SWD and DAP state for it only when USB is the owner or nobody is; while another transport owns the probe, that transport's SWD connection, clock and settings stay as they are.
+
 #### Sampling
 
 Sampling belongs to the session that started it:
