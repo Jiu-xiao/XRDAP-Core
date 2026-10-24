@@ -155,10 +155,24 @@ bool MemAp::ReadWord(uint32_t addr, uint32_t& val)
   return true;
 }
 
-// 写是 posted 的，写完读一次 CTRL/STAT 看有没有粘滞错误。
+// 写是 posted 的，DP 的 CTRL/STAT 读不会等 AP 事务完成：总线故障来晚时这一次读看不到，
+// 于是故障被算到下一个条目上（TAR 写回 FAULT），最后一条恢复写也就发不出去。所以先读一次
+// DP RDBUFF 把这次写等到底——它在写完成前只回 WAIT，写失败时回 FAULT——再看 CTRL/STAT 的
+// 粘滞错误位。
+// The write is posted and a DP CTRL/STAT read does not wait for the AP transaction: a bus
+// fault that arrives after that read is missed and lands on the next item (the TAR write
+// returns FAULT), so the final recovery write never happens. Read DP RDBUFF first, which is
+// held off with WAIT until the posted write completes and answers FAULT when it failed,
+// then look at the sticky error bits in CTRL/STAT.
 bool MemAp::CheckCtrlStat()
 {
   Ack ack = Ack::NO_ACK;
+  uint32_t rb = 0U;
+  if (!TxnOk(swd_.DpReadRdbuffTxn(rb, ack), ack))
+  {
+    ClearSticky();
+    return false;
+  }
   uint32_t cs = 0U;
   if (!TxnOk(swd_.DpReadTxn(DpReadReg::CTRL_STAT, cs, ack), ack) ||
       (cs & kCtrlStatErrors) != 0U)
