@@ -135,7 +135,9 @@ class UsbLink(Link):
                 break
 
     def send(self, request):
-        self.ep_out.write(request, 2000)
+        written = self.ep_out.write(request, 2000)
+        if written != len(request):
+            raise TimeoutError(f"USB request partly written: {written} of {len(request)} B")
         if request and len(request) % self.mps == 0:
             # A request of whole packets has no short packet to end it (protocol, USB notes).
             self.ep_out.write(b"", 2000)
