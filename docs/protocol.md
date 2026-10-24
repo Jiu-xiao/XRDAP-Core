@@ -475,12 +475,12 @@ USB 是主人时，经串口发来的 READ：`81 05`；经串口发来的 `DAP_T
 | Info ID | 含义 | 内容 |
 |---|---|---|
 | 0x01 | 厂商 | `XRobot` |
-| 0x02 | 产品 | ESP32-S3：`XR-DAP-S3`；ESP32-S2：`XR-DAP-S2`；ESP32-C3：`XR-DAP-C3`；ESP32：`XR-DAP-ESP32`；STM32F103：`XR-DAP-F103`；CH32V307：`XR-DAP-V307` |
-| 0x03 | 序列号 | `XRobot-XRDAP-` 加芯片唯一标识的大写十六进制：ESP 为出厂 MAC（eFuse 中的 6 字节，12 位），例如 `XRobot-XRDAP-0123456789AB`；STM32F103 和 CH32V307 为 12 字节 UID（24 位） |
+| 0x02 | 产品 | ESP32-S3：`XR-DAP-S3`；ESP32-S2：`XR-DAP-S2`；ESP32-C3：`XR-DAP-C3`；ESP32：`XR-DAP-ESP32`；STM32F103：`XR-DAP-F103`；CH32V307：`XR-DAP-V307`；CH32V305：`XR-DAP-V305` |
+| 0x03 | 序列号 | `XRobot-XRDAP-` 加芯片唯一标识的大写十六进制：ESP 为出厂 MAC（eFuse 中的 6 字节，12 位），例如 `XRobot-XRDAP-0123456789AB`；STM32F103、CH32V307 和 CH32V305 为 12 字节 UID（24 位） |
 | 0x04 | CMSIS-DAP 协议版本 | `2.0.0` |
 | 0x05、0x06 | 目标芯片厂商、名称 | 不提供（空） |
 | 0x07 | 板子厂商 | `XRobot` |
-| 0x08 | 板子名 | XRDAP-ESP 与产品相同；XRDAP-F103C8 为 `STLINK-V2`；XRDAP-CH32V307 为板子名，例如 `XR-DAP-WDAP` |
+| 0x08 | 板子名 | XRDAP-ESP 与产品相同；XRDAP-F103C8 为 `STLINK-V2`；XRDAP-CH32V307 为板子名，例如 `XR-DAP-WDAP`，CH32V305 板为 `CH32V305-LINKE` |
 | 0x09 | 固件版本 | 各固件自己的版本号 |
 
 序列号对 USB、串口、TCP 等各种连接相同，上位机据此认出同一块探针。

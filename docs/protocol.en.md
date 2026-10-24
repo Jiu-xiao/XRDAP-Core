@@ -475,12 +475,12 @@ The firmware returns these strings in `DAP_Info` (`probe/probe_identity.hpp` in 
 | Info ID | Meaning | Content |
 |---|---|---|
 | 0x01 | Vendor | `XRobot` |
-| 0x02 | Product | ESP32-S3: `XR-DAP-S3`; ESP32-S2: `XR-DAP-S2`; ESP32-C3: `XR-DAP-C3`; ESP32: `XR-DAP-ESP32`; STM32F103: `XR-DAP-F103`; CH32V307: `XR-DAP-V307` |
-| 0x03 | Serial number | `XRobot-XRDAP-` followed by the chip's unique id in upper-case hexadecimal: the factory MAC on ESP (6 bytes from eFuse, 12 digits), e.g. `XRobot-XRDAP-0123456789AB`; the 12-byte UID on STM32F103 and CH32V307 (24 digits) |
+| 0x02 | Product | ESP32-S3: `XR-DAP-S3`; ESP32-S2: `XR-DAP-S2`; ESP32-C3: `XR-DAP-C3`; ESP32: `XR-DAP-ESP32`; STM32F103: `XR-DAP-F103`; CH32V307: `XR-DAP-V307`; CH32V305: `XR-DAP-V305` |
+| 0x03 | Serial number | `XRobot-XRDAP-` followed by the chip's unique id in upper-case hexadecimal: the factory MAC on ESP (6 bytes from eFuse, 12 digits), e.g. `XRobot-XRDAP-0123456789AB`; the 12-byte UID on STM32F103, CH32V307 and CH32V305 (24 digits) |
 | 0x04 | CMSIS-DAP protocol version | `2.0.0` |
 | 0x05, 0x06 | Target device vendor, name | Not provided (empty) |
 | 0x07 | Board vendor | `XRobot` |
-| 0x08 | Board name | XRDAP-ESP: same as the product; XRDAP-F103C8: `STLINK-V2`; XRDAP-CH32V307: the board, e.g. `XR-DAP-WDAP` |
+| 0x08 | Board name | XRDAP-ESP: same as the product; XRDAP-F103C8: `STLINK-V2`; XRDAP-CH32V307: the board, e.g. `XR-DAP-WDAP`; the CH32V305 board is `CH32V305-LINKE` |
 | 0x09 | Firmware version | The version of each firmware |
 
 The serial number is the same over every link (USB, serial, TCP, ...), which lets host tools recognise one probe across them.
