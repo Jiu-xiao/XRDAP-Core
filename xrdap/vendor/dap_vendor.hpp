@@ -80,6 +80,7 @@ class DapVendor
   ///        single main loop does not block waiting for commands.
   /// @note 任何上下文 / Any context.
   bool Sampling() const { return sampler_.Active(); }
+  Vendor::MemAp::Statistics MemoryStats() const { return mem_.Stats(); }
 
   /// @brief 任务：采样任务的函数体，不返回 / Task: body of the sampling task; never
   ///        returns.

@@ -199,6 +199,8 @@ class Sampler
   // context.
   uint32_t run_gen_ = 0U;
   bool timer_on_ = false;
+  bool resync_pending_ = false;
+  uint64_t resync_after_us_ = 0U;
   TickAccount account_;
   CommandYield yield_;
 

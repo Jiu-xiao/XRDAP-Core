@@ -35,13 +35,38 @@ constexpr uint32_t kCtrlStatErrors = (1U << 1) | (1U << 5) | (1U << 7);
 // WDERRCLR, ORUNERRCLR.
 constexpr uint32_t kAbortClearAll = 0x1EU;
 
-bool TxnOk(LibXR::ErrorCode ec, Ack ack)
-{
-  return ec == LibXR::ErrorCode::OK && ack == Ack::OK;
-}
-
 uint8_t SizeCode(uint8_t size) { return (size == 1U) ? 0U : (size == 2U) ? 1U : 2U; }
 }  // namespace
+
+bool MemAp::TxnOk(LibXR::ErrorCode ec, const Ack& ack)
+{
+  if (ec == LibXR::ErrorCode::OK && ack == Ack::OK)
+  {
+    return true;
+  }
+  last_ack_.store(static_cast<uint32_t>(ack));
+  last_error_.store(static_cast<uint32_t>(ec));
+  failed_transactions_.fetch_add(1U);
+  return false;
+}
+
+bool MemAp::Resync()
+{
+  resyncs_.fetch_add(1U);
+  swd_.InvalidateSelectCache();
+  if (swd_.LineReset() != LibXR::ErrorCode::OK)
+  {
+    return false;
+  }
+  swd_.IdleClocks(8U);
+  Ack ack = Ack::NO_ACK;
+  uint32_t id = 0U;
+  if (!TxnOk(swd_.ReadIdCode(id, ack), ack))
+  {
+    return false;
+  }
+  return TxnOk(swd_.WriteAbortTxn(kAbortClearAll, ack), ack);
+}
 
 void MemAp::ResetCache()
 {
@@ -126,12 +151,17 @@ bool MemAp::SetSize(ApState& st, uint8_t size)
   {
     return false;
   }
+  Ack ack = Ack::NO_ACK;
+  if (!TxnOk(swd_.SetSelectCached(static_cast<uint32_t>(st.ap) << 24, ack), ack))
+  {
+    st.written = false;
+    return false;
+  }
   const uint32_t csw = (st.base_csw & ~kCswSizeAndInc) | SizeCode(size);
   if (st.written && st.written_csw == csw)
   {
     return true;
   }
-  Ack ack = Ack::NO_ACK;
   if (!TxnOk(swd_.ApWriteTxn(kApCsw, csw, ack), ack))
   {
     st.written = false;

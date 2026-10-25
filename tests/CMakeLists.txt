@@ -63,4 +63,13 @@ if(DEFINED LIBXR_DIR)
   target_link_libraries(xrdap_core_threads PRIVATE xr pthread)
   target_compile_options(xrdap_core_threads PRIVATE -Wall -Wextra)
   add_test(NAME xrdap_core_threads COMMAND xrdap_core_threads)
+
+  add_executable(xrdap_sampler_recovery
+      "${CMAKE_CURRENT_LIST_DIR}/threads/sampler_recovery_test.cpp"
+      ${XRDAP_CORE_SOURCES})
+  target_include_directories(xrdap_sampler_recovery PRIVATE
+      "${CMAKE_CURRENT_LIST_DIR}/stub" ${XRDAP_CORE_INCLUDE_DIRS})
+  target_link_libraries(xrdap_sampler_recovery PRIVATE xr pthread)
+  target_compile_options(xrdap_sampler_recovery PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME xrdap_sampler_recovery COMMAND xrdap_sampler_recovery)
 endif()

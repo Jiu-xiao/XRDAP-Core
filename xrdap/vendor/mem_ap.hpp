@@ -11,6 +11,7 @@
 // invalidates the SWD SELECT cache, so the host must treat SELECT, CSW and TAR as
 // unknown.
 
+#include <atomic>
 #include <cstdint>
 
 #include "debug/swd.hpp"
@@ -66,6 +67,20 @@ class MemAp
   ///        object.
   explicit MemAp(LibXR::Debug::Swd& swd) : swd_(swd) {}
 
+  struct Statistics
+  {
+    uint32_t failed_transactions;
+    uint32_t last_ack;
+    uint32_t last_error;
+    uint32_t resyncs;
+  };
+  /// Diagnostic counters, readable without taking the SWD link.
+  Statistics Stats() const
+  {
+    return {failed_transactions_.load(), last_ack_.load(), last_error_.load(),
+            resyncs_.load()};
+  }
+
   // 以下方法都要求调用方持有 Lock / Every method below requires the caller to hold a
   // Lock.
 
@@ -80,6 +95,8 @@ class MemAp
   /// 读一个 AP 的 CSW，失败时清粘滞错误再试一次 / Read an AP's CSW; on failure clear the
   /// sticky errors and retry once.
   bool ReadCsw(uint8_t ap, uint32_t& csw);
+  /// Restore SWD framing and clear DP errors; never resets or halts the target CPU.
+  bool Resync();
   /// 读一个条目，返回条目状态 / Read one item; returns the item status.
   uint8_t Read(const Item& it, uint8_t* out);
   /// 写一个条目，返回条目状态 / Write one item; returns the item status.
@@ -90,6 +107,10 @@ class MemAp
 
  private:
   using Ack = LibXR::Debug::SwdProtocol::Ack;
+
+  // Bind ack by reference: the transaction argument must finish updating it before
+  // its value is inspected, regardless of the compiler's argument evaluation order.
+  bool TxnOk(LibXR::ErrorCode ec, const Ack& ack);
 
   bool SetSize(ApState& st, uint8_t size);
   bool ReadWord(uint32_t addr, uint32_t& val);
@@ -103,6 +124,10 @@ class MemAp
   LibXR::Mutex mutex_;
   ApState ap_[kMaxAps];
   uint8_t ap_count_ = 0U;
+  std::atomic<uint32_t> failed_transactions_{0U};
+  std::atomic<uint32_t> last_ack_{0U};
+  std::atomic<uint32_t> last_error_{0U};
+  std::atomic<uint32_t> resyncs_{0U};
 };
 
 }  // namespace XrDap::Vendor

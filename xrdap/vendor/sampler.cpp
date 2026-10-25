@@ -129,6 +129,8 @@ bool Sampler::Service(TickTimer& timer)
     count = 0U;
     account_.Begin();
     yield_.Restart();
+    resync_pending_ = false;
+    resync_after_us_ = 0U;
     run_gen_ = gen;
     timer.Start(period_us_);
     timer_on_ = true;
@@ -222,6 +224,22 @@ void Sampler::SampleTick(const TickAccount::Step& step)
   std::memset(frame + 10, 0, bitmap + values_size);
   uint8_t* marks = frame + 10;
   uint8_t* values = marks + bitmap;
+  // Preserve the failed frame. Recover before a later frame, at most once per second
+  // while the target is unavailable; repeated reads can have peripheral side effects.
+  const uint64_t now = NowUs();
+  if (resync_pending_ && now >= resync_after_us_)
+  {
+    resync_after_us_ = now + 1000000U;
+    if (mem_.Resync())
+    {
+      resync_pending_ = false;
+      for (uint8_t i = 0; i < csw_count_; ++i)
+      {
+        csw_[i].valid = mem_.ReadCsw(csw_[i].ap, csw_[i].base_csw);
+        resync_pending_ = resync_pending_ || !csw_[i].valid;
+      }
+    }
+  }
   MemAp::ApState ap{};
   for (uint16_t i = 0; i < due; ++i)
   {
@@ -234,9 +252,15 @@ void Sampler::SampleTick(const TickAccount::Step& step)
       ap.valid = (csw != nullptr) && csw->valid;
       ap.written = false;
     }
-    if (mem_.ReadItem(ap, it, values) != kItemOk)
+    const uint8_t status = mem_.ReadItem(ap, it, values);
+    if (status != kItemOk)
     {
       MarkFailed(marks, i);
+      if (status >= kItemSwdChain && status <= kItemSwdLast)
+      {
+        resync_pending_ = true;
+        ap.written = false;
+      }
     }
     values += it.size;
   }
