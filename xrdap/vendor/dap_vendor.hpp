@@ -94,6 +94,9 @@ class DapVendor
   ///       queues for an execution turn.
   void CommandBegin() { sampler_.CommandBegin(); }
 
+  /// Mark the current frame fetch/status command as non-blocking for sampling.
+  void CommandReadOnly() { sampler_.CommandReadOnly(); }
+
   /// @brief 一条命令执行完 / A command has run.
   /// @note 执行器在交出执行轮次之后调用 / Called by the executor after it hands over the
   ///       execution turn.

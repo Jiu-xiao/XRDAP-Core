@@ -54,18 +54,26 @@ bool MemAp::Resync()
 {
   resyncs_.fetch_add(1U);
   swd_.InvalidateSelectCache();
-  if (swd_.LineReset() != LibXR::ErrorCode::OK)
+  // Re-enter SWD as well as resetting the line. A malformed request can leave the
+  // target's debug port in the other wire protocol; a bare line reset does not
+  // switch it back. EnterSwd() never touches the target CPU run/halt state.
+  if (swd_.EnterSwd() != LibXR::ErrorCode::OK)
   {
     return false;
   }
-  swd_.IdleClocks(8U);
   Ack ack = Ack::NO_ACK;
-  uint32_t id = 0U;
-  if (!TxnOk(swd_.ReadIdCode(id, ack), ack))
+  // Clear sticky DP errors before probing IDCODE. Use the transaction wrappers so a
+  // transient WAIT does not turn a recoverable link into a failed sample forever.
+  if (!TxnOk(swd_.WriteAbortTxn(kAbortClearAll, ack), ack))
   {
     return false;
   }
-  return TxnOk(swd_.WriteAbortTxn(kAbortClearAll, ack), ack);
+  uint32_t id = 0U;
+  if (!TxnOk(swd_.DpReadTxn(DpReadReg::IDCODE, id, ack), ack))
+  {
+    return false;
+  }
+  return true;
 }
 
 void MemAp::ResetCache()

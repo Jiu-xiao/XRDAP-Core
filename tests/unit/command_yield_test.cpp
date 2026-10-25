@@ -93,6 +93,34 @@ TEST(CommandDoneBeforeSecondFrameLeavesNoSkip)
   CHECK_EQ(d.step.skipped, 0U);
 }
 
+TEST(ReadOnlyCommandDoesNotParkSampling)
+{
+  TickAccount a;
+  a.Begin();
+  CommandYield y;
+  CHECK(Wake(a, y, 0).step.sample);
+  y.Begin();
+  y.ReadOnly();
+  CHECK(Wake(a, y, 1).step.sample);
+  CHECK(!Wake(a, y, 2).parked);
+  CHECK(!y.End());
+  CHECK(Wake(a, y, 3).step.sample);
+}
+
+TEST(ReadOnlyCommandReleasesAnExistingPark)
+{
+  TickAccount a;
+  a.Begin();
+  CommandYield y;
+  CHECK(Wake(a, y, 0).step.sample);
+  y.Begin();
+  CHECK(Wake(a, y, 1).step.sample);
+  CHECK(Wake(a, y, 2).parked);
+  y.ReadOnly();
+  CHECK(y.End());
+  CHECK(!Wake(a, y, 3).parked);
+}
+
 TEST(FrameInProgressIsTheOneFrame)
 {
   // 命令开始等时正在读一帧：这一帧就是它要等的那一帧，下一个到期的节拍让路 / A frame

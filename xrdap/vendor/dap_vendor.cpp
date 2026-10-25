@@ -63,6 +63,13 @@ DapVendor::Result DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t
   }
   const uint8_t cmd = req[0];
 
+  // SUB_READ, INFO and HOST_STATUS only consume metadata/ring data. They should not
+  // repeatedly park the SWD sampler while a host drains a high-rate stream.
+  if (cmd == ToU8(Cmd::SUB_READ) || cmd == ToU8(Cmd::INFO) || cmd == Dap::kHostStatus)
+  {
+    sampler_.CommandReadOnly();
+  }
+
   if (sampler_.Active())
   {
     // 采样期间探针被订阅独占：只放行 DAP_Info、DAP_HostStatus 和厂商命令。

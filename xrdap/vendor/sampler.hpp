@@ -135,6 +135,9 @@ class Sampler
   ///       execution turn.
   void CommandBegin() { yield_.Begin(); }
 
+  /// SUB_READ and status queries do not touch SWD; let sampling continue while they run.
+  void CommandReadOnly() { yield_.ReadOnly(); }
+
   /// @brief 一条命令执行完；最后一条做完时唤醒让路的采样 / A command has run; the last
   ///        one wakes sampling that yielded.
   /// @note 命令的任务里 / The command's task.

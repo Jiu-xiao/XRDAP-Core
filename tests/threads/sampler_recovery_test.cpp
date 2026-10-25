@@ -31,6 +31,7 @@ class ModelSwd final : public LibXR::Debug::Swd
   bool desynced = false;
   bool missing = false;
   unsigned resets = 0;
+  unsigned enters = 0;
   unsigned memory_reads = 0;
   uint32_t select = 0;
   uint32_t posted = 0;
@@ -39,7 +40,11 @@ class ModelSwd final : public LibXR::Debug::Swd
 
   ErrorCode SetClockHz(uint32_t) override { return ErrorCode::OK; }
   void Close() override {}
-  ErrorCode EnterSwd() override { return LineReset(); }
+  ErrorCode EnterSwd() override
+  {
+    ++enters;
+    return LineReset();
+  }
   ErrorCode LineReset() override
   {
     ++resets;
@@ -149,6 +154,7 @@ void SamplerRecovery()
   CHECK_RECOVERY(Get32(frame) == 2 && frame[10] == 0);
   CHECK_RECOVERY(Get32(frame + 11) == (0x08000000U ^ 0x12340000U));
   CHECK_RECOVERY(swd.resets == 1 && mem.Stats().resyncs == 1);
+  CHECK_RECOVERY(swd.enters == 1);
   CHECK_RECOVERY(swd.memory_reads == 2);  // No hidden re-read of the failed frame.
 
   swd.missing = true;
