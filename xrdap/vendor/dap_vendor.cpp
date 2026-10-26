@@ -63,9 +63,10 @@ DapVendor::Result DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t
   }
   const uint8_t cmd = req[0];
 
-  // SUB_READ, INFO and HOST_STATUS only consume metadata/ring data. They should not
-  // repeatedly park the SWD sampler while a host drains a high-rate stream.
-  if (cmd == ToU8(Cmd::SUB_READ) || cmd == ToU8(Cmd::INFO) || cmd == Dap::kHostStatus)
+  // SUB_READ, both INFO commands and HOST_STATUS only consume metadata/ring data. They
+  // should not repeatedly park the SWD sampler while a host drains a high-rate stream.
+  if (cmd == ToU8(Cmd::SUB_READ) || cmd == ToU8(Cmd::INFO) || cmd == Dap::kInfo ||
+      cmd == Dap::kHostStatus)
   {
     sampler_.CommandReadOnly();
   }

@@ -41,6 +41,7 @@
 #include "xrdap/vendor/command_yield.hpp"
 #include "xrdap/vendor/frame_ring.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
+#include "xrdap/vendor/sampler_timing.hpp"
 #include "xrdap/vendor/tick_account.hpp"
 #include "xrdap/vendor/vendor_protocol.hpp"
 
@@ -168,7 +169,8 @@ class Sampler
       // Consume this wake deadline. While a long frame runs, repeated interrupts
       // must not accumulate semaphore posts and starve command handling.
       wake_lag_ticks_.store(count - wake_at, std::memory_order_relaxed);
-      woke_us_.store(static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds()) - late_us,
+      wake_late_us_.store(late_us, std::memory_order_relaxed);
+      woke_us_.store(static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds()),
                      std::memory_order_relaxed);
       woke_tick_.store(count, std::memory_order_release);
       if (task_mode_.load(std::memory_order_relaxed) != 0U)
@@ -239,6 +241,7 @@ class Sampler
   /// Whole periods missed since the requested wake deadline; kept separate from
   /// woke_us_ so inter-frame fairness still uses the latest elapsed tick.
   std::atomic<uint32_t> wake_lag_ticks_{0U};
+  std::atomic<uint32_t> wake_late_us_{0U};
   std::atomic<uint32_t> task_mode_{0U};
   std::atomic<uint32_t> frames_{0U};
   std::atomic<uint32_t> skipped_{0U};

@@ -162,12 +162,10 @@ bool Sampler::Service(TickTimer& timer)
     const uint32_t woke_tick = woke_tick_.load(std::memory_order_acquire);
     if (woke_tick != UINT32_MAX && TickDue(step.tick, woke_tick))
     {
-      const uint64_t delayed =
-          static_cast<uint32_t>(t0 - woke_us_.load(std::memory_order_relaxed)) +
-          static_cast<uint64_t>(wake_lag_ticks_.load(std::memory_order_relaxed)) *
-              period_us_;
       const uint32_t latency =
-          delayed > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(delayed);
+          WakeLatencyUs(t0, woke_us_.load(std::memory_order_relaxed),
+                        wake_late_us_.load(std::memory_order_relaxed),
+                        wake_lag_ticks_.load(std::memory_order_relaxed), period_us_);
       if (latency > max_wake_us_.load(std::memory_order_relaxed))
       {
         max_wake_us_.store(latency, std::memory_order_relaxed);
@@ -190,17 +188,11 @@ bool Sampler::Service(TickTimer& timer)
     // without waiting for a wake) it counts from the start of the frame read. In a single
     // loop the time from the interrupt to here is the main loop finishing its current
     // command, not a sampling cost, so the interrupt time is used in task mode only.
-    uint32_t start = t0;
-    if (task_mode_.load(std::memory_order_relaxed) != 0U &&
-        woke_tick_.load(std::memory_order_acquire) == step.tick)
-    {
-      const uint32_t woke = woke_us_.load(std::memory_order_relaxed);
-      if (t0 - woke <= period_us_)
-      {
-        start = woke;
-      }
-    }
-    const uint32_t busy = static_cast<uint32_t>(NowUs()) - start;
+    const uint32_t busy =
+        FrameBusyUs(static_cast<uint32_t>(NowUs()), t0,
+                    task_mode_.load(std::memory_order_relaxed) != 0U &&
+                        woke_tick_.load(std::memory_order_acquire) == step.tick,
+                    woke_us_.load(std::memory_order_relaxed), period_us_);
     account_.OnDone(ticks_.load(std::memory_order_relaxed), busy, period_us_);
     yield_.FrameEnd();
 

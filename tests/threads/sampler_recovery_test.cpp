@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "libxr_system.hpp"
+#include "xrdap/vendor/dap_vendor.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/sampler.hpp"
 
@@ -326,6 +327,51 @@ void SamplerMergedTicksAndBatches()
     sampler.Stop();
   }
 }
+
+void StandardInfoDoesNotParkSampler()
+{
+  ModelSwd swd;
+  XrDap::SessionOwner session;
+  CHECK_RECOVERY(session.Admit(XrDap::Transport::USB, 0U));
+  XrDap::DapVendor vendor(swd, session);
+  Timer timer;
+  uint8_t response[128] = {};
+  uint16_t length = 0U;
+  const uint8_t connect[] = {0x02U, 0x01U};
+  vendor.CommandBegin();
+  CHECK_RECOVERY(vendor.OnCommand(connect, sizeof(connect), response, sizeof(response),
+                                  length) == XrDap::DapVendor::Result::PASS);
+  vendor.CommandEnd();
+  Item item;
+  item.ap = 0U;
+  item.base = 0x08000000U;
+  item.size = 4U;
+  const auto entries = Entries({item});
+  std::vector<uint8_t> start = {0x83U, 0xA0U, 0x86U, 0x01U, 0U, 0U, 1U, 0U};
+  start.insert(start.end(), entries.begin(), entries.end());
+  vendor.CommandBegin();
+  CHECK_RECOVERY(vendor.OnCommand(start.data(), start.size(), response, sizeof(response),
+                                  length) == XrDap::DapVendor::Result::HANDLED);
+  CHECK_RECOVERY(response[1] == kStatusOk);
+  vendor.CommandEnd();
+  vendor.Poll(timer);
+  const uint8_t info[] = {0x00U, 0x01U};
+  vendor.CommandBegin();
+  CHECK_RECOVERY(vendor.OnCommand(info, sizeof(info), response, sizeof(response),
+                                  length) == XrDap::DapVendor::Result::PASS);
+  vendor.OnTickIsr();
+  vendor.Poll(timer);
+  vendor.OnTickIsr();
+  vendor.Poll(timer);  // Still sampling with the read-only command turn open.
+  CHECK_RECOVERY(vendor.SamplingStats().frames == 3U);
+  CHECK_RECOVERY(vendor.SamplingStats().skipped == 0U);
+  vendor.CommandEnd();
+  const uint8_t stop[] = {0x84U, 0U};
+  vendor.CommandBegin();
+  CHECK_RECOVERY(vendor.OnCommand(stop, sizeof(stop), response, sizeof(response),
+                                  length) == XrDap::DapVendor::Result::HANDLED);
+  vendor.CommandEnd();
+}
 }  // namespace
 
 int main()
@@ -335,5 +381,6 @@ int main()
   SamplerRecovery();
   BurstReadAndFailure();
   SamplerMergedTicksAndBatches();
+  StandardInfoDoesNotParkSampler();
   std::puts("AP selection and sampler framing recovery passed");
 }
