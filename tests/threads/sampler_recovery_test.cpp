@@ -477,18 +477,18 @@ void OnlyActiveSamplingReusesCommandCsw()
   CHECK_RECOVERY(command(start) == XrDap::DapVendor::Result::HANDLED);
   CHECK_RECOVERY(response[1] == kStatusOk && swd.csw_reads == 3U);
   vendor.Poll(timer);
-  CHECK_RECOVERY(read_value() == original && swd.csw_reads == 4U);
+  CHECK_RECOVERY(read_value() == original && swd.csw_reads == 3U);
   swd.value_bias = 19U;
   vendor.OnTickIsr();
   vendor.Poll(timer);
-  CHECK_RECOVERY(read_value() == original + 19U && swd.csw_reads == 4U);
+  CHECK_RECOVERY(read_value() == original + 19U && swd.csw_reads == 3U);
 
   CHECK_RECOVERY(command({0x84U, 0U}) == XrDap::DapVendor::Result::HANDLED);
-  CHECK_RECOVERY(read_value() == original + 19U && swd.csw_reads == 5U);
+  CHECK_RECOVERY(read_value() == original + 19U && swd.csw_reads == 4U);
   // A new sampling run cannot inherit the preceding command's CSW cache.
   CHECK_RECOVERY(command(start) == XrDap::DapVendor::Result::HANDLED);
-  CHECK_RECOVERY(response[1] == kStatusOk && swd.csw_reads == 6U);
-  CHECK_RECOVERY(read_value() == original + 19U && swd.csw_reads == 7U);
+  CHECK_RECOVERY(response[1] == kStatusOk && swd.csw_reads == 5U);
+  CHECK_RECOVERY(read_value() == original + 19U && swd.csw_reads == 5U);
   CHECK_RECOVERY(command({0x84U, 0U}) == XrDap::DapVendor::Result::HANDLED);
 }
 }  // namespace

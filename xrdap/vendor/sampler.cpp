@@ -44,7 +44,9 @@ uint8_t Sampler::Start(const SubItemList& items, uint32_t period_us, bool stop_o
       }
       ApCsw& dst = csw_[csw_count_++];
       dst.ap = ap;
-      dst.valid = mem_.ReadCsw(ap, dst.base_csw);
+      const auto* state = mem_.EnsureAp(ap);
+      dst.valid = state != nullptr;
+      dst.base_csw = dst.valid ? state->base_csw : 0U;
       ok = ok && dst.valid;
     }
     if (!ok)
@@ -257,7 +259,9 @@ void Sampler::SampleTick(const TickAccount::Step& step)
       resync_pending_ = false;
       for (uint8_t i = 0; i < csw_count_; ++i)
       {
-        csw_[i].valid = mem_.ReadCsw(csw_[i].ap, csw_[i].base_csw);
+        const auto* state = mem_.EnsureAp(csw_[i].ap);
+        csw_[i].valid = state != nullptr;
+        csw_[i].base_csw = csw_[i].valid ? state->base_csw : 0U;
         resync_pending_ = resync_pending_ || !csw_[i].valid;
       }
     }

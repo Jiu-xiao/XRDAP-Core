@@ -92,8 +92,8 @@ class MemAp
   ///       Always clears written: access width and increment mode must be programmed
   ///       again. Target data is never cached.
   void ResetCache(bool reuse_csw = false);
-  /// @brief 本命令里第一次用到某个 AP 时读一次它的 CSW / Read an AP's CSW the first time
-  ///        a command uses it.
+  /// @brief 取得 AP 状态；没有有效 CSW 基值时读取硬件 / Get an AP's state, reading
+  ///        hardware when no valid CSW base is cached. Reuse follows ResetCache.
   /// @return 读不到 CSW 时返回 nullptr；缓存满时复用最后一格 / nullptr when the CSW
   ///         cannot be read; the last slot is reused when the cache is full.
   ApState* EnsureAp(uint8_t ap);
