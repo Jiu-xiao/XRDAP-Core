@@ -210,6 +210,8 @@ bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_
   resp[1] = kStatusOk;
   resp[2] = count;
   uint8_t* q = resp + 3;
+  // 第二遍解析：第一遍已校验过同一段字节，这里一定成功 / Second pass: the first pass
+  // validated the same bytes, so this always succeeds.
   p = first;
   for (uint8_t i = 0; i < count; ++i)
   {
@@ -265,6 +267,8 @@ bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16
   resp[1] = kStatusOk;
   resp[2] = count;
   uint8_t* q = resp + 3;
+  // 第二遍解析：第一遍已校验过同一段字节，这里一定成功 / Second pass: the first pass
+  // validated the same bytes, so this always succeeds.
   p = first;
   for (uint8_t i = 0; i < count; ++i)
   {
