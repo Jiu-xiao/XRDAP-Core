@@ -55,6 +55,10 @@ class DapActivity
       any_wired_.store(1U, std::memory_order_relaxed);
     }
     commands_.fetch_add(1U, std::memory_order_relaxed);
+    if (req == nullptr || len < 1U)
+    {
+      return;
+    }
     if (req[0] == Dap::kHostStatus && len >= 3U)
     {
       // DAP_HostStatus：类型 0 是“已连接”灯，1 是“运行中”灯，其他类型不是这两个灯；
