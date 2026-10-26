@@ -57,8 +57,10 @@ class SessionOwner
 
   /// @brief 设置 USB 复位计数来源；计数变化即结束 USB 会话 / Set the USB reset-count
   ///        source; a changed count ends the USB session.
-  /// @note 初始化时调用；fn 会在任何调用本类的任务里被调用 / Call at initialisation; fn
-  ///       is called from whichever task calls this class.
+  /// @note 初始化时调用；fn 会在任何调用本类的任务里、持有本类的自旋锁时被调用，只能读
+  ///       一个计数，不能阻塞或取锁 / Call at initialisation; fn is called from whichever
+  ///       task calls this class while its spin lock is held, so it must only read a
+  ///       counter and must not block or take a lock.
   void SetUsbResetSource(ResetCountFn fn, void* ctx);
 
   /// @brief 一条命令要执行：没有主人时 t 成为主人，t 是主人时刷新租期 / A command is

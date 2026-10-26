@@ -113,8 +113,8 @@ struct Item
   int16_t final_off = 0;
 };
 
-/// 一个采样条目：每 div 拍在第 phase 拍读一次 / One sampling item, read on ticks where
-/// (tick + phase) % div == 0.
+/// 一个采样条目：在 (tick + phase) % div == 0 的拍读一次 / One sampling item, read on
+/// ticks where (tick + phase) % div == 0.
 struct SubItem
 {
   Item item;

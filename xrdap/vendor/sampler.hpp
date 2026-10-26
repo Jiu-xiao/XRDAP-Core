@@ -200,8 +200,13 @@ class Sampler
   uint32_t run_gen_ = 0U;
   bool timer_on_ = false;
   TickAccount account_;
+
+  // 命令的任务调用 Begin/End，采样的执行上下文做决定；成员都是原子量 / Command tasks
+  // call Begin/End and the sampling context decides; its members are atomics.
   CommandYield yield_;
 
+  // 采样往里放帧，DAP 执行上下文取帧和清空；它自己的自旋锁保护 / Sampling pushes frames,
+  // the DAP execution context takes and clears them; guarded by its own spin lock.
   FrameRing ring_;
 };
 

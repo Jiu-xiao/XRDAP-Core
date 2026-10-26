@@ -84,7 +84,8 @@ class SerialLink
   /// @brief 启动工作线程 / Start the worker thread.
   /// @return OK；重复启动返回 BUSY；串口不可读写返回 NOT_SUPPORT / OK; BUSY when already
   ///         started; NOT_SUPPORT when the UART cannot read or write.
-  /// @note 任何任务 / Any task.
+  /// @note 任何任务，但同一时间只能有一个任务调用 Start 或 Stop / Any task, but only
+  ///       one task at a time may call Start or Stop.
   LibXR::ErrorCode Start(const ThreadConfig& config = ThreadConfig())
   {
     if (started_)
@@ -113,11 +114,12 @@ class SerialLink
   /// @brief 停止工作线程，最多等 1 s；串口的会话随之结束 / Stop the worker, waiting at
   ///        most 1 s; the serial session ends with it.
   /// @return 工作线程已退出时 OK；1 s 内没退出时 TIMEOUT，这时仍算已启动，Start() 回
-  /// BUSY，
-  ///         不会再建第二个工作线程 / OK once the worker exited; TIMEOUT when it did not
-  ///         exit within 1 s, in which case the link still counts as started and Start()
-  ///         returns BUSY instead of creating a second worker.
-  /// @note 任何任务，不能在工作线程里调用 / Any task except the worker itself.
+  ///         BUSY，不会再建第二个工作线程 / OK once the worker exited; TIMEOUT when it
+  ///         did not exit within 1 s, in which case the link still counts as started and
+  ///         Start() returns BUSY instead of creating a second worker.
+  /// @note 任何任务，不能在工作线程里调用；同一时间只能有一个任务调用 Start 或 Stop /
+  ///       Any task except the worker itself; only one task at a time may call Start or
+  ///       Stop.
   LibXR::ErrorCode Stop()
   {
     if (!started_)
