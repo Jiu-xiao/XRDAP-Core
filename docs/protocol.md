@@ -476,7 +476,7 @@ USB 是主人时，经串口发来的 READ：`81 05`；经串口发来的 `DAP_T
 |---|---|---|
 | 0x01 | 厂商 | `XRobot` |
 | 0x02 | 产品 | ESP32-S3：`XR-DAP-S3`；ESP32-S2：`XR-DAP-S2`；ESP32-C3：`XR-DAP-C3`；ESP32：`XR-DAP-ESP32`；STM32F103：`XR-DAP-F103`；CH32V307：`XR-DAP-V307`；CH32V305：`XR-DAP-V305` |
-| 0x03 | 序列号 | `XRobot-XRDAP-` 加芯片唯一标识的大写十六进制：ESP 为出厂 MAC（eFuse 中的 6 字节，12 位），例如 `XRobot-XRDAP-0123456789AB`；STM32F103、CH32V307 和 CH32V305 为 12 字节 UID（24 位） |
+| 0x03 | 序列号 | `XRobot-XRDAP-` 加芯片唯一标识的大写十六进制：ESP 为出厂 MAC（eFuse 中的 6 字节，12 个十六进制字符），例如 `XRobot-XRDAP-0123456789AB`；STM32F103、CH32V307 和 CH32V305 为 12 字节 UID（24 个十六进制字符） |
 | 0x04 | CMSIS-DAP 协议版本 | `2.0.0` |
 | 0x05、0x06 | 目标芯片厂商、名称 | 不提供（空） |
 | 0x07 | 板子厂商 | `XRobot` |
