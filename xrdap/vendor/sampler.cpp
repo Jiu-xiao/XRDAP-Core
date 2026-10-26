@@ -162,7 +162,12 @@ bool Sampler::Service(TickTimer& timer)
     const uint32_t woke_tick = woke_tick_.load(std::memory_order_acquire);
     if (woke_tick != UINT32_MAX && TickDue(step.tick, woke_tick))
     {
-      const uint32_t latency = t0 - woke_us_.load(std::memory_order_relaxed);
+      const uint64_t delayed =
+          static_cast<uint32_t>(t0 - woke_us_.load(std::memory_order_relaxed)) +
+          static_cast<uint64_t>(wake_lag_ticks_.load(std::memory_order_relaxed)) *
+              period_us_;
+      const uint32_t latency =
+          delayed > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(delayed);
       if (latency > max_wake_us_.load(std::memory_order_relaxed))
       {
         max_wake_us_.store(latency, std::memory_order_relaxed);

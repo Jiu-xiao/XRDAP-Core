@@ -310,7 +310,7 @@ void SamplerMergedTicksAndBatches()
     swd.parity_rdbuff = false;
     sampler.CommandBegin();
     sampler.CommandReadOnly();
-    sampler.OnTickIsr(4U);  // Ticks 1..3 were missed; only frame 4 is produced.
+    sampler.OnTickIsr(4U, 250U);  // Ticks 1..3 were missed; only frame 4 is produced.
     sampler.Poll(timer);
     sampler.CommandEnd();
     got = sampler.TakeFrames(frame, sizeof(frame));
@@ -319,6 +319,7 @@ void SamplerMergedTicksAndBatches()
     const auto stats = sampler.Stats();
     CHECK_RECOVERY(stats.ticks == 4U && stats.frames == 2U && stats.skipped == 3U);
     CHECK_RECOVERY(stats.merged_callbacks == 1U && stats.merged_ticks == 3U);
+    CHECK_RECOVERY(stats.max_wake_us >= 300250U);  // Includes all three lost periods.
     sampler.OnTickIsr(0U);
     sampler.Poll(timer);
     CHECK_RECOVERY(sampler.TakeFrames(frame, sizeof(frame)).frames == 0U);
