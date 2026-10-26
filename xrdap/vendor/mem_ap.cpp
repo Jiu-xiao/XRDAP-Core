@@ -153,7 +153,7 @@ bool MemAp::ReadCsw(uint8_t ap, uint32_t& csw)
 }
 
 // 写 CSW：保留原值里 Size 和 AddrInc 以外的位，关闭自增。
-bool MemAp::SetSize(ApState& st, uint8_t size)
+bool MemAp::SetSize(ApState& st, uint8_t size, bool increment)
 {
   if (!st.valid)
   {
@@ -165,7 +165,8 @@ bool MemAp::SetSize(ApState& st, uint8_t size)
     st.written = false;
     return false;
   }
-  const uint32_t csw = (st.base_csw & ~kCswSizeAndInc) | SizeCode(size);
+  const uint32_t csw =
+      (st.base_csw & ~kCswSizeAndInc) | SizeCode(size) | (increment ? 0x10U : 0U);
   if (st.written && st.written_csw == csw)
   {
     return true;
@@ -179,6 +180,43 @@ bool MemAp::SetSize(ApState& st, uint8_t size)
   st.written = true;
   st.written_csw = csw;
   return true;
+}
+
+uint16_t MemAp::ReadWords(ApState& ap, uint32_t addr, uint16_t count, uint8_t* out)
+{
+  if (count == 0U || (addr & 3U) != 0U || count > (1024U - (addr & 1023U)) / 4U ||
+      !SetSize(ap, 4U, true))
+  {
+    return 0U;
+  }
+  Ack ack = Ack::NO_ACK;
+  uint32_t value = 0U;
+  uint16_t confirmed = 0U;
+  if (TxnOk(swd_.ApWriteTxn(kApTar, addr, ack), ack) &&
+      TxnOk(swd_.ApReadPostedTxn(kApDrw, value, ack), ack))
+  {
+    // The first AP read launches word 0; each later AP read returns the previous
+    // word and launches the next one. Only RDBUFF drains the final word.
+    for (uint16_t i = 1U; i < count; ++i)
+    {
+      if (!TxnOk(swd_.ApReadPostedTxn(kApDrw, value, ack), ack))
+      {
+        ap.written = false;
+        ClearSticky();
+        return confirmed;
+      }
+      std::memcpy(out + confirmed * 4U, &value, 4U);
+      ++confirmed;
+    }
+    if (TxnOk(swd_.DpReadRdbuffTxn(value, ack), ack))
+    {
+      std::memcpy(out + confirmed * 4U, &value, 4U);
+      return static_cast<uint16_t>(confirmed + 1U);
+    }
+  }
+  ap.written = false;
+  ClearSticky();
+  return confirmed;
 }
 
 bool MemAp::ReadWord(uint32_t addr, uint32_t& val)

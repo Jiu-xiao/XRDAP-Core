@@ -105,6 +105,11 @@ class MemAp
   /// state (used by sampling); returns the item status.
   uint8_t ReadItem(ApState& ap, const Item& it, uint8_t* out);
 
+  /// Read consecutive aligned u32 words within one 1 KiB TAR window. Returns
+  /// the number of confirmed values; the remaining values must be marked failed.
+  /// No failed target read is replayed. Caller holds Lock, count is nonzero.
+  uint16_t ReadWords(ApState& ap, uint32_t addr, uint16_t count, uint8_t* out);
+
  private:
   using Ack = LibXR::Debug::SwdProtocol::Ack;
 
@@ -112,7 +117,7 @@ class MemAp
   // its value is inspected, regardless of the compiler's argument evaluation order.
   bool TxnOk(LibXR::ErrorCode ec, const Ack& ack);
 
-  bool SetSize(ApState& st, uint8_t size);
+  bool SetSize(ApState& st, uint8_t size, bool increment = false);
   bool ReadWord(uint32_t addr, uint32_t& val);
   bool WriteWord(uint32_t addr, uint32_t val);
   bool CheckCtrlStat();

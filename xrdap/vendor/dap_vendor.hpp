@@ -81,6 +81,7 @@ class DapVendor
   /// @note 任何上下文 / Any context.
   bool Sampling() const { return sampler_.Active(); }
   Vendor::MemAp::Statistics MemoryStats() const { return mem_.Stats(); }
+  Vendor::Sampler::Statistics SamplingStats() const { return sampler_.Stats(); }
 
   /// @brief 任务：采样任务的函数体，不返回 / Task: body of the sampling task; never
   ///        returns.
@@ -104,7 +105,10 @@ class DapVendor
 
   /// @brief 节拍定时器中断调用 / Called by the tick timer interrupt.
   /// @note 中断上下文 / Interrupt context.
-  void OnTickIsr() { sampler_.OnTickIsr(); }
+  void OnTickIsr(uint32_t elapsed_ticks = 1U, uint32_t late_us = 0U)
+  {
+    sampler_.OnTickIsr(elapsed_ticks, late_us);
+  }
 
   /// @brief 挂一条附加命令，其 feature 并入 INFO 功能位 / Attach one extra command whose
   ///        feature bit is merged into INFO.

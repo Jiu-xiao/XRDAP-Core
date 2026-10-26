@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 #include "libxr_system.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
@@ -37,6 +38,12 @@ class ModelSwd final : public LibXR::Debug::Swd
   uint32_t posted = 0;
   uint32_t csw[2] = {0x23000002U, 0x23000002U};
   uint32_t tar[2] = {};
+  unsigned tar_writes = 0;
+  unsigned drw_attempts = 0;
+  unsigned fail_drw = 0;
+  unsigned parity_drw = 0;
+  bool parity_rdbuff = false;
+  std::vector<uint32_t> addresses;
 
   ErrorCode SetClockHz(uint32_t) override { return ErrorCode::OK; }
   void Close() override {}
@@ -64,7 +71,10 @@ class ModelSwd final : public LibXR::Debug::Swd
     if (req.port == P::Port::DP)
     {
       if (req.rnw)
+      {
         resp.rdata = req.addr2b == 0 ? 0x2BA01477U : posted;
+        if (req.addr2b == 3 && parity_rdbuff) resp.parity_ok = false;
+      }
       else if (req.addr2b == 2)
         select = req.wdata;
       return ErrorCode::OK;
@@ -74,19 +84,31 @@ class ModelSwd final : public LibXR::Debug::Swd
     CHECK_RECOVERY((select & 0xF0U) == 0U);
     if (req.rnw)
     {
+      if (req.addr2b == 3 && ++drw_attempts == fail_drw)
+      {
+        resp.ack = P::Ack::FAULT;
+        return ErrorCode::OK;
+      }
       resp.rdata = posted;
       if (req.addr2b == 0)
         posted = csw[ap];
       else if (req.addr2b == 3)
       {
         ++memory_reads;
+        addresses.push_back(tar[ap]);
         posted = tar[ap] ^ (0x12340000U + ap);
+        if ((csw[ap] & 0x30U) == 0x10U)
+          tar[ap] = (tar[ap] & ~1023U) | ((tar[ap] + 4U) & 1023U);
+        if (drw_attempts == parity_drw) resp.parity_ok = false;
       }
     }
     else if (req.addr2b == 0)
       csw[ap] = req.wdata;
     else if (req.addr2b == 1)
+    {
+      ++tar_writes;
       tar[ap] = req.wdata;
+    }
     else
       CHECK_RECOVERY(false);  // These tests never write target memory.
     return ErrorCode::OK;
@@ -168,6 +190,141 @@ void SamplerRecovery()
   CHECK_RECOVERY(swd.resets == 1);  // Cooldown prevents per-frame recovery storms.
   sampler.Stop();
 }
+
+void BurstReadAndFailure()
+{
+  for (unsigned fault = 0U; fault < 7U; ++fault)
+  {
+    ModelSwd swd;
+    MemAp mem(swd);
+    MemAp::Lock lock(mem);
+    MemAp::ApState ap;
+    ap.ap = 0U;
+    ap.valid = true;
+    ap.base_csw = 0x23000002U;
+    if (fault >= 1U && fault <= 3U) swd.fail_drw = fault;
+    if (fault == 4U) swd.parity_drw = 2U;
+    if (fault == 5U) swd.parity_rdbuff = true;
+    if (fault == 6U) swd.parity_drw = 1U;
+    uint8_t values[12] = {};
+    const uint16_t confirmed = mem.ReadWords(ap, 0x08000000U, 3U, values);
+    const unsigned expected[] = {3U, 0U, 0U, 1U, 0U, 2U, 0U};
+    CHECK_RECOVERY(confirmed == expected[fault]);
+    CHECK_RECOVERY(swd.tar_writes == 1U);
+    CHECK_RECOVERY(swd.drw_attempts <= 3U);
+    for (unsigned i = 0; i < confirmed; ++i)
+      CHECK_RECOVERY(Get32(values + i * 4U) == ((0x08000000U + i * 4U) ^ 0x12340000U));
+    for (unsigned i = 0; i < swd.addresses.size(); ++i)
+      CHECK_RECOVERY(swd.addresses[i] == 0x08000000U + i * 4U);
+    CHECK_RECOVERY(mem.Stats().failed_transactions == (fault ? 1U : 0U));
+    swd.parity_rdbuff = false;
+    // A subsequent single read restores non-incrementing CSW and succeeds.
+    Item it;
+    it.ap = 0U;
+    it.size = 4U;
+    it.base = 0x08000010U;
+    CHECK_RECOVERY(mem.ReadItem(ap, it, values) == kItemOk);
+    CHECK_RECOVERY(Get32(values) == (it.base ^ 0x12340000U));
+    CHECK_RECOVERY((swd.csw[0] & 0x30U) == 0U);
+    // Reject an unsafe TAR wrap without touching the target.
+    const auto reads = swd.memory_reads;
+    CHECK_RECOVERY(mem.ReadWords(ap, 0x080003FCU, 2U, values) == 0U);
+    CHECK_RECOVERY(mem.ReadWords(ap, 0x08000001U, 2U, values) == 0U);
+    CHECK_RECOVERY(swd.memory_reads == reads);
+  }
+}
+
+std::vector<uint8_t> Entries(const std::vector<Item>& items)
+{
+  std::vector<uint8_t> bytes;
+  uint16_t id = 0U;
+  for (const auto& it : items)
+  {
+    bytes.push_back(it.ap);
+    bytes.push_back(static_cast<uint8_t>(++id));
+    bytes.push_back(0U);
+    bytes.push_back(it.size);
+    const auto start = bytes.size();
+    bytes.resize(start + 4U);
+    Put32(bytes.data() + start, it.base);
+    bytes.push_back(it.n);
+    for (unsigned i = 0; i < it.n; ++i)
+    {
+      const auto offset = bytes.size();
+      bytes.resize(offset + 2U);
+      Put16(bytes.data() + offset, static_cast<uint16_t>(it.deref[i]));
+    }
+    const auto end = bytes.size();
+    bytes.resize(end + 6U);
+    Put16(bytes.data() + end, static_cast<uint16_t>(it.final_off));
+    Put16(bytes.data() + end + 2U, 1U);
+    Put16(bytes.data() + end + 4U, 0U);
+  }
+  return bytes;
+}
+
+void SamplerMergedTicksAndBatches()
+{
+  for (unsigned kind = 0U; kind < 8U; ++kind)
+  {
+    ModelSwd swd;
+    MemAp mem(swd);
+    Sampler sampler(mem, +[](void*) { return true; }, nullptr);
+    Timer timer;
+    Item a;
+    a.ap = 0U;
+    a.size = 4U;
+    a.base = kind == 1U ? 0x080003FCU : 0x08000000U;
+    Item b = a;
+    b.base += kind == 2U ? 8U : 4U;
+    if (kind == 3U) b.ap = 1U;
+    if (kind == 4U) b.size = 2U;
+    if (kind == 5U) b.n = 1U;
+    if (kind == 6U) swd.fail_drw = 2U;
+    const auto bytes = Entries({a, b});
+    CHECK_RECOVERY(sampler.Start({bytes.data(), bytes.data() + bytes.size(), 2}, 100000U,
+                                 false) == kStatusOk);
+    // Inject failure after CSW reads during start, at the next two-word frame.
+    if (kind == 6U) swd.fail_drw = swd.drw_attempts + 2U;
+    if (kind == 7U) swd.parity_rdbuff = true;
+    sampler.Poll(timer);
+    uint8_t frame[64] = {};
+    auto got = sampler.TakeFrames(frame, sizeof(frame));
+    CHECK_RECOVERY(got.frames == 1U && Get32(frame) == 0U);
+    const bool burst = kind == 0U || kind >= 6U;
+    CHECK_RECOVERY(sampler.Stats().batch_hits == (burst ? 1U : 0U));
+    if (kind == 6U)
+    {
+      CHECK_RECOVERY(frame[10] == 3U);         // Neither posted word was confirmed.
+      CHECK_RECOVERY(swd.memory_reads == 1U);  // Failed address was not replayed.
+    }
+    else if (kind == 7U)
+      CHECK_RECOVERY(frame[10] == 2U);
+    else
+      CHECK_RECOVERY(frame[10] == 0U);
+    if (kind <= 3U)
+    {
+      CHECK_RECOVERY(Get32(frame + 11U) == (a.base ^ 0x12340000U));
+      CHECK_RECOVERY(Get32(frame + 15U) == (b.base ^ (0x12340000U + b.ap)));
+    }
+    swd.parity_rdbuff = false;
+    sampler.CommandBegin();
+    sampler.CommandReadOnly();
+    sampler.OnTickIsr(4U);  // Ticks 1..3 were missed; only frame 4 is produced.
+    sampler.Poll(timer);
+    sampler.CommandEnd();
+    got = sampler.TakeFrames(frame, sizeof(frame));
+    CHECK_RECOVERY(got.frames == 1U && Get32(frame) == 4U);
+    CHECK_RECOVERY(got.skipped == 3U && got.dropped == 0U);
+    const auto stats = sampler.Stats();
+    CHECK_RECOVERY(stats.ticks == 4U && stats.frames == 2U && stats.skipped == 3U);
+    CHECK_RECOVERY(stats.merged_callbacks == 1U && stats.merged_ticks == 3U);
+    sampler.OnTickIsr(0U);
+    sampler.Poll(timer);
+    CHECK_RECOVERY(sampler.TakeFrames(frame, sizeof(frame)).frames == 0U);
+    sampler.Stop();
+  }
+}
 }  // namespace
 
 int main()
@@ -175,5 +332,7 @@ int main()
   LibXR::PlatformInit();
   ApSelection();
   SamplerRecovery();
+  BurstReadAndFailure();
+  SamplerMergedTicksAndBatches();
   std::puts("AP selection and sampler framing recovery passed");
 }

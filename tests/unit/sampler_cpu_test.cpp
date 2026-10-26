@@ -101,6 +101,8 @@ Result Simulate(const Costs& c, uint32_t command, uint32_t run_us)
       isr_left += kIsrUs;
       if (TickWakes(count, wake_at))
       {
+        // Sampler::OnTickIsr consumes a wake deadline until Service rearms it.
+        wake_at = count + kParkedTicks;
         woke_tick = count;
         woke_t = t;
         ++posts;
