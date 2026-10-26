@@ -225,7 +225,7 @@ for (;;)
 
 ## 测试
 
-`tests/` 在电脑上编译不依赖硬件和 libxr 的纯逻辑（会话主人、忙回复、回复空间、SUB_START 检查、节拍账目、帧缓冲、条目解析、串口帧、DAP 活动、序列号），用 ctest 运行，带 AddressSanitizer 和 UBSan；判据来自协议文档、CMSIS-DAP 规范和用户的决定。给出 libxr 的路径时，另外把全部源文件和公开头文件按 libxr 的 Linux 系统层编译一遍：
+`tests/` 在电脑上编译不依赖硬件和 libxr 的纯逻辑（会话主人、命令归类、执行轮次、忙回复、回复空间、请求长度、SUB_START 检查、节拍账目、采样给命令让路、按 CPU 模拟的采样与命令、帧缓冲、条目解析、串口帧和补位、DAP 活动、序列号），用 ctest 运行，带 AddressSanitizer 和 UBSan；判据来自协议文档、CMSIS-DAP 规范和用户的决定。另一个 ctest 检查 `xrdap/` 里的原子变量只用 32 位整数。给出 libxr 的路径时，另外把全部源文件和公开头文件按 libxr 的 Linux 系统层编译一遍，并运行两个用 libxr 的测试：多线程下的执行器（等输入时不占轮次、忙回复、转发的断开、USB 重新连接不动别人的 SWD、串口写的结果归类）和 MEM-AP 的写入与总线错误：
 
 ```bash
 cmake -S tests -B build -DLIBXR_DIR=<libxr>

@@ -225,7 +225,7 @@ for (;;)
 
 ## Tests
 
-`tests/` builds the pure logic that depends on neither hardware nor libxr (session owner, busy replies, reply space, SUB_START checks, tick accounting, frame ring, item parsing, serial frames, DAP activity, serial numbers) on a PC and runs it with ctest under AddressSanitizer and UBSan; the oracles come from the protocol document, the CMSIS-DAP specification and the user's decisions. Given a libxr path, every source and public header is also compiled against libxr's Linux system layer:
+`tests/` builds the pure logic that depends on neither hardware nor libxr (session owner, command classes, execution turns, busy replies, reply space, request lengths, SUB_START checks, tick accounting, sampling yielding to commands, a CPU simulation of sampling and commands, frame ring, item parsing, serial frames and padding, DAP activity, serial numbers) on a PC and runs it with ctest under AddressSanitizer and UBSan; the oracles come from the protocol document, the CMSIS-DAP specification and the user's decisions. Another ctest checks that atomics in `xrdap/` are 32-bit integers only. Given a libxr path, every source and public header is also compiled against libxr's Linux system layer, and two tests that use libxr run: the executor with threads (no turn held while waiting for input, busy replies, forwarded disconnect, a USB re-attach leaving another owner's SWD alone, serial write results) and MEM-AP writes and bus faults:
 
 ```bash
 cmake -S tests -B build -DLIBXR_DIR=<libxr>
