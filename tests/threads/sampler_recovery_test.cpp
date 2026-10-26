@@ -292,8 +292,10 @@ void SamplerMergedTicksAndBatches()
     uint8_t frame[64] = {};
     auto got = sampler.TakeFrames(frame, sizeof(frame));
     CHECK_RECOVERY(got.frames == 1U && Get32(frame) == 0U);
-    const bool burst = kind == 0U || kind >= 6U;
-    CHECK_RECOVERY(sampler.Stats().batch_hits == (burst ? 1U : 0U));
+    // Observe bus traffic: contiguous words need one TAR write; wrap, a gap,
+    // another AP or a halfword need two. The pointer case adds a third read.
+    const unsigned expected_tar_writes[] = {1U, 2U, 2U, 2U, 2U, 3U, 1U, 1U};
+    CHECK_RECOVERY(swd.tar_writes == expected_tar_writes[kind]);
     if (kind == 6U)
     {
       CHECK_RECOVERY(frame[10] == 3U);         // Neither posted word was confirmed.

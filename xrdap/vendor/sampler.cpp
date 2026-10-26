@@ -131,7 +131,6 @@ bool Sampler::Service(TickTimer& timer)
     max_wake_us_.store(0U);
     merged_callbacks_.store(0U);
     merged_ticks_.store(0U);
-    batch_hits_.store(0U);
     const auto memory = mem_.Stats();
     swd_failures_start_.store(memory.failed_transactions);
     swd_resyncs_start_.store(memory.resyncs);
@@ -292,7 +291,6 @@ void Sampler::SampleTick(const TickAccount::Step& step)
     }
     if (run > 1U)
     {
-      batch_hits_.fetch_add(1U, std::memory_order_relaxed);
       const uint16_t confirmed = mem_.ReadWords(ap, addr, run, values);
       for (uint16_t j = confirmed; j < run; ++j)
       {

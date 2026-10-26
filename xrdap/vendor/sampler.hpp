@@ -107,7 +107,6 @@ class Sampler
     uint32_t max_wake_us;
     uint32_t merged_callbacks;
     uint32_t merged_ticks;
-    uint32_t batch_hits;
     uint32_t swd_failures;
     uint32_t swd_resyncs;
   };
@@ -124,7 +123,6 @@ class Sampler
             max_wake_us_.load(),
             merged_callbacks_.load(),
             merged_ticks_.load(),
-            batch_hits_.load(),
             memory.failed_transactions - swd_failures_start_.load(),
             memory.resyncs - swd_resyncs_start_.load()};
   }
@@ -249,7 +247,6 @@ class Sampler
   std::atomic<uint32_t> max_wake_us_{0U};
   std::atomic<uint32_t> merged_callbacks_{0U};
   std::atomic<uint32_t> merged_ticks_{0U};
-  std::atomic<uint32_t> batch_hits_{0U};
   std::atomic<uint32_t> swd_failures_start_{0U};
   std::atomic<uint32_t> swd_resyncs_start_{0U};
   LibXR::Semaphore wake_{0};
