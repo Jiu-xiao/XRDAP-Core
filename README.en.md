@@ -6,9 +6,9 @@ Firmware code shared by the XR-DAP family of CMSIS-DAP probes, built on [libxr](
 
 | Firmware | Chip | How sampling runs |
 |---|---|---|
-| [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3, ESP32-C3, ESP32 | sampling task, ticks counted by a gptimer |
+| [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3, ESP32-S2, ESP32-C3, ESP32 | sampling task, ticks counted by a gptimer |
 | [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8) | STM32F103 (STLINK-V2 board) | polled from the main loop, no RTOS |
-| XRDAP-CH32V307 | CH32V307 | sampling task, ticks counted by TIM7 |
+| XRDAP-CH32V307 | CH32V307, CH32V305 | sampling task, ticks counted by TIM7 |
 
 The host tool is [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host). The protocol between probe and host is in [docs/protocol.en.md](docs/protocol.en.md): section 1 is the serial frame, section 3 the vendor extension (protocol version 2) and the session owner, section 4 the probe identity.
 
@@ -19,7 +19,7 @@ Headers are included as `xrdap/<module>/<file>.hpp`:
 | Module | Contents |
 |---|---|
 | `session/` | `SessionOwner`: which transport (USB, serial, TCP, radio) owns the probe and when its session ends; `Executor`: every call into the libxr DAP instance goes through it, and a transport that is not the owner gets busy |
-| `vendor/` | `DapVendor` (commands 0x80 to 0x85), `MemAp` (MEM-AP access along pointer chains over SWD), `Sampler`, `TickAccount`, `FrameRing` (sampling on the probe), request checks and reply space |
+| `vendor/` | `DapVendor` (commands 0x80 to 0x85, plus one extra command a platform attaches, such as XRDAP-ESP's 0x86 Wi-Fi configuration), `MemAp` (MEM-AP access along pointer chains over SWD), `Sampler`, `TickAccount`, `FrameRing` (sampling on the probe), request checks and reply space |
 | `serial/` | `Framer` (assembles and packs serial frames), `SerialLink` (the serial worker thread) |
 | `activity/` | `DapActivity`: DAP activity and the host state reported by DAP_HostStatus |
 | `light/` | `StatusLight`: computes the colour and level of the light at each moment from the link, the settings and DAP activity |
@@ -27,7 +27,7 @@ Headers are included as `xrdap/<module>/<file>.hpp`:
 | `protocol/` | CMSIS-DAP command ids and status values |
 | `swd/` | `F1Gpio`: the register-level SWD pin shared by the STM32F1 and the CH32V3 |
 
-This repository touches no peripherals. Time, mutexes and semaphores come from libxr's `Timebase`, `Mutex` and `Semaphore`; what libxr has no common abstraction for is supplied by the platform:
+Apart from `swd/F1Gpio`, which reads and writes the STM32F1/CH32V3 GPIO registers directly, this repository touches no peripherals. Time, mutexes and semaphores come from libxr's `Timebase`, `Mutex` and `Semaphore`; what libxr has no common abstraction for is supplied by the platform:
 
 | Platform supplies | Notes |
 |---|---|
@@ -39,7 +39,7 @@ This repository touches no peripherals. Time, mutexes and semaphores come from l
 
 ## Integration
 
-libxr 1c06b874 (`feat/xrdap-r2-swd-loop`) or later is required: `Executor` hands the vendor command length to libxr through its `SetCommandHook(hook, ctx, length)`, which lets vendor commands sit inside `DAP_ExecuteCommands`, `StepUsb` waits for USB commands in its `WaitForWork` without holding a turn, and its `SetSessionResetGate` lets a USB attach or detach reset SWD only when USB owns the probe or nobody does.
+libxr 1c06b874 (`feat/xrdap-r2-swd-loop`) or later is required: `Executor` hands the vendor command length to libxr through its `SetCommandHook(hook, ctx, length)`, which lets vendor commands sit inside `DAP_ExecuteCommands`, `StepUsb` waits for USB commands in its `WaitForWork` without holding a turn, and its `SetSessionResetGate` lets a USB attach or detach reset SWD only when USB owns the probe or nobody does. CI builds and tests against the libxr commit pinned in `.github/workflows/ci.yml` (`LIBXR_COMMIT`, no older than the version above); CI tests on a PC only and does not cross-compile the chip firmwares, which their own repositories do.
 
 A firmware project includes `xrdap_core.cmake`, adds the sources to its own target and makes the libxr headers and the platform's `xrdap_port.hpp` visible to them:
 

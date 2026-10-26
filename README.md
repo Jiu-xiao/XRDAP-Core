@@ -6,9 +6,9 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 
 | 固件 | 芯片 | 采样的运行方式 |
 |---|---|---|
-| [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3、ESP32-C3、ESP32 | 采样任务，gptimer 计节拍 |
+| [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3、ESP32-S2、ESP32-C3、ESP32 | 采样任务，gptimer 计节拍 |
 | [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8) | STM32F103（STLINK-V2 板） | 主循环轮询，没有 RTOS |
-| XRDAP-CH32V307 | CH32V307 | 采样任务，TIM7 计节拍 |
+| XRDAP-CH32V307 | CH32V307、CH32V305 | 采样任务，TIM7 计节拍 |
 
 电脑端工具在 [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host)。探针与电脑之间的协议见 [docs/protocol.md](docs/protocol.md)：第 1 节是串口帧，第 3 节是厂商扩展（协议版本 2）和会话主人，第 4 节是探针身份。
 
@@ -19,7 +19,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 | 模块 | 内容 |
 |---|---|
 | `session/` | `SessionOwner`：哪条传输（USB、串口、TCP、无线）拥有探针，会话什么时候结束；`Executor`：所有进入 libxr DAP 实例的调用都经过它，不是主人的传输回“忙” |
-| `vendor/` | `DapVendor`（命令 0x80 到 0x85）、`MemAp`（经 SWD 沿指针链访问 MEM-AP）、`Sampler`、`TickAccount`、`FrameRing`（探针端采样）、请求检查和回复空间 |
+| `vendor/` | `DapVendor`（命令 0x80 到 0x85，以及平台挂上的一条附加命令，例如 XRDAP-ESP 的 0x86 Wi-Fi 配置）、`MemAp`（经 SWD 沿指针链访问 MEM-AP）、`Sampler`、`TickAccount`、`FrameRing`（探针端采样）、请求检查和回复空间 |
 | `serial/` | `Framer`（串口帧的拼接和打包）、`SerialLink`（串口收发线程） |
 | `activity/` | `DapActivity`：DAP 活动和 DAP_HostStatus 报告的上位机状态 |
 | `light/` | `StatusLight`：由连接、设置和 DAP 活动算出每一刻的灯色和亮度 |
@@ -27,7 +27,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 | `protocol/` | CMSIS-DAP 命令号和状态值 |
 | `swd/` | `F1Gpio`：STM32F1 和 CH32V3 共用的寄存器级 SWD 引脚 |
 
-本仓库不碰外设。时间、互斥量和信号量用 libxr 的 `Timebase`、`Mutex`、`Semaphore`；libxr 没有统一抽象的部分由平台提供：
+除 `swd/F1Gpio` 直接读写 STM32F1/CH32V3 的 GPIO 寄存器外，本仓库不碰外设。时间、互斥量和信号量用 libxr 的 `Timebase`、`Mutex`、`Semaphore`；libxr 没有统一抽象的部分由平台提供：
 
 | 平台提供 | 说明 |
 |---|---|
@@ -39,7 +39,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 
 ## 接入
 
-需要 libxr 1c06b874（`feat/xrdap-r2-swd-loop`）或之后：`Executor` 用它的 `SetCommandHook(hook, ctx, length)` 把厂商命令的长度交给 libxr，`DAP_ExecuteCommands` 里才能放厂商命令；`StepUsb` 用它的 `WaitForWork` 在不占执行轮次时等 USB 命令；它的 `SetSessionResetGate` 让 USB 的连接和断开只在 USB 拥有探针或没有主人时复位 SWD。
+需要 libxr 1c06b874（`feat/xrdap-r2-swd-loop`）或之后：`Executor` 用它的 `SetCommandHook(hook, ctx, length)` 把厂商命令的长度交给 libxr，`DAP_ExecuteCommands` 里才能放厂商命令；`StepUsb` 用它的 `WaitForWork` 在不占执行轮次时等 USB 命令；它的 `SetSessionResetGate` 让 USB 的连接和断开只在 USB 拥有探针或没有主人时复位 SWD。CI 用 `.github/workflows/ci.yml` 里固定的 libxr 提交（`LIBXR_COMMIT`，不早于上面的版本）编译和测试；CI 只在电脑上测试，不交叉编译各芯片的固件，那由各固件仓库负责。
 
 固件工程 include `xrdap_core.cmake`，把源文件加进自己的目标，并保证这些源文件能找到 libxr 的头文件和平台的 `xrdap_port.hpp`：
 
