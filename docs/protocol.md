@@ -307,7 +307,7 @@ n 为 0 时直接访问 `base + final_off`。base 为 0 是合法的（Cortex-M 
 ### 3.6 SWD 访问
 
 - DP SELECT：访问 MEM-AP 时写 `ap << 24`，CSW、TAR、DRW 都在 bank 0。读 AP 的 IDR 时用 bank 0xF（寄存器 0xFC）。
-- CSW：每个 READ、WRITE 命令中第一次用到某个 AP 时，以及 SUB_START 时，读一次该 AP 的 CSW；同一命令或同一次采样期间不重新读取。读出的 CSW 里 HPROT1（位 25）为 0 时，再读该 AP 的 IDR：IDR 的类别（位 16:13）为 8（MEM-AP）、类型（位 3:0）为 1、5 或 8（AHB3、AHB5、带增强 HPROT 的 AHB5）时，把 Prot 的位 24（HPROT0，数据访问）、位 25（HPROT1，特权访问）和位 29（调试主机）置 1，与 OpenOCD 的 `CSW_AHB_DEFAULT` 相同；Prot 的其余位（缓存、缓冲、安全属性）保持读出的值。别的 AP 类型（例如 AXI-AP、APB-AP）的这些位含义不同，保持原值。访问时写入 `(上述值 & ~0x37) | Size`，即清掉 Size（位 2:0）和 AddrInc（位 5:4），设置访问宽度并关闭自增。写过一次之后 AP 里的 HPROT1 已经为 1，此后不再读 IDR。
+- CSW：每个 READ、WRITE 命令中第一次用到某个 AP 时，以及 SUB_START 时，读一次该 AP 的 CSW；同一命令或同一次采样期间不重新读取。采样活跃时，连续 READ 命令可复用上次读成功的 CSW 基值，仍重新设置访问宽度和自增方式，并且每次都实际读取目标数据；传输失败、重新同步和新采样运行会丢弃该复用。WRITE 始终先清空命令缓存；未在采样时，READ 也仍按每条命令重新读取 CSW。读出的 CSW 里 HPROT1（位 25）为 0 时，再读该 AP 的 IDR：IDR 的类别（位 16:13）为 8（MEM-AP）、类型（位 3:0）为 1、5 或 8（AHB3、AHB5、带增强 HPROT 的 AHB5）时，把 Prot 的位 24（HPROT0，数据访问）、位 25（HPROT1，特权访问）和位 29（调试主机）置 1，与 OpenOCD 的 `CSW_AHB_DEFAULT` 相同；Prot 的其余位（缓存、缓冲、安全属性）保持读出的值。别的 AP 类型（例如 AXI-AP、APB-AP）的这些位含义不同，保持原值。访问时写入 `(上述值 & ~0x37) | Size`，即清掉 Size（位 2:0）和 AddrInc（位 5:4），设置访问宽度并关闭自增。写过一次之后 AP 里的 HPROT1 已经为 1，此后不再读 IDR。
 - 读一个字：写 TAR，读 DRW，再读 DP RDBUFF 得到结果。条目按顺序逐个访问。
 - 写一个字：写 TAR，写 DRW，再读 DP CTRL/STAT，检查 STICKYORUN、STICKYERR、WDATAERR。
 - 1、2 字节访问：CSW 的 Size 设为 8 位或 16 位，值在 DRW 中由地址低位决定的字节通道上，探针把它放到 value 的低字节。

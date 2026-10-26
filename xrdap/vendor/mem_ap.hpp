@@ -84,9 +84,14 @@ class MemAp
   // 以下方法都要求调用方持有 Lock / Every method below requires the caller to hold a
   // Lock.
 
-  /// 清空命令用的 AP 缓存，每条命令开始时调用 / Clear the per-command AP cache; call at
-  /// the start of every command.
-  void ResetCache();
+  /// @brief 开始一条命令时清除 AP 写入状态 / Clear AP write state at command start.
+  /// @param reuse_csw 采样独占 SWD 时保留已读成功的 CSW 基值；发生过传输失败时仍清空。
+  ///        Keep successful CSW base values while sampling owns SWD exclusively;
+  ///        any intervening transfer failure still clears them.
+  /// @note 每次都清除 written，命令须重新设置硬件访问宽度和自增方式。目标数据不缓存。
+  ///       Always clears written: access width and increment mode must be programmed
+  ///       again. Target data is never cached.
+  void ResetCache(bool reuse_csw = false);
   /// @brief 本命令里第一次用到某个 AP 时读一次它的 CSW / Read an AP's CSW the first time
   ///        a command uses it.
   /// @return 读不到 CSW 时返回 nullptr；缓存满时复用最后一格 / nullptr when the CSW
@@ -129,6 +134,7 @@ class MemAp
   LibXR::Mutex mutex_;
   ApState ap_[kMaxAps];
   uint8_t ap_count_ = 0U;
+  uint32_t cache_failure_count_ = 0U;
   std::atomic<uint32_t> failed_transactions_{0U};
   std::atomic<uint32_t> last_ack_{0U};
   std::atomic<uint32_t> last_error_{0U};

@@ -35,6 +35,8 @@ class ModelSwd final : public LibXR::Debug::Swd
   unsigned resets = 0;
   unsigned enters = 0;
   unsigned memory_reads = 0;
+  unsigned csw_reads = 0;
+  uint32_t value_bias = 0U;
   uint32_t select = 0;
   uint32_t posted = 0;
   uint32_t csw[2] = {0x23000002U, 0x23000002U};
@@ -92,12 +94,15 @@ class ModelSwd final : public LibXR::Debug::Swd
       }
       resp.rdata = posted;
       if (req.addr2b == 0)
+      {
+        ++csw_reads;
         posted = csw[ap];
+      }
       else if (req.addr2b == 3)
       {
         ++memory_reads;
         addresses.push_back(tar[ap]);
-        posted = tar[ap] ^ (0x12340000U + ap);
+        posted = (tar[ap] ^ (0x12340000U + ap)) + value_bias;
         if ((csw[ap] & 0x30U) == 0x10U)
           tar[ap] = (tar[ap] & ~1023U) | ((tar[ap] + 4U) & 1023U);
         if (drw_attempts == parity_drw) resp.parity_ok = false;
@@ -374,6 +379,118 @@ void StandardInfoDoesNotParkSampler()
                                   length) == XrDap::DapVendor::Result::HANDLED);
   vendor.CommandEnd();
 }
+
+void ReuseCswKeepsDataFreshAndInvalidatesOnFailure()
+{
+  ModelSwd swd;
+  MemAp mem(swd);
+  MemAp::Lock lock(mem);
+  mem.ResetCache();
+  const uint32_t initial = Read(mem, 0U);
+  CHECK_RECOVERY(swd.csw_reads == 1U);
+  swd.value_bias = 7U;
+  mem.ResetCache(true);
+  CHECK_RECOVERY(Read(mem, 0U) == initial + 7U);
+  CHECK_RECOVERY(swd.csw_reads == 1U && swd.memory_reads == 2U);
+
+  // A sampling burst changes hardware AddrInc behind the command's AP state.
+  MemAp::ApState sampling;
+  sampling.ap = 0U;
+  sampling.base_csw = 0x23000002U;
+  sampling.valid = true;
+  uint8_t values[8] = {};
+  CHECK_RECOVERY(mem.ReadWords(sampling, 0x08000000U, 2U, values) == 2U);
+  CHECK_RECOVERY((swd.csw[0] & 0x30U) == 0x10U);
+  mem.ResetCache(true);
+  CHECK_RECOVERY(Read(mem, 0U) == initial + 7U);
+  CHECK_RECOVERY((swd.csw[0] & 0x37U) == 2U && swd.csw_reads == 1U);
+
+  CHECK_RECOVERY(Read(mem, 1U) == (0x08000000U ^ 0x12340001U) + 7U);
+  CHECK_RECOVERY(swd.csw_reads == 2U);
+  mem.ResetCache(true);
+  CHECK_RECOVERY(Read(mem, 0U) == initial + 7U);
+  CHECK_RECOVERY(Read(mem, 1U) == (0x08000000U ^ 0x12340001U) + 7U);
+  CHECK_RECOVERY(swd.csw_reads == 2U);
+
+  Item it;
+  it.ap = 0U;
+  it.base = 0x08000000U;
+  it.size = 4U;
+  swd.fail_drw = swd.drw_attempts + 1U;
+  const unsigned before_reads = swd.memory_reads;
+  CHECK_RECOVERY(mem.Read(it, values) == kItemSwdLast);
+  CHECK_RECOVERY(swd.memory_reads == before_reads);  // No failed read is replayed.
+  mem.ResetCache(true);
+  CHECK_RECOVERY(Read(mem, 0U) == initial + 7U);
+  CHECK_RECOVERY(swd.csw_reads == 3U);
+
+  CHECK_RECOVERY(mem.Resync());
+  mem.ResetCache(true);
+  CHECK_RECOVERY(Read(mem, 0U) == initial + 7U);
+  CHECK_RECOVERY(swd.csw_reads == 4U);
+
+  // Failed CSW discovery must not poison future commands.
+  swd.missing = true;
+  mem.ResetCache();
+  CHECK_RECOVERY(mem.Read(it, values) == kItemSwdLast);
+  swd.missing = false;
+  mem.ResetCache(true);
+  CHECK_RECOVERY(Read(mem, 0U) == initial + 7U);
+}
+
+void OnlyActiveSamplingReusesCommandCsw()
+{
+  ModelSwd swd;
+  XrDap::SessionOwner session;
+  CHECK_RECOVERY(session.Admit(XrDap::Transport::USB, 0U));
+  XrDap::DapVendor vendor(swd, session);
+  Timer timer;
+  uint8_t response[128] = {};
+  uint16_t length = 0U;
+  auto command = [&](const std::vector<uint8_t>& request)
+  {
+    vendor.CommandBegin();
+    const auto handled = vendor.OnCommand(request.data(), request.size(), response,
+                                          sizeof(response), length);
+    vendor.CommandEnd();
+    return handled;
+  };
+  CHECK_RECOVERY(command({0x02U, 0x01U}) == XrDap::DapVendor::Result::PASS);
+  Item it;
+  it.ap = 0U;
+  it.base = 0x08000000U;
+  it.size = 4U;
+  const auto encoded = Entries({it});
+  std::vector<uint8_t> read = {0x81U, 1U};
+  read.insert(read.end(), encoded.begin(), encoded.begin() + 11U);
+  auto read_value = [&]()
+  {
+    CHECK_RECOVERY(command(read) == XrDap::DapVendor::Result::HANDLED);
+    CHECK_RECOVERY(response[1] == kStatusOk && response[5] == kItemOk);
+    return Get32(response + 6U);
+  };
+  const auto original = read_value();
+  CHECK_RECOVERY(read_value() == original && swd.csw_reads == 2U);
+
+  std::vector<uint8_t> start = {0x83U, 0xA0U, 0x86U, 0x01U, 0U, 0U, 1U, 0U};
+  start.insert(start.end(), encoded.begin(), encoded.end());
+  CHECK_RECOVERY(command(start) == XrDap::DapVendor::Result::HANDLED);
+  CHECK_RECOVERY(response[1] == kStatusOk && swd.csw_reads == 3U);
+  vendor.Poll(timer);
+  CHECK_RECOVERY(read_value() == original && swd.csw_reads == 4U);
+  swd.value_bias = 19U;
+  vendor.OnTickIsr();
+  vendor.Poll(timer);
+  CHECK_RECOVERY(read_value() == original + 19U && swd.csw_reads == 4U);
+
+  CHECK_RECOVERY(command({0x84U, 0U}) == XrDap::DapVendor::Result::HANDLED);
+  CHECK_RECOVERY(read_value() == original + 19U && swd.csw_reads == 5U);
+  // A new sampling run cannot inherit the preceding command's CSW cache.
+  CHECK_RECOVERY(command(start) == XrDap::DapVendor::Result::HANDLED);
+  CHECK_RECOVERY(response[1] == kStatusOk && swd.csw_reads == 6U);
+  CHECK_RECOVERY(read_value() == original + 19U && swd.csw_reads == 7U);
+  CHECK_RECOVERY(command({0x84U, 0U}) == XrDap::DapVendor::Result::HANDLED);
+}
 }  // namespace
 
 int main()
@@ -384,5 +501,7 @@ int main()
   BurstReadAndFailure();
   SamplerMergedTicksAndBatches();
   StandardInfoDoesNotParkSampler();
+  ReuseCswKeepsDataFreshAndInvalidatesOnFailure();
+  OnlyActiveSamplingReusesCommandCsw();
   std::puts("AP selection and sampler framing recovery passed");
 }

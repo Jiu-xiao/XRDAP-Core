@@ -52,6 +52,7 @@ bool MemAp::TxnOk(LibXR::ErrorCode ec, const Ack& ack)
 
 bool MemAp::Resync()
 {
+  ResetCache();
   resyncs_.fetch_add(1U);
   swd_.InvalidateSelectCache();
   // Re-enter SWD as well as resetting the line. A malformed request can leave the
@@ -76,13 +77,28 @@ bool MemAp::Resync()
   return true;
 }
 
-void MemAp::ResetCache()
+void MemAp::ResetCache(bool reuse_csw)
 {
-  for (ApState& st : ap_)
+  const uint32_t failures = failed_transactions_.load(std::memory_order_relaxed);
+  reuse_csw = reuse_csw && failures == cache_failure_count_;
+  cache_failure_count_ = failures;
+  uint8_t kept = 0U;
+  if (reuse_csw)
   {
-    st = ApState{};
+    for (uint8_t i = 0U; i < ap_count_; ++i)
+    {
+      if (ap_[i].valid)
+      {
+        ap_[kept] = ap_[i];
+        ap_[kept++].written = false;
+      }
+    }
   }
-  ap_count_ = 0U;
+  for (size_t i = kept; i < kMaxAps; ++i)
+  {
+    ap_[i] = ApState{};
+  }
+  ap_count_ = kept;
 }
 
 MemAp::ApState* MemAp::EnsureAp(uint8_t ap)

@@ -25,6 +25,7 @@ uint8_t Sampler::Start(const SubItemList& items, uint32_t period_us, bool stop_o
 {
   {
     MemAp::Lock lock(mem_);
+    mem_.ResetCache();
     count_ = 0U;
     items.ForEach([&](const SubItem& sub) { items_[count_++] = sub; });
     period_us_ = period_us;
