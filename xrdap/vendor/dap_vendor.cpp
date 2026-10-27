@@ -350,10 +350,8 @@ bool DapVendor::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint
   const FrameRing::Taken t =
       sampler_.TakeFrames(resp + kSubReadHeaderLen, (want < room) ? want : room);
 
-  // 不在采样时状态为 0x02，回复照样带头和剩下的帧，上位机据此知道采样已停（例如会话
-  // 结束）。/ While not sampling the status is 0x02 and the reply still carries the
-  // head and the frames left, so the host learns that sampling stopped (for example
-  // because the session ended).
+  // 采样已停时状态为 0x02，帧照常回 / Status is 0x02 once sampling stopped; frames
+  // still go out.
   resp[1] = sampler_.Active() ? kStatusOk : kStatusState;
   Put64(&resp[2], NowUs());
   Put32(&resp[10], t.remaining);

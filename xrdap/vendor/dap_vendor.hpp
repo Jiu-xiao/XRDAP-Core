@@ -140,6 +140,17 @@ class DapVendor
   bool CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
   bool CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
   bool CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
+  /// @brief 取走采样缓冲里的帧，回复带头和帧 / Take frames from the sampling buffer; the
+  ///        reply carries the head and the frames.
+  /// @param req 请求 / Request.
+  /// @param len 请求长度 / Request length.
+  /// @param resp 回复缓冲 / Reply buffer.
+  /// @param cap 回复缓冲容量 / Capacity of the reply buffer.
+  /// @param out 回复长度 / Reply length.
+  /// @note 不在采样时状态为 0x02，回复照样带头和剩下的帧，上位机据此知道采样已停（例如
+  ///       会话结束）/ While not sampling the status is 0x02 and the reply still carries
+  ///       the head and the frames left, so the host learns that sampling stopped (for
+  ///       example because the session ended).
   bool CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                   uint16_t& out);
 
