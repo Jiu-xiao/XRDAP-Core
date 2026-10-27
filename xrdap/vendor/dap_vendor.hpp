@@ -3,7 +3,7 @@
 
 // XR 厂商扩展命令（0x80 到 0x85，协议版本
 // 2）：多地址读写、指针链解引用、探针端周期采样。还可挂一条
-// 附加命令（SetExtraCommand，例如 XRDAP-ESP 的 0x86 Wi-Fi 配置）。由 Executor 在 libxr
+// 附加命令（SetExtraCommand，由平台挂上，例如 XRDAP-ESP 的 Wi-Fi 配置）。由 Executor 在 libxr
 // DAP 执行上下文里调用，命令属于哪条传输、能不能执行由 SessionOwner 决定。协议见
 // docs/protocol.md 第 3 节。
 //
@@ -15,7 +15,7 @@
 // XR vendor extension commands (0x80 to 0x85, protocol version 2): multi-address
 // read/write, pointer-chain
 // dereference and probe-side periodic sampling. One extra command can be attached
-// (SetExtraCommand, e.g. XRDAP-ESP's 0x86 Wi-Fi configuration). Executor calls it in the
+// (SetExtraCommand, attached by the platform, e.g. XRDAP-ESP's Wi-Fi configuration). Executor calls it in the
 // libxr DAP execution context; SessionOwner decides which transport a command belongs to
 // and whether it runs. See docs/protocol.md section 3.
 //
@@ -60,20 +60,28 @@ class DapVendorBase
   using ExtraHandler = bool (*)(void* ctx, const uint8_t* req, uint16_t len,
                                 uint8_t* resp, uint16_t cap, uint16_t& out);
 
+  /// 附加命令的请求字节数，规则同 RequestLength / Request bytes of the extra command,
+  /// the same rules as RequestLength.
+  using ExtraLength = bool (*)(const uint8_t* req, uint16_t avail, uint16_t& len);
+
   /// @brief 挂一条附加命令，其 feature 并入 INFO 功能位 / Attach one extra command whose
   ///        feature bit is merged into INFO.
   /// @param cmd 命令字节，应在 0x85 之后 / Command byte, expected above 0x85.
+  /// @param length 算这条命令的请求字节数，DAP_ExecuteCommands / DAP_QueueCommands 里要用 /
+  ///        Works out the request bytes of this command, needed inside
+  ///        DAP_ExecuteCommands / DAP_QueueCommands.
   /// @param handler 至少有 2 字节回复空间时才被调用，回复不能超过给它的 cap /
   ///        Called only with at least 2 bytes of reply space; its reply must not exceed
   ///        the cap it is given.
   /// @note 初始化时、命令开始执行之前调用，只能挂一条 / Call at initialisation, before
   ///       commands run; only one is supported.
-  void SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler, void* ctx);
+  void SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler, void* ctx,
+                       ExtraLength length);
 
   /// @brief DAP_ExecuteCommands / DAP_QueueCommands 里一条厂商命令的请求字节数：0x80 到
-  ///        0x85，以及挂上的 0x86 / Request bytes of one vendor command inside
-  ///        DAP_ExecuteCommands / DAP_QueueCommands: 0x80 to 0x85, and 0x86 when
-  ///        attached.
+  ///        0x85，以及挂上的附加命令 / Request bytes of one vendor command inside
+  ///        DAP_ExecuteCommands / DAP_QueueCommands: 0x80 to 0x85, and the extra command
+  ///        when attached.
   /// @return 不是这些命令或内容不完整时 false / False for other commands or incomplete
   ///         content.
   /// @note 纯解析，不取锁，任何上下文（包括中断）/ Pure parsing with no lock, any
@@ -107,6 +115,7 @@ class DapVendorBase
   uint8_t extra_cmd_ = 0U;
   uint32_t extra_feature_ = 0U;
   ExtraHandler extra_handler_ = nullptr;
+  ExtraLength extra_length_ = nullptr;
   void* extra_ctx_ = nullptr;
 };
 

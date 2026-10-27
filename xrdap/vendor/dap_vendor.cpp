@@ -28,8 +28,9 @@ uint8_t ToU8(Cmd c) { return static_cast<uint8_t>(c); }
 }  // namespace
 
 void DapVendorBase::SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler,
-                                void* ctx)
+                                    void* ctx, ExtraLength length)
 {
+  extra_length_ = length;
   extra_cmd_ = cmd;
   extra_feature_ = feature;
   extra_handler_ = handler;
@@ -116,9 +117,11 @@ bool DapVendorBase::RequestLength(const uint8_t* req, uint16_t avail, uint16_t& 
     return false;
   }
   const uint8_t cmd = req[0];
-  const bool known = (cmd >= kFirstCmd && cmd <= kLastCmd) ||
-                     (extra_handler_ != nullptr && cmd == extra_cmd_ && cmd == kWifiCmd);
-  return known && Vendor::RequestLength(req, avail, len);
+  if (extra_handler_ != nullptr && cmd == extra_cmd_)
+  {
+    return extra_length_ != nullptr && extra_length_(req, avail, len);
+  }
+  return cmd >= kFirstCmd && cmd <= kLastCmd && Vendor::RequestLength(req, avail, len);
 }
 
 bool DapVendorBase::IsVendor(uint8_t cmd) const

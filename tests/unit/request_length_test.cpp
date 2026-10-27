@@ -38,8 +38,6 @@ TEST(FixedLengths)
   CHECK_EQ(Len({0x80}), 1U);
   CHECK_EQ(Len({0x84, 0x00}), 2U);
   CHECK_EQ(Len({0x85, 0x00, 0x04}), 3U);
-  CHECK_EQ(Len({0x86, 0x00}), 2U);
-  CHECK_EQ(Len({0x86, 0x02, 0xA5}), 3U);
 }
 
 TEST(ReadAndWriteItems)
@@ -63,21 +61,11 @@ TEST(SubStartItems)
   CHECK_EQ(Len(v), 23U);
 }
 
-TEST(WifiSave)
-{
-  // 3.7 的例子：86 01 03 'lab' 08 '12345678' / The example of 3.7.
-  const std::vector<uint8_t> v = {0x86, 0x01, 0x03, 0x6C, 0x61, 0x62, 0x08, 0x31,
-                                  0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38};
-  CHECK_EQ(Len(v), 15U);
-}
-
 TEST(IncompleteOrUnknownIsRejected)
 {
   CHECK_EQ(Len({0x84}), 0U);
   CHECK_EQ(Len({0x85, 0x00}), 0U);
-  CHECK_EQ(Len({0x86, 0x02}), 0U);
-  CHECK_EQ(Len({0x86, 0x07}), 0U);
-  CHECK_EQ(Len({0x86, 0x01, 0x03, 0x6C, 0x61}), 0U);
+  CHECK_EQ(Len({0x86, 0x00}), 0U);  // 附加命令由平台算 / extra commands are the platform's
   CHECK_EQ(Len({0x87}), 0U);
   CHECK_EQ(Len({0x00, 0x00}), 0U);  // 标准命令归 libxr / standard commands are libxr's
   std::vector<uint8_t> read = {0x81, 0x01};

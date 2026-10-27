@@ -82,6 +82,16 @@ class Executor
     forwarder_ctx_ = ctx;
   }
 
+  /// @brief 登记平台自己的、不需要拥有探针的命令 / Register the platform's own commands
+  ///        that need no ownership.
+  /// @note 初始化时、命令开始执行之前调用；表的生命周期需长于本对象 / Call at
+  ///       initialisation, before commands run; the table must outlive this object.
+  void SetFreeCommands(const FreeCommand* commands, size_t count)
+  {
+    platform_free_ = commands;
+    platform_free_count_ = count;
+  }
+
   /// @brief USB：等一条 USB 命令（或绑定、解绑），有了就排队执行 / USB: wait for a USB
   ///        command (or a bind or unbind) and queue to run it once there.
   /// @param wait_ms 等命令的最长时间；等待时不占执行轮次 / Longest wait for a command;
@@ -223,7 +233,8 @@ class Executor
     const Transport t = current_;
     const uint8_t cmd = req[0];
     const auto now = static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds());
-    if (ClassifyCommand(req, len) == CommandClass::OWNER)
+    if (ClassifyCommand(req, len, platform_free_, platform_free_count_) ==
+        CommandClass::OWNER)
     {
       if (!session_.Admit(t, now))
       {
@@ -280,6 +291,8 @@ class Executor
   Forwarder forwarder_ = nullptr;
   void* forwarder_ctx_ = nullptr;
 
+  const FreeCommand* platform_free_ = nullptr;
+  size_t platform_free_count_ = 0U;
   TurnQueue turns_;
   /// 每条传输一个，交接轮次时唤醒排队的任务 / One per transport; wakes the queued task
   /// on a hand-over.

@@ -7,7 +7,9 @@
 // (2026-10-24: read-only status and settings queries may run, even the LED may change)
 // and docs/protocol.md 3.1: commands that touch neither the target, SWD nor sampling do
 // not need to own the probe; settings writes, Wi-Fi save and clear, sampling, SWD, SWJ
-// and everything that touches the target do.
+// and everything that touches the target do. Core knows only the standard and vendor
+// commands; the Wi-Fi (0x86) and radio (0x9F) read-only queries below are what the ESP and
+// CH32 firmwares register.
 #include "xrdap/session/command_class.hpp"
 
 #include <initializer_list>
@@ -20,10 +22,14 @@ using XrDap::CommandClass;
 
 namespace
 {
+// 平台登记的只读查询 / The read-only queries the platforms register.
+const XrDap::FreeCommand kPlatformFree[] = {{2, {0x86, 0x00}}, {2, {0x9F, 0x13}}};
+
 CommandClass Class(std::initializer_list<uint8_t> bytes)
 {
   const std::vector<uint8_t> v(bytes);
-  return ClassifyCommand(v.data(), static_cast<uint16_t>(v.size()));
+  return ClassifyCommand(v.data(), static_cast<uint16_t>(v.size()), kPlatformFree,
+                         sizeof(kPlatformFree) / sizeof(kPlatformFree[0]));
 }
 }  // namespace
 
@@ -48,6 +54,14 @@ TEST(ReadOnlySettingsQueriesAreFree)
 {
   CHECK(Class({0x86, 0x00}) == CommandClass::FREE);  // Wi-Fi 状态 / Wi-Fi status
   CHECK(Class({0x9F, 0x13}) == CommandClass::FREE);  // 射频设置 / radio settings
+}
+
+TEST(PlatformCommandsAreOwnedUnlessRegistered)
+{
+  const std::vector<uint8_t> wifi = {0x86, 0x00};
+  const std::vector<uint8_t> radio = {0x9F, 0x13};
+  CHECK(ClassifyCommand(wifi.data(), 2U) == CommandClass::OWNER);
+  CHECK(ClassifyCommand(radio.data(), 2U) == CommandClass::OWNER);
 }
 
 TEST(SettingsWritesNeedTheOwner)

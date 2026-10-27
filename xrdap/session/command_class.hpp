@@ -14,6 +14,7 @@
 // containers, and each command inside them is classed on its own. Every class lives in
 // this one table.
 
+#include <cstddef>
 #include <cstdint>
 
 namespace XrDap
@@ -26,9 +27,21 @@ enum class CommandClass : uint8_t
   OWNER,  ///< 要拥有探针 / Needs to own the probe.
 };
 
+/// 一条不需要拥有探针的命令：请求以这几个字节开头 / A command that needs no ownership:
+/// the request starts with these bytes.
+struct FreeCommand
+{
+  uint8_t len;  ///< 要比较的字节数，最多 4 / Bytes to compare, at most 4.
+  uint8_t prefix[4];
+};
+
 /// @brief 按命令号（以及需要时的操作字节）归类 / Class a command by its command byte
 ///        (and its operation byte where that matters).
+/// @param platform_free 平台自己的不需要拥有探针的命令，Core 不认识它们 / The platform's
+///        own commands that need no ownership; Core does not know them.
 /// @note 纯函数，任何上下文 / Pure function, any context.
-CommandClass ClassifyCommand(const uint8_t* req, uint16_t len);
+CommandClass ClassifyCommand(const uint8_t* req, uint16_t len,
+                             const FreeCommand* platform_free = nullptr,
+                             size_t platform_free_count = 0U);
 
 }  // namespace XrDap

@@ -354,6 +354,57 @@ void UsbRebindLeavesAnotherOwnersSwdAlone()
   EXPECT(!p.dap.swd_open_);
   std::printf("  UsbRebindLeavesAnotherOwnersSwdAlone: done\n");
 }
+bool ExtraLength(const uint8_t*, uint16_t avail, uint16_t& len)
+{
+  if (avail < 2U)
+  {
+    return false;
+  }
+  len = 2U;
+  return true;
+}
+
+bool ExtraHandler(void*, const uint8_t* req, uint16_t, uint8_t* resp, uint16_t, uint16_t& out)
+{
+  resp[0] = req[0];
+  resp[1] = 0x00U;
+  out = 2U;
+  return true;
+}
+
+void PlatformCommandIsMeasuredAndClassedByThePlatform()
+{
+  // 附加命令的长度和“不需要拥有探针”都由平台登记：Core 不认识 0x86。USB 是主人时，登记过
+  // 的只读查询得到回应，同一命令的写操作回“忙” / The length of an extra command and
+  // whether it needs ownership are registered by the platform; Core does not know 0x86.
+  // With USB as the owner, the registered read-only query is answered and the write of
+  // the same command is busy.
+  static const XrDap::FreeCommand kFree[] = {{2, {0x86, 0x00}}};
+  Probe p;
+  p.vendor.SetExtraCommand(0x86U, 0U, &ExtraHandler, nullptr, &ExtraLength);
+  p.exec.SetFreeCommands(kFree, 1U);
+  const uint8_t query[2] = {0x86U, 0x00U};
+  uint16_t len = 0U;
+  EXPECT(p.vendor.RequestLength(query, 2U, len) && len == 2U);
+  EXPECT(!p.vendor.RequestLength(query, 1U, len));
+  UsbThread usb(p, 500U);
+  p.dap.Feed(Byte(DapCmd::CONNECT));
+  for (int i = 0; i < 100 && p.dap.usb_done_.load() == 0U; ++i)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT(p.session.Owner() == XrDap::Transport::USB);
+  uint8_t resp[8] = {};
+  uint16_t out = 0U;
+  p.exec.Execute(XrDap::Transport::TCP, query, sizeof(query), resp, sizeof(resp), out);
+  EXPECT(out == 2U && resp[0] == 0x86U && resp[1] == 0x00U);
+  const uint8_t save[2] = {0x86U, 0x01U};
+  out = 0U;
+  p.exec.Execute(XrDap::Transport::TCP, save, sizeof(save), resp, sizeof(resp), out);
+  EXPECT(out == 2U && resp[0] == 0x86U && resp[1] == XrDap::kStatusBusy);
+  std::printf("  PlatformCommandIsMeasuredAndClassedByThePlatform: done\n");
+}
+
 void SerialWriteResultsAreUnambiguous()
 {
   // 串口链路不带完成通知地写：OK 表示已进队列、一定发出，不重试；FULL 和 BUSY 表示没进
@@ -378,6 +429,7 @@ int main()
   TcpServedBetweenBackToBackUsbCommands();
   ForwardedDisconnectEndsTheSession();
   UsbRebindLeavesAnotherOwnersSwdAlone();
+  PlatformCommandIsMeasuredAndClassedByThePlatform();
   SerialWriteResultsAreUnambiguous();
   std::printf("%d failed\n", g_failures);
   return g_failures == 0 ? 0 : 1;

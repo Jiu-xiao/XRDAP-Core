@@ -59,46 +59,6 @@ bool SubStartLength(const uint8_t* req, const uint8_t* end, uint16_t& len)
   len = static_cast<uint16_t>(p - req);
   return true;
 }
-
-// 0x86：查询 86 00；保存 86 01 ssid_len ssid pw_len pw；清除 86 02 A5（3.7 节）/ 0x86:
-// query 86 00; save 86 01 ssid_len ssid pw_len pw; clear 86 02 A5 (section 3.7).
-bool WifiLength(const uint8_t* req, uint16_t avail, uint16_t& len)
-{
-  if (avail < 2U)
-  {
-    return false;
-  }
-  uint32_t need = 0U;
-  switch (req[1])
-  {
-    case kWifiOpQuery:
-      need = 2U;
-      break;
-    case kWifiOpClear:
-      need = 3U;
-      break;
-    case kWifiOpSave:
-      if (avail < 3U)
-      {
-        return false;
-      }
-      need = 3U + req[2];
-      if (need >= avail)
-      {
-        return false;
-      }
-      need += 1U + req[need];
-      break;
-    default:
-      return false;
-  }
-  if (need > avail)
-  {
-    return false;
-  }
-  len = static_cast<uint16_t>(need);
-  return true;
-}
 }  // namespace
 
 bool RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len)
@@ -127,8 +87,6 @@ bool RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len)
     case static_cast<uint8_t>(Cmd::SUB_READ):
       fixed = 3U;
       break;
-    case kWifiCmd:
-      return WifiLength(req, avail, len);
     default:
       return false;
   }
