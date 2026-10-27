@@ -25,9 +25,8 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 | `light/` | `StatusLight`：由连接、设置和 DAP 活动算出每一刻的灯色和亮度 |
 | `probe/` | `SetProbeInfo`、`FormatSerial`（DAP_Info 字符串和序列号规则）、`family.hpp`（VID:PID 和各板的 bcdDevice） |
 | `protocol/` | `dap_cmd.hpp`：取 libxr 的 CMSIS-DAP 命令号和状态值的别名，不再重复定义 |
-| `swd/` | `F1Gpio`：STM32F1 和 CH32V3 共用的寄存器级 SWD 引脚 |
 
-除 `swd/F1Gpio` 直接读写 STM32F1/CH32V3 的 GPIO 寄存器外，本仓库不碰外设。时间、互斥量和信号量用 libxr 的 `Timebase`、`Mutex`、`Semaphore`；libxr 没有统一抽象的部分由平台提供：
+本仓库不碰外设。时间、互斥量和信号量用 libxr 的 `Timebase`、`Mutex`、`Semaphore`；libxr 没有统一抽象的部分由平台提供：
 
 | 平台提供 | 说明 |
 |---|---|

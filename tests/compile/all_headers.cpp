@@ -11,7 +11,6 @@
 #include "xrdap/serial/serial_link.hpp"
 #include "xrdap/session/executor.hpp"
 #include "xrdap/session/transport.hpp"
-#include "xrdap/swd/f1_gpio.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
 #include "xrdap/vendor/frame_ring.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
@@ -19,9 +18,6 @@
 #include "xrdap/vendor/sampler.hpp"
 #include "xrdap/vendor/sampler_policy.hpp"
 #include "xrdap/vendor/vendor_protocol.hpp"
-
-// 实例化一个引脚，检查模板本身 / Instantiate one pin to check the template itself.
-template class XrDap::F1Gpio<0x40010C00U, 13U>;
 
 namespace
 {

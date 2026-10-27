@@ -25,9 +25,8 @@ Headers are included as `xrdap/<module>/<file>.hpp`:
 | `light/` | `StatusLight`: computes the colour and level of the light at each moment from the link, the settings and DAP activity |
 | `probe/` | `SetProbeInfo`, `FormatSerial` (DAP_Info strings and the serial rule), `family.hpp` (VID:PID and each board's bcdDevice) |
 | `protocol/` | `dap_cmd.hpp`: aliases for libxr's CMSIS-DAP command ids and status values, defined nowhere else |
-| `swd/` | `F1Gpio`: the register-level SWD pin shared by the STM32F1 and the CH32V3 |
 
-Apart from `swd/F1Gpio`, which reads and writes the STM32F1/CH32V3 GPIO registers directly, this repository touches no peripherals. Time, mutexes and semaphores come from libxr's `Timebase`, `Mutex` and `Semaphore`; what libxr has no common abstraction for is supplied by the platform:
+This repository touches no peripherals. Time, mutexes and semaphores come from libxr's `Timebase`, `Mutex` and `Semaphore`; what libxr has no common abstraction for is supplied by the platform:
 
 | Platform supplies | Notes |
 |---|---|
