@@ -99,11 +99,19 @@ class TaskSampling
   ///       信号量，饿死命令处理 / Once the deadline is consumed there is no further wake
   ///       until the sampling task rearms it: while a long frame runs, repeated interrupts
   ///       must not accumulate semaphore posts and starve command handling.
+  /// @note 加计数和读唤醒计数用 seq_cst，与 Arm 里装填唤醒计数和读计数配对：两边各写一个量
+  ///       再读对方的，seq_cst 的全序保证至少一边看得到对方，不会既没唤醒、又没发现计数已
+  ///       到（relaxed 序不保证；这一处原来是 relaxed）/ Raising the count and reading the
+  ///       wake count are seq_cst, paired with rearming the wake count and reading the count
+  ///       in Arm: each side writes one variable and then reads the other's, and the total
+  ///       order of seq_cst guarantees at least one side sees the other, so a due tick can no
+  ///       longer be both unwoken and unnoticed (relaxed order does not guarantee this, and
+  ///       these four accesses were relaxed).
   void OnTickIsr(uint32_t elapsed_ticks)
   {
     const uint32_t count =
-        ticks_.fetch_add(elapsed_ticks, std::memory_order_relaxed) + elapsed_ticks;
-    uint32_t wake_at = wake_at_.load(std::memory_order_relaxed);
+        ticks_.fetch_add(elapsed_ticks, std::memory_order_seq_cst) + elapsed_ticks;
+    uint32_t wake_at = wake_at_.load(std::memory_order_seq_cst);
     if (TickWakes(count, wake_at) &&
         wake_at_.compare_exchange_strong(wake_at, count + kParkedTicks,
                                          std::memory_order_relaxed))
@@ -130,11 +138,12 @@ class TaskSampling
   ///        has already come.
   /// @return true 时要采的节拍已到，中断不会再唤醒，调用方接着做 / True when it has come:
   ///         the interrupt will not wake again, so the caller carries on.
-  /// @note 只在采样任务里 / Sampling task only.
+  /// @note 只在采样任务里。先装填、再读计数，都是 seq_cst，与 OnTickIsr 配对 / Sampling
+  ///       task only. Rearm, then read the count, both seq_cst, paired with OnTickIsr.
   bool Arm(uint32_t next)
   {
-    wake_at_.store(next, std::memory_order_relaxed);
-    return TickDue(ticks_.load(std::memory_order_relaxed), next);
+    wake_at_.store(next, std::memory_order_seq_cst);
+    return TickDue(ticks_.load(std::memory_order_seq_cst), next);
   }
 
   /// @brief 停下等命令：中断不再按计数唤醒，由 CommandEnd 唤醒 / Parked for commands: the
