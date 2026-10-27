@@ -98,36 +98,7 @@ class Sampler
   /// @note 任何上下文 / Any context.
   bool Active() const { return active_.load(std::memory_order_acquire) != 0U; }
 
-  struct Statistics
-  {
-    uint32_t ticks;  // Timer ticks since start, excluding the immediate tick 0.
-    uint32_t frames;
-    uint32_t skipped;
-    uint32_t max_frame_us;
-    uint32_t max_wake_us;
-    uint32_t merged_callbacks;
-    uint32_t merged_ticks;
-    uint32_t swd_failures;
-    uint32_t swd_resyncs;
-  };
-
-  /// Diagnostic snapshot of the current/last run; counters reset at timer start.
-  /// Independent counters may advance while this snapshot is read.
-  Statistics Stats() const
-  {
-    const auto memory = mem_.Stats();
-    return {ticks_.load(),
-            frames_.load(),
-            skipped_.load(),
-            max_frame_us_.load(),
-            max_wake_us_.load(),
-            merged_callbacks_.load(),
-            merged_ticks_.load(),
-            memory.failed_transactions - swd_failures_start_.load(),
-            memory.resyncs - swd_resyncs_start_.load()};
-  }
-
-  /// @brief 清空帧缓冲和计数 / Clear the frame buffer and the counters.
+  /// @brief 清空帧缓冲 / Clear the frame buffer.
   /// @note DAP 执行上下文 / DAP execution context.
   void ClearFrames() { ring_.Reset(); }
 
@@ -143,19 +114,13 @@ class Sampler
   ///        方式下唤醒采样任务 / Called by the tick timer interrupt: adds elapsed_ticks
   ///        to the count; when the count reaches or passes the next tick, notes the time
   ///        and, in task mode, wakes the sampling task.
-  /// @param late_us Delay since the latest elapsed tick, included in wake latency.
   /// @note 中断上下文；平台的时基须能在中断里读 / Interrupt context; the platform's time
   ///       base must be readable from an interrupt.
-  void OnTickIsr(uint32_t elapsed_ticks = 1U, uint32_t late_us = 0U)
+  void OnTickIsr(uint32_t elapsed_ticks = 1U)
   {
     if (elapsed_ticks == 0U)
     {
       return;
-    }
-    if (elapsed_ticks > 1U)
-    {
-      merged_callbacks_.fetch_add(1U, std::memory_order_relaxed);
-      merged_ticks_.fetch_add(elapsed_ticks - 1U, std::memory_order_relaxed);
     }
     const uint32_t count =
         ticks_.fetch_add(elapsed_ticks, std::memory_order_relaxed) + elapsed_ticks;
@@ -166,8 +131,6 @@ class Sampler
     {
       // Consume this wake deadline. While a long frame runs, repeated interrupts
       // must not accumulate semaphore posts and starve command handling.
-      wake_lag_ticks_.store(count - wake_at, std::memory_order_relaxed);
-      wake_late_us_.store(late_us, std::memory_order_relaxed);
       woke_us_.store(static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds()),
                      std::memory_order_relaxed);
       woke_tick_.store(count, std::memory_order_release);
@@ -236,19 +199,7 @@ class Sampler
   /// (low 32 bits of µs) of the interrupt's wake; that tick's busy time counts from here.
   std::atomic<uint32_t> woke_tick_{0U};
   std::atomic<uint32_t> woke_us_{0U};
-  /// Whole periods missed since the requested wake deadline; kept separate from
-  /// woke_us_ so inter-frame fairness still uses the latest elapsed tick.
-  std::atomic<uint32_t> wake_lag_ticks_{0U};
-  std::atomic<uint32_t> wake_late_us_{0U};
   std::atomic<uint32_t> task_mode_{0U};
-  std::atomic<uint32_t> frames_{0U};
-  std::atomic<uint32_t> skipped_{0U};
-  std::atomic<uint32_t> max_frame_us_{0U};
-  std::atomic<uint32_t> max_wake_us_{0U};
-  std::atomic<uint32_t> merged_callbacks_{0U};
-  std::atomic<uint32_t> merged_ticks_{0U};
-  std::atomic<uint32_t> swd_failures_start_{0U};
-  std::atomic<uint32_t> swd_resyncs_start_{0U};
   LibXR::Semaphore wake_{0};
 
   // 以下在 MemAp::Lock 里读写 / The members below are read and written under

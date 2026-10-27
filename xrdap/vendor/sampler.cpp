@@ -128,15 +128,6 @@ bool Sampler::Service(TickTimer& timer)
       timer.Stop();
     }
     ticks_.store(0U, std::memory_order_relaxed);
-    frames_.store(0U);
-    skipped_.store(0U);
-    max_frame_us_.store(0U);
-    max_wake_us_.store(0U);
-    merged_callbacks_.store(0U);
-    merged_ticks_.store(0U);
-    const auto memory = mem_.Stats();
-    swd_failures_start_.store(memory.failed_transactions);
-    swd_resyncs_start_.store(memory.resyncs);
     woke_tick_.store(UINT32_MAX, std::memory_order_relaxed);
     count = 0U;
     account_.Begin();
@@ -161,24 +152,7 @@ bool Sampler::Service(TickTimer& timer)
   if (step.sample)
   {
     const auto t0 = static_cast<uint32_t>(NowUs());
-    const uint32_t woke_tick = woke_tick_.load(std::memory_order_acquire);
-    if (woke_tick != UINT32_MAX && TickDue(step.tick, woke_tick))
-    {
-      const uint32_t latency =
-          WakeLatencyUs(t0, woke_us_.load(std::memory_order_relaxed),
-                        wake_late_us_.load(std::memory_order_relaxed),
-                        wake_lag_ticks_.load(std::memory_order_relaxed), period_us_);
-      if (latency > max_wake_us_.load(std::memory_order_relaxed))
-      {
-        max_wake_us_.store(latency, std::memory_order_relaxed);
-      }
-    }
     SampleTick(step);
-    const uint32_t frame_us = static_cast<uint32_t>(NowUs()) - t0;
-    if (frame_us > max_frame_us_.load(std::memory_order_relaxed))
-    {
-      max_frame_us_.store(frame_us, std::memory_order_relaxed);
-    }
     // 占用从节拍中断唤醒的那一刻算起，包括唤醒、切换任务和取链路锁的时间：只量读帧的
     // 时间会少算，周期接近一帧时留给命令的间隙就只是纸面上的。没有这一拍的中断时刻时
     // （开始时的节拍 0、不等唤醒接着做的一拍）从读帧开始算。单循环里中断到这里之间是
@@ -235,7 +209,6 @@ void Sampler::SampleTick(const TickAccount::Step& step)
   if (step.skipped != 0U)
   {
     ring_.AddSkipped(step.skipped);
-    skipped_.fetch_add(step.skipped, std::memory_order_relaxed);
   }
   if (due == 0U)
   {
@@ -324,7 +297,6 @@ void Sampler::SampleTick(const TickAccount::Step& step)
     ++i;
   }
   ring_.Push(frame, static_cast<uint16_t>(10U + bitmap + values_size), stop_on_full_);
-  frames_.fetch_add(1U, std::memory_order_relaxed);
 }
 
 }  // namespace XrDap::Vendor

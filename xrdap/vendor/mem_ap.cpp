@@ -48,16 +48,13 @@ bool MemAp::TxnOk(LibXR::ErrorCode ec, const Ack& ack)
   {
     return true;
   }
-  last_ack_.store(static_cast<uint32_t>(ack));
-  last_error_.store(static_cast<uint32_t>(ec));
-  failed_transactions_.fetch_add(1U);
+  failed_since_reset_ = true;
   return false;
 }
 
 bool MemAp::Resync()
 {
   ResetCache();
-  resyncs_.fetch_add(1U);
   swd_.InvalidateSelectCache();
   // Re-enter SWD as well as resetting the line. A malformed request can leave the
   // target's debug port in the other wire protocol; a bare line reset does not
@@ -83,9 +80,8 @@ bool MemAp::Resync()
 
 void MemAp::ResetCache(bool reuse_csw)
 {
-  const uint32_t failures = failed_transactions_.load(std::memory_order_relaxed);
-  reuse_csw = reuse_csw && failures == cache_failure_count_;
-  cache_failure_count_ = failures;
+  reuse_csw = reuse_csw && !failed_since_reset_;
+  failed_since_reset_ = false;
   uint8_t kept = 0U;
   if (reuse_csw)
   {

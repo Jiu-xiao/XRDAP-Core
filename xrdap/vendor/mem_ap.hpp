@@ -11,7 +11,6 @@
 // invalidates the SWD SELECT cache, so the host must treat SELECT, CSW and TAR as
 // unknown.
 
-#include <atomic>
 #include <cstdint>
 
 #include "debug/swd.hpp"
@@ -67,20 +66,6 @@ class MemAp
   ///        object.
   explicit MemAp(LibXR::Debug::Swd& swd) : swd_(swd) {}
 
-  struct Statistics
-  {
-    uint32_t failed_transactions;
-    uint32_t last_ack;
-    uint32_t last_error;
-    uint32_t resyncs;
-  };
-  /// Diagnostic counters, readable without taking the SWD link.
-  Statistics Stats() const
-  {
-    return {failed_transactions_.load(), last_ack_.load(), last_error_.load(),
-            resyncs_.load()};
-  }
-
   // 以下方法都要求调用方持有 Lock / Every method below requires the caller to hold a
   // Lock.
 
@@ -134,11 +119,8 @@ class MemAp
   LibXR::Mutex mutex_;
   ApState ap_[kMaxAps];
   uint8_t ap_count_ = 0U;
-  uint32_t cache_failure_count_ = 0U;
-  std::atomic<uint32_t> failed_transactions_{0U};
-  std::atomic<uint32_t> last_ack_{0U};
-  std::atomic<uint32_t> last_error_{0U};
-  std::atomic<uint32_t> resyncs_{0U};
+  /// A transaction failed since the last ResetCache; blocks CSW reuse. Under Lock.
+  bool failed_since_reset_ = false;
 };
 
 }  // namespace XrDap::Vendor

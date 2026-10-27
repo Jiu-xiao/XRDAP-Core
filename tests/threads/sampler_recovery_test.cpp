@@ -146,7 +146,10 @@ void ApSelection()
   CHECK_RECOVERY(Read(mem, 0) == (0x08000000U ^ 0x12340000U));
   CHECK_RECOVERY(Read(mem, 1) == (0x08000000U ^ 0x12340001U));
   CHECK_RECOVERY(Read(mem, 0) == (0x08000000U ^ 0x12340000U));
-  CHECK_RECOVERY(mem.Stats().failed_transactions == 0U);
+  // Each AP's CSW is read once; the third read reuses the cached AP 0 state, and
+  // nothing failed or needed recovery.
+  CHECK_RECOVERY(swd.csw_reads == 2U);
+  CHECK_RECOVERY(swd.resets == 0U && swd.enters == 0U);
 }
 
 void SamplerRecovery()
@@ -174,14 +177,13 @@ void SamplerRecovery()
   sampler.Poll(timer);
   take();
   CHECK_RECOVERY(Get32(frame) == 1 && frame[10] == 1);  // Keep evidence of the error.
-  CHECK_RECOVERY(mem.Stats().last_ack == 0U && mem.Stats().failed_transactions > 0U);
   CHECK_RECOVERY(swd.resets == 0);
   sampler.OnTickIsr();
   sampler.Poll(timer);
   take();
   CHECK_RECOVERY(Get32(frame) == 2 && frame[10] == 0);
   CHECK_RECOVERY(Get32(frame + 11) == (0x08000000U ^ 0x12340000U));
-  CHECK_RECOVERY(swd.resets == 1 && mem.Stats().resyncs == 1);
+  CHECK_RECOVERY(swd.resets == 1);
   CHECK_RECOVERY(swd.enters == 1);
   CHECK_RECOVERY(swd.memory_reads == 2);  // No hidden re-read of the failed frame.
 
@@ -208,6 +210,10 @@ void BurstReadAndFailure()
     ap.ap = 0U;
     ap.valid = true;
     ap.base_csw = 0x23000002U;
+    // Prime the command-level AP cache so CSW reuse after the burst can be observed.
+    mem.ResetCache();
+    CHECK_RECOVERY(mem.EnsureAp(0U) != nullptr);
+    CHECK_RECOVERY(swd.csw_reads == 1U);
     if (fault >= 1U && fault <= 3U) swd.fail_drw = fault;
     if (fault == 4U) swd.parity_drw = 2U;
     if (fault == 5U) swd.parity_rdbuff = true;
@@ -222,8 +228,12 @@ void BurstReadAndFailure()
       CHECK_RECOVERY(Get32(values + i * 4U) == ((0x08000000U + i * 4U) ^ 0x12340000U));
     for (unsigned i = 0; i < swd.addresses.size(); ++i)
       CHECK_RECOVERY(swd.addresses[i] == 0x08000000U + i * 4U);
-    CHECK_RECOVERY(mem.Stats().failed_transactions == (fault ? 1U : 0U));
     swd.parity_rdbuff = false;
+    // A failed transaction (and only a failure) forbids reusing the cached CSW: the
+    // next command re-reads it from hardware. This replaces the old failure counter.
+    mem.ResetCache(true);
+    CHECK_RECOVERY(mem.EnsureAp(0U) != nullptr);
+    CHECK_RECOVERY(swd.csw_reads == (fault ? 2U : 1U));
     // A subsequent single read restores non-incrementing CSW and succeeds.
     Item it;
     it.ap = 0U;
@@ -318,16 +328,12 @@ void SamplerMergedTicksAndBatches()
     swd.parity_rdbuff = false;
     sampler.CommandBegin();
     sampler.CommandReadOnly();
-    sampler.OnTickIsr(4U, 250U);  // Ticks 1..3 were missed; only frame 4 is produced.
+    sampler.OnTickIsr(4U);  // Ticks 1..3 were missed; only frame 4 is produced.
     sampler.Poll(timer);
     sampler.CommandEnd();
     got = sampler.TakeFrames(frame, sizeof(frame));
     CHECK_RECOVERY(got.frames == 1U && Get32(frame) == 4U);
     CHECK_RECOVERY(got.skipped == 3U && got.dropped == 0U);
-    const auto stats = sampler.Stats();
-    CHECK_RECOVERY(stats.ticks == 4U && stats.frames == 2U && stats.skipped == 3U);
-    CHECK_RECOVERY(stats.merged_callbacks == 1U && stats.merged_ticks == 3U);
-    CHECK_RECOVERY(stats.max_wake_us >= 300250U);  // Includes all three lost periods.
     sampler.OnTickIsr(0U);
     sampler.Poll(timer);
     CHECK_RECOVERY(sampler.TakeFrames(frame, sizeof(frame)).frames == 0U);
@@ -370,9 +376,20 @@ void StandardInfoDoesNotParkSampler()
   vendor.Poll(timer);
   vendor.OnTickIsr();
   vendor.Poll(timer);  // Still sampling with the read-only command turn open.
-  CHECK_RECOVERY(vendor.SamplingStats().frames == 3U);
-  CHECK_RECOVERY(vendor.SamplingStats().skipped == 0U);
   vendor.CommandEnd();
+  // Tick 0 plus the two ticks above: three frames, none skipped, none dropped.
+  const uint8_t read[] = {0x85U, 0xFFU, 0x00U};
+  vendor.CommandBegin();
+  CHECK_RECOVERY(vendor.OnCommand(read, sizeof(read), response, sizeof(response),
+                                  length) == XrDap::DapVendor::Result::HANDLED);
+  vendor.CommandEnd();
+  CHECK_RECOVERY(response[1] == kStatusOk);
+  CHECK_RECOVERY(Get32(response + 14) == 0U);  // dropped
+  CHECK_RECOVERY(Get32(response + 18) == 0U);  // skipped
+  CHECK_RECOVERY(Get16(response + 22) == 3U);  // frames
+  CHECK_RECOVERY(Get32(response + kSubReadHeaderLen) == 0U);
+  CHECK_RECOVERY(Get32(response + kSubReadHeaderLen + 15U) == 1U);
+  CHECK_RECOVERY(Get32(response + kSubReadHeaderLen + 30U) == 2U);
   const uint8_t stop[] = {0x84U, 0U};
   vendor.CommandBegin();
   CHECK_RECOVERY(vendor.OnCommand(stop, sizeof(stop), response, sizeof(response),
