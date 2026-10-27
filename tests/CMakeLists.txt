@@ -83,4 +83,21 @@ if(DEFINED LIBXR_DIR)
   target_link_libraries(xrdap_sampler_recovery PRIVATE xr pthread)
   target_compile_options(xrdap_sampler_recovery PRIVATE -Wall -Wextra -Werror)
   add_test(NAME xrdap_sampler_recovery COMMAND xrdap_sampler_recovery)
+
+  # Sampler 任务模式（RunTask、Post、让路停车）。需要真的自旋锁，所以用 stub_mt 里的平台部分；
+  # XRDAP_TEST_KNOWN_ISSUES=ON 时多编译一个已知会失败的用例（启动顺序）/ Sampler task mode
+  # (RunTask, Post, parking to yield). Needs a real spin lock, so it uses the platform part in
+  # stub_mt; XRDAP_TEST_KNOWN_ISSUES=ON also builds the case known to fail (start order).
+  option(XRDAP_TEST_KNOWN_ISSUES "Build test cases that fail on known issues" OFF)
+  add_executable(xrdap_sampler_task_mode
+      "${CMAKE_CURRENT_LIST_DIR}/threads/sampler_task_mode_test.cpp"
+      ${XRDAP_CORE_SOURCES})
+  target_include_directories(xrdap_sampler_task_mode PRIVATE
+      "${CMAKE_CURRENT_LIST_DIR}/stub_mt" ${XRDAP_CORE_INCLUDE_DIRS})
+  target_link_libraries(xrdap_sampler_task_mode PRIVATE xr pthread)
+  target_compile_options(xrdap_sampler_task_mode PRIVATE -Wall -Wextra -Werror)
+  if(XRDAP_TEST_KNOWN_ISSUES)
+    target_compile_definitions(xrdap_sampler_task_mode PRIVATE XRDAP_TEST_KNOWN_ISSUES=1)
+  endif()
+  add_test(NAME xrdap_sampler_task_mode COMMAND xrdap_sampler_task_mode)
 endif()
