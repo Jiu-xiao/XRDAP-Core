@@ -82,8 +82,25 @@ class MemAp
   /// @return 读不到 CSW 时返回 nullptr；缓存满时复用最后一格 / nullptr when the CSW
   ///         cannot be read; the last slot is reused when the cache is full.
   ApState* EnsureAp(uint8_t ap);
-  /// 读一个 AP 的 CSW，失败时清粘滞错误再试一次 / Read an AP's CSW; on failure clear the
-  /// sticky errors and retry once.
+  /// @brief 读一个 AP 的 CSW / Read an AP's CSW.
+  /// @param ap AP 号 / AP index.
+  /// @param csw 读出的 CSW；AHB-AP 的 Prot 位按下面第二条补上 / CSW as read; on an
+  ///        AHB-AP the Prot bits are completed as described in the second note.
+  /// @return 读到返回 true / true when the CSW was read.
+  /// @note 失败时清粘滞错误再试一次：刚重新连接，或上一次访问被打断（例如采样被停掉）
+  ///       之后，第一次 AP 访问偶尔会因 DP 里残留的粘滞错误失败 / On failure, clear the
+  ///       sticky errors and retry once: right after a reconnect, or after an access was
+  ///       cut short (for example sampling being stopped), the first AP access sometimes
+  ///       fails on a sticky error left in the DP.
+  /// @note AHB-AP 上电后的 Prot 可能是非特权访问，这时访问 PPB（CPUID、DHCSR、AIRCR）
+  ///       会出错，所以 AHB-AP 一律改成特权数据访问，与 OpenOCD 的 CSW_AHB_DEFAULT 相同；
+  ///       别的 AP 类型这几位含义不同（AXI-AP 是 ARPROT 和缓存属性），保持原值。CSW 已是
+  ///       特权访问时不再读 IDR，这一位写过一次就留在 AP 里 / After power-up an AHB-AP's
+  ///       Prot field may say unprivileged, and accesses to the PPB (CPUID, DHCSR, AIRCR)
+  ///       then fail, so an AHB-AP always gets privileged data access, as in OpenOCD's
+  ///       CSW_AHB_DEFAULT. Other AP types use these bits differently (ARPROT and cache
+  ///       attributes on an AXI-AP) and keep them. The IDR is not read once the CSW says
+  ///       privileged; after one write the bit stays in the AP.
   bool ReadCsw(uint8_t ap, uint32_t& csw);
   /// Restore SWD framing and clear DP errors; never resets or halts the target CPU.
   bool Resync();
@@ -103,13 +120,31 @@ class MemAp
  private:
   using Ack = LibXR::Debug::SwdProtocol::Ack;
 
-  // Bind ack by reference: the transaction argument must finish updating it before
-  // its value is inspected, regardless of the compiler's argument evaluation order.
+  /// @brief 判定一次事务是否成功 / Judge whether a transaction succeeded.
+  /// @param ec 事务的返回码 / Return code of the transaction.
+  /// @param ack 事务的 ack，按引用传入 / The transaction's ack, taken by reference.
+  /// @note 实参 `swd_.Xxx(ack)` 和 `ack` 的求值顺序没有规定，传值时不开优化会先读到调用前
+  ///       的 NO_ACK（V305-2）/ The evaluation order of `swd_.Xxx(ack)` and `ack` is
+  ///       unspecified; passed by value, an unoptimised build reads the NO_ACK from before
+  ///       the call (V305-2).
   bool TxnOk(LibXR::ErrorCode ec, const Ack& ack);
 
   bool SetSize(ApState& st, uint8_t size, bool increment = false);
   bool ReadWord(uint32_t addr, uint32_t& val);
   bool WriteWord(uint32_t addr, uint32_t val);
+  /// @brief 检查最近一次写之后 DP 有没有粘滞错误 / Check the DP for sticky errors after
+  ///        the last write.
+  /// @return 没有错误返回 true；有错误时已清除粘滞位 / true when clean; on an error the
+  ///         sticky bits have been cleared.
+  /// @note 写是 posted 的，DP 的 CTRL/STAT 读不会等 AP 事务完成：总线故障来晚时这一次读
+  ///       看不到，故障被算到下一个条目上（TAR 写回 FAULT），最后一条恢复写也就发不出去。
+  ///       所以先读 DP RDBUFF 把这次写等到底（它在写完成前只回 WAIT，写失败时回 FAULT），
+  ///       再看 CTRL/STAT 的粘滞错误位 / The write is posted and a DP CTRL/STAT read does
+  ///       not wait for the AP transaction: a bus fault that arrives after that read is
+  ///       missed and lands on the next item (the TAR write returns FAULT), so the final
+  ///       recovery write never happens. DP RDBUFF is read first, which is held off with
+  ///       WAIT until the posted write completes and answers FAULT when it failed; then
+  ///       the sticky error bits in CTRL/STAT are checked.
   bool CheckCtrlStat();
   void ClearSticky();
   bool Resolve(const Item& it, uint32_t& addr, uint8_t& st);

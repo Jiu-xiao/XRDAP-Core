@@ -38,10 +38,6 @@ constexpr uint32_t kAbortClearAll = 0x1EU;
 uint8_t SizeCode(uint8_t size) { return (size == 1U) ? 0U : (size == 2U) ? 1U : 2U; }
 }  // namespace
 
-// ack 按引用传入：实参 swd_.Xxx(ack) 和 ack 的求值顺序没有规定，传值时不开优化会先读到调用前的
-// NO_ACK（V305-2）。
-// ack is taken by reference: the evaluation order of `swd_.Xxx(ack)` and `ack` is unspecified,
-// and passed by value an unoptimised build reads the NO_ACK from before the call (V305-2).
 bool MemAp::TxnOk(LibXR::ErrorCode ec, const Ack& ack)
 {
   if (ec == LibXR::ErrorCode::OK && ack == Ack::OK)
@@ -118,20 +114,6 @@ MemAp::ApState* MemAp::EnsureAp(uint8_t ap)
   return st->valid ? st : nullptr;
 }
 
-// 刚重新连接，或上一次访问被打断（例如采样被停掉）之后，第一次 AP 访问偶尔会因 DP 里
-// 残留的粘滞错误失败，所以失败时清掉再试一次。
-// Right after a reconnect, or after an access was cut short (for example sampling being
-// stopped), the first AP access sometimes fails on a sticky error left in the DP, so a
-// failure clears it and tries once more.
-//
-// AHB-AP 上电后的 Prot 可能是非特权访问，这时访问 PPB（CPUID、DHCSR、AIRCR）会出错，
-// 所以 AHB-AP 一律改成特权数据访问，与 OpenOCD 的 CSW_AHB_DEFAULT 相同。别的 AP
-// 类型这几位 含义不同（AXI-AP 是 ARPROT 和缓存属性），保持原值。已经是特权访问时不再读
-// IDR，这一位 写过一次就留在 AP 里。 On an AHB-AP the Prot field after power-up may say
-// unprivileged, and accesses to the PPB (CPUID, DHCSR, AIRCR) then fail, so an AHB-AP
-// always gets privileged data access, as in OpenOCD. Other AP types use these bits
-// differently (ARPROT and cache attributes on an AXI-AP) and keep them. The IDR is not
-// read once the CSW says privileged; after one write the bit stays in the AP.
 bool MemAp::ReadCsw(uint8_t ap, uint32_t& csw)
 {
   const uint32_t select = static_cast<uint32_t>(ap) << 24;
@@ -256,19 +238,11 @@ bool MemAp::ReadWord(uint32_t addr, uint32_t& val)
   return true;
 }
 
-// 写是 posted 的，DP 的 CTRL/STAT 读不会等 AP 事务完成：总线故障来晚时这一次读看不到，
-// 于是故障被算到下一个条目上（TAR 写回 FAULT），最后一条恢复写也就发不出去。所以先读一次
-// DP RDBUFF 把这次写等到底——它在写完成前只回 WAIT，写失败时回 FAULT——再看 CTRL/STAT 的
-// 粘滞错误位。
-// The write is posted and a DP CTRL/STAT read does not wait for the AP transaction: a bus
-// fault that arrives after that read is missed and lands on the next item (the TAR write
-// returns FAULT), so the final recovery write never happens. Read DP RDBUFF first, which
-// is held off with WAIT until the posted write completes and answers FAULT when it
-// failed, then look at the sticky error bits in CTRL/STAT.
 bool MemAp::CheckCtrlStat()
 {
   Ack ack = Ack::NO_ACK;
   uint32_t rb = 0U;
+  // 先读 RDBUFF 把 posted 写等完 / Read RDBUFF first to drain the posted write.
   const LibXR::ErrorCode DRAIN = swd_.DpReadRdbuffTxn(rb, ack);
   if (!TxnOk(DRAIN, ack))
   {
