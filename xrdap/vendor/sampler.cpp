@@ -7,6 +7,8 @@
 
 namespace XrDap::Vendor
 {
+uint64_t SamplerNowUs() { return static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds()); }
+
 namespace
 {
 void MarkFailed(uint8_t* marks, uint16_t i)
@@ -45,6 +47,21 @@ uint8_t SamplerCore::Configure(const SubItemList& items, uint32_t period_us,
     ok = ok && dst.valid;
   }
   return ok ? kStatusOk : kStatusNoTarget;
+}
+
+void SamplerCore::StopTimer(TickTimer& timer)
+{
+  if (timer_on_)
+  {
+    timer.Stop();
+    timer_on_ = false;
+  }
+}
+
+void SamplerCore::StartTimer(TickTimer& timer)
+{
+  timer.Start(period_us_);
+  timer_on_ = true;
 }
 
 const SamplerCore::ApCsw* SamplerCore::FindCsw(uint8_t ap) const

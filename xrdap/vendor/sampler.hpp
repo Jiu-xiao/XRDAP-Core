@@ -38,7 +38,6 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "timebase.hpp"
 #include "xrdap/vendor/frame_ring.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/sampler_policy.hpp"
@@ -66,11 +65,11 @@ class TickTimer
   ~TickTimer() = default;
 };
 
-/// 当前时刻，µs / The current time in µs.
-inline uint64_t SamplerNowUs()
-{
-  return static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds());
-}
+/// @brief 当前时刻，µs / The current time in µs.
+/// @note 只在 sampler.cpp 里定义一份，不内联：时基读数的展开比一次调用大得多，Service 里
+///       有好几处要用 / Defined once in sampler.cpp and not inlined: the time base read
+///       expands to much more than a call, and Service needs it in several places.
+uint64_t SamplerNowUs();
 
 /// 两种运行方式共用的采样部分：配置、帧的组装、帧缓冲 / The part of sampling both ways
 /// share: configuration, frame assembly and the frame buffer.
@@ -129,6 +128,15 @@ class SamplerCore
   uint32_t run_gen_ = 0U;
   bool timer_on_ = false;
   TickAccount account_;
+
+  /// @brief 停定时器（若开着）/ Stop the timer if it is on.
+  /// @note 不内联：平台的定时器类型对 Service 保持未知，调用不会被去虚化后展开进 Service /
+  ///       Out of line: the platform's timer type stays unknown to Service, so the calls are
+  ///       not devirtualised and expanded into it.
+  void StopTimer(TickTimer& timer);
+
+  /// 以 period_us_ 开定时器 / Start the timer with period_us_.
+  void StartTimer(TickTimer& timer);
 
   /// 新的一次运行：不再等待重新同步 / A new run: no resynchronisation pending.
   void ResetResync()
@@ -281,11 +289,7 @@ class SamplerT : public SamplerCore
     uint32_t count = policy_.Ticks();
     if (!policy_.Active())
     {
-      if (timer_on_)
-      {
-        timer.Stop();
-        timer_on_ = false;
-      }
+      StopTimer(timer);
       return false;
     }
     const uint32_t gen = policy_.Generation();
@@ -293,17 +297,13 @@ class SamplerT : public SamplerCore
     {
       // 新的一次采样：计数清零后再开定时器，节拍 0 马上采 / A new run: the count is
       // cleared before the timer starts, and tick 0 is sampled at once.
-      if (timer_on_)
-      {
-        timer.Stop();
-      }
+      StopTimer(timer);
       policy_.BeginRun();
       count = 0U;
       account_.Begin();
       ResetResync();
       run_gen_ = gen;
-      timer.Start(period_us_);
-      timer_on_ = true;
+      StartTimer(timer);
     }
 
     const WakeDecision decision = policy_.Decide(account_, count);
@@ -325,8 +325,7 @@ class SamplerT : public SamplerCore
       if (!keep_(keep_ctx_, session_))
       {
         policy_.Deactivate();
-        timer.Stop();
-        timer_on_ = false;
+        StopTimer(timer);
         return false;
       }
     }
