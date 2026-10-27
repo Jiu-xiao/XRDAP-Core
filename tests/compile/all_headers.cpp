@@ -20,6 +20,7 @@
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/request_length.hpp"
 #include "xrdap/vendor/sampler.hpp"
+#include "xrdap/vendor/sampler_policy.hpp"
 #include "xrdap/vendor/vendor_protocol.hpp"
 
 // 实例化一个引脚，检查模板本身 / Instantiate one pin to check the template itself.

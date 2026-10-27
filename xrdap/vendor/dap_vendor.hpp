@@ -7,9 +7,10 @@
 // DAP 执行上下文里调用，命令属于哪条传输、能不能执行由 SessionOwner 决定。协议见
 // docs/protocol.md 第 3 节。
 //
-// 采样有两种运行方式，平台二选一：单循环的探针在主循环里调用 Poll()；有 RTOS 的探针建一个
-// 任务运行 RunSamplerTask()。两种方式都要平台的节拍定时器，它的中断调用 OnTickIsr()。
-// 采样和 DAP_Connect 状态都记在会话编号上，会话结束即停。
+// 采样有两种运行方式，平台在 xrdap_port.hpp 里用 Port::SamplerPolicy 二选一，编译期决定：
+// 单循环的探针（LoopSampling）在主循环里调用 Poll()；有 RTOS 的探针（TaskSampling）建一个
+// 任务运行 RunSamplerTask()。调用另一种方式的入口是编译错误。两种方式都要平台的节拍定时器，
+// 它的中断调用 OnTickIsr()。采样和 DAP_Connect 状态都记在会话编号上，会话结束即停。
 //
 // XR vendor extension commands (0x80 to 0x85, protocol version 2): multi-address
 // read/write, pointer-chain
@@ -18,27 +19,32 @@
 // libxr DAP execution context; SessionOwner decides which transport a command belongs to
 // and whether it runs. See docs/protocol.md section 3.
 //
-// Sampling runs one of two ways, chosen by the platform: a single-loop probe calls
-// Poll() in its main loop; a probe with an RTOS creates a task that runs
-// RunSamplerTask(). Both need the platform's tick timer, whose interrupt calls
-// OnTickIsr().
+// Sampling runs one of two ways, chosen by the platform at compile time with
+// Port::SamplerPolicy in xrdap_port.hpp: a single-loop probe (LoopSampling) calls Poll()
+// in its main loop; a probe with an RTOS (TaskSampling) creates a task that runs
+// RunSamplerTask(). Calling the other way's entry is a compile error. Both need the
+// platform's tick timer, whose interrupt calls OnTickIsr().
 // Sampling and the DAP_Connect state are tied to the session number and lapse when the
 // session ends.
 
-#include <atomic>
 #include <cstdint>
+#include <type_traits>
 
 #include "debug/swd.hpp"
 #include "xrdap/session/session_owner.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/sampler.hpp"
+#include "xrdap/vendor/sampler_policy.hpp"
 #include "xrdap/vendor/vendor_protocol.hpp"
+#include "xrdap_port.hpp"
 
 namespace XrDap
 {
 
-/// XR 厂商扩展命令处理器 / XR vendor extension command handler.
-class DapVendor
+/// 与采样运行方式无关的命令处理：READ、WRITE、INFO、附加命令和长度检查 / Command
+/// handling that does not depend on how sampling runs: READ, WRITE, INFO, the extra command
+/// and the length check.
+class DapVendorBase
 {
  public:
   /// 一条命令的处理结果 / Outcome of one command.
@@ -53,60 +59,6 @@ class DapVendor
   /// once the reply is filled in.
   using ExtraHandler = bool (*)(void* ctx, const uint8_t* req, uint16_t len,
                                 uint8_t* resp, uint16_t cap, uint16_t& out);
-
-  /// @param swd SWD 实现，生命周期需长于本对象 / SWD implementation; must outlive this
-  ///        object.
-  /// @param session 会话主人，生命周期需长于本对象 / Session owner; must outlive this
-  ///        object.
-  DapVendor(LibXR::Debug::Swd& swd, SessionOwner& session)
-      : session_(session), mem_(swd), sampler_(mem_, &DapVendor::KeepSampling, this)
-  {
-  }
-
-  /// @brief 处理一条命令 / Handle one command.
-  /// @note 只在 libxr DAP 执行上下文里调用（Executor 的钩子），调用方已确认这条命令的
-  ///       传输拥有探针 / Call only in the libxr DAP execution context (Executor's hook),
-  ///       after the caller confirmed the command's transport owns the probe.
-  Result OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
-                   uint16_t& out);
-
-  /// @brief 单循环：主循环在两条 DAP 命令之间调用，新节拍到了就采一拍 / Single loop:
-  ///        call between DAP commands in the main loop; samples a tick once a new one
-  ///        came.
-  /// @note 与 DAP 执行在同一个线程 / Same thread as the DAP execution.
-  void Poll(Vendor::TickTimer& timer) { sampler_.Poll(timer); }
-
-  /// @brief 是否正在采样，单循环主循环据此不在等命令时阻塞 / Whether sampling runs, so a
-  ///        single main loop does not block waiting for commands.
-  /// @note 任何上下文 / Any context.
-  bool Sampling() const { return sampler_.Active(); }
-
-  /// @brief 任务：采样任务的函数体，不返回 / Task: body of the sampling task; never
-  ///        returns.
-  /// @note 平台建的采样任务里调用；任务应为 SWD 所在核上优先级最高的任务 / Call from the
-  ///       platform's sampling task, which should have the highest priority on the core
-  ///       that drives SWD.
-  [[noreturn]] void RunSamplerTask(Vendor::TickTimer& timer) { sampler_.RunTask(timer); }
-
-  /// @brief 一条命令开始等执行 / A command starts waiting to run.
-  /// @note 执行器在命令排队等执行轮次之前调用 / Called by the executor before the command
-  ///       queues for an execution turn.
-  void CommandBegin() { sampler_.CommandBegin(); }
-
-  /// Mark the current frame fetch/status command as non-blocking for sampling.
-  void CommandReadOnly() { sampler_.CommandReadOnly(); }
-
-  /// @brief 一条命令执行完 / A command has run.
-  /// @note 执行器在交出执行轮次之后调用 / Called by the executor after it hands over the
-  ///       execution turn.
-  void CommandEnd() { sampler_.CommandEnd(); }
-
-  /// @brief 节拍定时器中断调用 / Called by the tick timer interrupt.
-  /// @note 中断上下文 / Interrupt context.
-  void OnTickIsr(uint32_t elapsed_ticks = 1U)
-  {
-    sampler_.OnTickIsr(elapsed_ticks);
-  }
 
   /// @brief 挂一条附加命令，其 feature 并入 INFO 功能位 / Attach one extra command whose
   ///        feature bit is merged into INFO.
@@ -128,16 +80,114 @@ class DapVendor
   ///       context (interrupts included).
   bool RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len) const;
 
- private:
-  static bool KeepSampling(void* ctx);
+ protected:
+  DapVendorBase(LibXR::Debug::Swd& swd, SessionOwner& session)
+      : session_(session), mem_(swd)
+  {
+  }
+  ~DapVendorBase() = default;
 
   bool Connected();
   bool IsVendor(uint8_t cmd) const;
+  bool CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out);
+  /// @param sampling 正在采样：沿用采样稳定的 CSW 位 / Sampling is running: reuse its
+  ///        stable CSW bits.
+  bool CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out,
+               bool sampling);
+  bool CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
+
+  SessionOwner& session_;
+  Vendor::MemAp mem_;
+
+  /// 收到 DAP_Connect 时的会话编号，0 表示没有连接；只在 DAP 执行上下文里读写 / Session
+  /// number at DAP_Connect, 0 when not connected; read and written in the DAP execution
+  /// context only.
+  uint32_t connected_session_ = 0U;
+
+  uint8_t extra_cmd_ = 0U;
+  uint32_t extra_feature_ = 0U;
+  ExtraHandler extra_handler_ = nullptr;
+  void* extra_ctx_ = nullptr;
+};
+
+/// @brief XR 厂商扩展命令处理器；Policy 是采样的运行策略（TaskSampling 或 LoopSampling）/
+///        XR vendor extension command handler; Policy is the sampling policy
+///        (TaskSampling or LoopSampling).
+/// @note 平台用 DapVendor（即 DapVendorT<Port::SamplerPolicy>）/ Platforms use DapVendor,
+///       which is DapVendorT<Port::SamplerPolicy>.
+template <class Policy>
+class DapVendorT : public DapVendorBase
+{
+ public:
+  /// @param swd SWD 实现，生命周期需长于本对象 / SWD implementation; must outlive this
+  ///        object.
+  /// @param session 会话主人，生命周期需长于本对象 / Session owner; must outlive this
+  ///        object.
+  DapVendorT(LibXR::Debug::Swd& swd, SessionOwner& session)
+      : DapVendorBase(swd, session), sampler_(mem_, &DapVendorT::KeepSampling, this)
+  {
+  }
+
+  /// @brief 处理一条命令 / Handle one command.
+  /// @note 只在 libxr DAP 执行上下文里调用（Executor 的钩子），调用方已确认这条命令的
+  ///       传输拥有探针 / Call only in the libxr DAP execution context (Executor's hook),
+  ///       after the caller confirmed the command's transport owns the probe.
+  Result OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
+                   uint16_t& out);
+
+  /// @brief 单循环：主循环在两条 DAP 命令之间调用，新节拍到了就采一拍 / Single loop:
+  ///        call between DAP commands in the main loop; samples a tick once a new one
+  ///        came.
+  /// @note 与 DAP 执行在同一个线程；任务策略下没有这个函数 / Same thread as the DAP
+  ///       execution; not available under the task policy.
+  template <class P = Policy, std::enable_if_t<!P::kRunsInTask, int> = 0>
+  void Poll(Vendor::TickTimer& timer)
+  {
+    sampler_.Poll(timer);
+  }
+
+  /// @brief 是否正在采样，单循环主循环据此不在等命令时阻塞 / Whether sampling runs, so a
+  ///        single main loop does not block waiting for commands.
+  /// @note 任务策略：任何上下文；单循环策略：只在主循环里 / Task policy: any context;
+  ///       single-loop policy: the main loop only.
+  bool Sampling() const { return sampler_.Active(); }
+
+  /// @brief 任务：采样任务的函数体，不返回 / Task: body of the sampling task; never
+  ///        returns.
+  /// @note 平台建的采样任务里调用；任务应为 SWD 所在核上优先级最高的任务；单循环策略下没有
+  ///       这个函数 / Call from the platform's sampling task, which should have the highest
+  ///       priority on the core that drives SWD; not available under the single-loop
+  ///       policy.
+  template <class P = Policy, std::enable_if_t<P::kRunsInTask, int> = 0>
+  [[noreturn]] void RunSamplerTask(Vendor::TickTimer& timer)
+  {
+    sampler_.RunTask(timer);
+  }
+
+  /// @brief 一条命令开始等执行（单循环策略下是空函数）/ A command starts waiting to run
+  ///        (an empty function under the single-loop policy).
+  /// @note 执行器在命令排队等执行轮次之前调用 / Called by the executor before the command
+  ///       queues for an execution turn.
+  void CommandBegin() { sampler_.CommandBegin(); }
+
+  /// Mark the current frame fetch/status command as non-blocking for sampling.
+  void CommandReadOnly() { sampler_.CommandReadOnly(); }
+
+  /// @brief 一条命令执行完（单循环策略下是空函数）/ A command has run (an empty function
+  ///        under the single-loop policy).
+  /// @note 执行器在交出执行轮次之后调用 / Called by the executor after it hands over the
+  ///       execution turn.
+  void CommandEnd() { sampler_.CommandEnd(); }
+
+  /// @brief 节拍定时器中断调用 / Called by the tick timer interrupt.
+  /// @note 中断上下文 / Interrupt context.
+  void OnTickIsr(uint32_t elapsed_ticks = 1U) { sampler_.OnTickIsr(elapsed_ticks); }
+
+ private:
+  static bool KeepSampling(void* ctx, uint32_t session);
+
   bool HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len, uint8_t* resp,
                     uint16_t cap, uint16_t& out);
-  bool CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out);
-  bool CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
-  bool CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
   bool CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
   bool CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
   /// @brief 取走采样缓冲里的帧，回复带头和帧 / Take frames from the sampling buffer; the
@@ -154,20 +204,11 @@ class DapVendor
   bool CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                   uint16_t& out);
 
-  SessionOwner& session_;
-  Vendor::MemAp mem_;
-  Vendor::Sampler sampler_;
-
-  /// 收到 DAP_Connect 时的会话编号，0 表示没有连接 / Session number at DAP_Connect, 0
-  /// when not connected.
-  std::atomic<uint32_t> connected_session_{0U};
-  /// 发起采样的会话编号 / Session number that started sampling.
-  std::atomic<uint32_t> sampling_session_{0U};
-
-  uint8_t extra_cmd_ = 0U;
-  uint32_t extra_feature_ = 0U;
-  ExtraHandler extra_handler_ = nullptr;
-  void* extra_ctx_ = nullptr;
+  Vendor::SamplerT<Policy> sampler_;
 };
+
+/// 平台选定的采样策略下的命令处理器 / The command handler under the platform's chosen
+/// sampling policy.
+using DapVendor = DapVendorT<Port::SamplerPolicy>;
 
 }  // namespace XrDap

@@ -31,8 +31,8 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 
 | 平台提供 | 说明 |
 |---|---|
-| `xrdap_port.hpp` | 采样帧缓冲大小 `Port::kRingBytes` 和它的自旋锁 `Port::SpinLock` |
-| 节拍定时器 | 实现 `Vendor::TickTimer`，中断里调用 `DapVendor::OnTickIsr()`；它会读 libxr 的 `Timebase`，时基须能在中断里读 |
+| `xrdap_port.hpp` | 采样帧缓冲大小 `Port::kRingBytes` 和它的自旋锁 `Port::SpinLock`；采样的运行方式 `Port::SamplerPolicy`（`TaskSampling` 或 `LoopSampling`，编译期二选一） |
+| 节拍定时器 | 实现 `Vendor::TickTimer`，中断里调用 `DapVendor::OnTickIsr()`；`TaskSampling` 下它会读 libxr 的 `Timebase`，时基须能在中断里读；`LoopSampling` 下中断只数节拍，不读时基 |
 | 线程 | 采样任务、USB 的 DAP 线程、串口线程（ESP 要固定到 SWD 所在的核） |
 | 会话的结束 | USB 复位计数、TCP 断开、无线会话号和 ping |
 | 灯 | 驱动、引脚和 USB 是否已配置的查询 |
@@ -51,7 +51,7 @@ target_include_directories(app.elf PRIVATE ${XRDAP_CORE_INCLUDE_DIRS} port)
 
 ESP-IDF 工程把 `XRDAP_CORE_SOURCES`、`XRDAP_CORE_INCLUDE_DIRS` 交给 `idf_component_register`。
 
-`xrdap_port.hpp` 给出采样帧缓冲的大小（2 的幂，INFO 会报告）和它的锁。采样和 SUB_READ 都会短暂持有这把锁（最多拷贝 1 KB），它不能阻塞：会阻塞的互斥量让优先级最高的采样任务在 SUB_READ 拷贝时睡下，短周期下节拍会迟到。双核的 ESP32 用 portMUX，单核 RTOS 用临界区，单循环的探针用空操作：
+`xrdap_port.hpp` 给出采样帧缓冲的大小（2 的幂，INFO 会报告）、它的锁，以及采样的运行方式：有 RTOS、采样在自己的任务里选 `TaskSampling`，没有 RTOS、主循环里 `Poll()` 的选 `LoopSampling`。选定后 `DapVendor` 就是 `DapVendorT<Port::SamplerPolicy>`，另一种方式的入口（`LoopSampling` 下的 `RunSamplerTask()`、`TaskSampling` 下的 `Poll()`）不存在，调用它们编译不过；`LoopSampling` 下没有信号量和采样给命令让路，`Executor` 每条命令调用的 `CommandBegin()`、`CommandEnd()` 是空函数。采样和 SUB_READ 都会短暂持有这把锁（最多拷贝 1 KB），它不能阻塞：会阻塞的互斥量让优先级最高的采样任务在 SUB_READ 拷贝时睡下，短周期下节拍会迟到。双核的 ESP32 用 portMUX，单核 RTOS 用临界区，单循环的探针用空操作：
 
 ```cpp
 // xrdap_port.hpp（单核 FreeRTOS）
@@ -61,9 +61,15 @@ ESP-IDF 工程把 `XRDAP_CORE_SOURCES`、`XRDAP_CORE_INCLUDE_DIRS` 交给 `idf_c
 #include "FreeRTOS.h"
 #include "task.h"
 
+namespace XrDap::Vendor
+{
+class TaskSampling;  // 采样在自己的任务里；没有 RTOS 的写 class LoopSampling;
+}
+
 namespace XrDap::Port
 {
 inline constexpr uint32_t kRingBytes = 4096;
+using SamplerPolicy = Vendor::TaskSampling;
 
 class SpinLock
 {
@@ -111,7 +117,7 @@ exec.EndSession(XrDap::Transport::RADIO);
 
 ### 单循环探针
 
-没有 RTOS 的探针在主循环里交替执行 USB 命令和采样。节拍定时器只在中断里数节拍，`Poll()` 看到新节拍就采一拍：
+没有 RTOS 的探针（`Port::SamplerPolicy` 为 `LoopSampling`）在主循环里交替执行 USB 命令和采样。节拍定时器只在中断里数节拍，`Poll()` 看到新节拍就采一拍：
 
 ```cpp
 #include "xrdap/session/executor.hpp"
@@ -141,7 +147,7 @@ for (;;)
 
 ### 有 RTOS 的探针
 
-采样任务在信号量上阻塞，节拍中断和停止都会唤醒它；它应为 SWD 所在核上优先级最高的任务。USB 的 DAP 线程循环调用 `StepUsb()`：
+有 RTOS 的探针（`Port::SamplerPolicy` 为 `TaskSampling`）的采样任务在信号量上阻塞，节拍中断、开始、停止和让路结束都会唤醒它；信号量在 `DapVendor` 构造时就存在，采样任务比第一条 `SUB_START` 或第一个节拍中断晚进入 `RunSamplerTask()` 也不会丢这些唤醒。它应为 SWD 所在核上优先级最高的任务。USB 的 DAP 线程循环调用 `StepUsb()`：
 
 ```cpp
 static LibXR::Thread sampler;

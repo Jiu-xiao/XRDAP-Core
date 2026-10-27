@@ -84,11 +84,10 @@ if(DEFINED LIBXR_DIR)
   target_compile_options(xrdap_sampler_recovery PRIVATE -Wall -Wextra -Werror)
   add_test(NAME xrdap_sampler_recovery COMMAND xrdap_sampler_recovery)
 
-  # Sampler 任务模式（RunTask、Post、让路停车）。需要真的自旋锁，所以用 stub_mt 里的平台部分；
-  # XRDAP_TEST_KNOWN_ISSUES=ON 时多编译一个已知会失败的用例（启动顺序）/ Sampler task mode
-  # (RunTask, Post, parking to yield). Needs a real spin lock, so it uses the platform part in
-  # stub_mt; XRDAP_TEST_KNOWN_ISSUES=ON also builds the case known to fail (start order).
-  option(XRDAP_TEST_KNOWN_ISSUES "Build test cases that fail on known issues" OFF)
+  # Sampler 任务策略（RunTask、Post、让路停车、启动顺序），并和单循环策略对照同一输入的帧。
+  # 需要真的自旋锁，所以用 stub_mt 里的平台部分 / Sampler task policy (RunTask, Post, parking
+  # to yield, start order), compared with the single-loop policy on the same input. Needs a
+  # real spin lock, so it uses the platform part in stub_mt.
   add_executable(xrdap_sampler_task_mode
       "${CMAKE_CURRENT_LIST_DIR}/threads/sampler_task_mode_test.cpp"
       ${XRDAP_CORE_SOURCES})
@@ -96,8 +95,17 @@ if(DEFINED LIBXR_DIR)
       "${CMAKE_CURRENT_LIST_DIR}/stub_mt" ${XRDAP_CORE_INCLUDE_DIRS})
   target_link_libraries(xrdap_sampler_task_mode PRIVATE xr pthread)
   target_compile_options(xrdap_sampler_task_mode PRIVATE -Wall -Wextra -Werror)
-  if(XRDAP_TEST_KNOWN_ISSUES)
-    target_compile_definitions(xrdap_sampler_task_mode PRIVATE XRDAP_TEST_KNOWN_ISSUES=1)
-  endif()
   add_test(NAME xrdap_sampler_task_mode COMMAND xrdap_sampler_task_mode)
+
+  # 运行方式是编译期策略：用错入口（单循环调 RunSamplerTask、任务调 Poll）编译不过，
+  # 单循环策略里没有让路。全是 static_assert / The way to run is a compile-time policy:
+  # the wrong entry (RunSamplerTask in a single loop, Poll in a task) does not compile, and
+  # the single-loop policy has no yielding. All static_asserts.
+  add_executable(xrdap_sampler_policy_entry
+      "${CMAKE_CURRENT_LIST_DIR}/compile/sampler_policy_entry.cpp")
+  target_include_directories(xrdap_sampler_policy_entry PRIVATE
+      "${CMAKE_CURRENT_LIST_DIR}/stub" ${XRDAP_CORE_INCLUDE_DIRS} ${XRDAP_LIBXR_USB_DIRS})
+  target_link_libraries(xrdap_sampler_policy_entry PRIVATE xr pthread)
+  target_compile_options(xrdap_sampler_policy_entry PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME xrdap_sampler_policy_entry COMMAND xrdap_sampler_policy_entry)
 endif()

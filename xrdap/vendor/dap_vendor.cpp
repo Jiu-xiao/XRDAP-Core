@@ -27,7 +27,7 @@ uint64_t NowUs() { return static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds
 uint8_t ToU8(Cmd c) { return static_cast<uint8_t>(c); }
 }  // namespace
 
-void DapVendor::SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler,
+void DapVendorBase::SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler,
                                 void* ctx)
 {
   extra_cmd_ = cmd;
@@ -39,23 +39,23 @@ void DapVendor::SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler hand
 // 发起采样的会话结束时返回 false，采样随即停止。采样任务或主循环调用。
 // Returns false once the session that started sampling has ended, which stops sampling.
 // Called by the sampling task or the main loop.
-bool DapVendor::KeepSampling(void* ctx)
+template <class Policy>
+bool DapVendorT<Policy>::KeepSampling(void* ctx, uint32_t session)
 {
-  auto* self = static_cast<DapVendor*>(ctx);
-  return self->session_.Alive(self->sampling_session_.load(std::memory_order_acquire),
-                              NowMs());
+  return static_cast<DapVendorT*>(ctx)->session_.Alive(session, NowMs());
 }
 
 // 扩展命令要求本会话里已经 DAP_Connect。 / Extension commands need a DAP_Connect in this
 // session.
-bool DapVendor::Connected()
+bool DapVendorBase::Connected()
 {
-  const uint32_t id = connected_session_.load(std::memory_order_acquire);
-  return id != 0U && session_.Alive(id, NowMs());
+  return connected_session_ != 0U && session_.Alive(connected_session_, NowMs());
 }
 
-DapVendor::Result DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp,
-                                       uint16_t cap, uint16_t& out)
+template <class Policy>
+DapVendorBase::Result DapVendorT<Policy>::OnCommand(const uint8_t* req, uint16_t len,
+                                                    uint8_t* resp, uint16_t cap,
+                                                    uint16_t& out)
 {
   if (req == nullptr || resp == nullptr || len < 1U || cap < 1U)
   {
@@ -99,17 +99,16 @@ DapVendor::Result DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t
   if (cmd == Dap::kConnect)
   {
     const uint8_t port = (len >= 2U) ? req[1] : 0U;
-    connected_session_.store((port == 0U || port == 1U) ? session_.Session() : 0U,
-                             std::memory_order_release);
+    connected_session_ = (port == 0U || port == 1U) ? session_.Session() : 0U;
   }
   else if (cmd == Dap::kDisconnect)
   {
-    connected_session_.store(0U, std::memory_order_release);
+    connected_session_ = 0U;
   }
   return Result::PASS;
 }
 
-bool DapVendor::RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len) const
+bool DapVendorBase::RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len) const
 {
   len = 0U;
   if (req == nullptr || avail < 1U)
@@ -122,14 +121,15 @@ bool DapVendor::RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len)
   return known && Vendor::RequestLength(req, avail, len);
 }
 
-bool DapVendor::IsVendor(uint8_t cmd) const
+bool DapVendorBase::IsVendor(uint8_t cmd) const
 {
   return (cmd >= kFirstCmd && cmd <= kLastCmd) ||
          (extra_handler_ != nullptr && cmd == extra_cmd_);
 }
 
-bool DapVendor::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len, uint8_t* resp,
-                             uint16_t cap, uint16_t& out)
+template <class Policy>
+bool DapVendorT<Policy>::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len,
+                                      uint8_t* resp, uint16_t cap, uint16_t& out)
 {
   // 回复空间一处检查：附加命令只保证至少 2 字节，自己的回复长度由它自己检查。
   // One reply space check: the extra command is only guaranteed 2 bytes and checks the
@@ -151,7 +151,7 @@ bool DapVendor::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len, uint
     case Cmd::INFO:
       return CmdInfo(len, resp, out);
     case Cmd::READ:
-      return CmdRead(req, len, resp, out);
+      return CmdRead(req, len, resp, out, sampler_.Active());
     case Cmd::WRITE:
       return CmdWrite(req, len, resp, out);
     case Cmd::SUB_START:
@@ -164,7 +164,7 @@ bool DapVendor::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len, uint
   return false;
 }
 
-bool DapVendor::CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out)
+bool DapVendorBase::CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out)
 {
   resp[0] = ToU8(Cmd::INFO);
   if (len != 1U)
@@ -182,7 +182,8 @@ bool DapVendor::CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out)
   return true;
 }
 
-bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
+bool DapVendorBase::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp,
+                            uint16_t& out, bool sampling)
 {
   resp[0] = ToU8(Cmd::READ);
   if (len < 2U || req[1] == 0U)
@@ -216,7 +217,7 @@ bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_
   MemAp::Lock lock(mem_);
   // Sampling owns the link: only our sampler and vendor commands can change CSW.
   // Reuse its stable base bits, but always reprogram size/increment before reading.
-  mem_.ResetCache(sampler_.Active());
+  mem_.ResetCache(sampling);
   resp[1] = kStatusOk;
   resp[2] = count;
   uint8_t* q = resp + 3;
@@ -238,7 +239,7 @@ bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_
   return true;
 }
 
-bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
+bool DapVendorBase::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
 {
   resp[0] = ToU8(Cmd::WRITE);
   if (len < 2U || req[1] == 0U)
@@ -294,8 +295,9 @@ bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16
   return true;
 }
 
-bool DapVendor::CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp,
-                            uint16_t& out)
+template <class Policy>
+bool DapVendorT<Policy>::CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp,
+                                     uint16_t& out)
 {
   resp[0] = ToU8(Cmd::SUB_START);
   if (sampler_.Active())
@@ -313,12 +315,15 @@ bool DapVendor::CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp,
     return Reply(resp, kStatusNoTarget, out);
   }
   // 采样归发起它的会话 / Sampling belongs to the session that starts it.
-  sampling_session_.store(session_.Session(), std::memory_order_release);
-  return Reply(resp, sampler_.Start(start.items, start.period_us, start.stop_on_full),
+  return Reply(resp,
+               sampler_.Start(start.items, start.period_us, start.stop_on_full,
+                              session_.Session()),
                out);
 }
 
-bool DapVendor::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
+template <class Policy>
+bool DapVendorT<Policy>::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp,
+                                    uint16_t& out)
 {
   resp[0] = ToU8(Cmd::SUB_CTRL);
   if (len != 2U)
@@ -337,8 +342,9 @@ bool DapVendor::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint
   return Reply(resp, kStatusArg, out);
 }
 
-bool DapVendor::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
-                           uint16_t& out)
+template <class Policy>
+bool DapVendorT<Policy>::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp,
+                                    uint16_t cap, uint16_t& out)
 {
   resp[0] = ToU8(Cmd::SUB_READ);
   if (len != 3U)
@@ -361,5 +367,8 @@ bool DapVendor::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint
   out = static_cast<uint16_t>(kSubReadHeaderLen + t.bytes);
   return true;
 }
+
+// 只为平台选定的策略生成代码 / Code is generated only for the policy the platform chose.
+template class DapVendorT<Port::SamplerPolicy>;
 
 }  // namespace XrDap

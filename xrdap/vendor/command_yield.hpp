@@ -7,6 +7,9 @@
 // 节拍都放弃（计入跳拍），直到没有命令在等；最后一条命令做完时唤醒采样，从下一个节拍起
 // 照常采。所以一条命令从进入执行器到做完，最多被采样占去一帧，与周期和任务怎么分布在
 // 核上都无关。命令和采样没有重叠时什么都不变：主机定时的 SUB_READ 不会因此多出跳拍。
+// 只有任务策略（TaskSampling）用它：命令和采样在不同的任务里才会抢链路。单循环策略
+// （LoopSampling）里命令和采样串行，Poll 只在两条命令之间被调用，没有命令在等，所以不
+// 实例化它。
 //
 // Sampling yields to commands (docs/protocol.md 3.5, user decision B9: the probe always
 // answers commands and skips are counted as usual). The executor counts a command as
@@ -17,7 +20,10 @@
 // carries on from the next tick. A command therefore loses at most one frame to sampling
 // between entering the executor and finishing, whatever the period and however tasks sit
 // on the cores. Nothing changes when commands and sampling do not overlap: the host's
-// periodic SUB_READ adds no skips.
+// periodic SUB_READ adds no skips. Only the task policy (TaskSampling) uses it: commands
+// and sampling compete for the link only when they run in different tasks. Under the
+// single-loop policy (LoopSampling) they run one after another and Poll is called only
+// between two commands, when none waits, so it is not instantiated.
 
 #include <atomic>
 #include <cstdint>

@@ -10,8 +10,17 @@
 #include <cstdint>
 #include <thread>
 
+namespace XrDap::Vendor
+{
+class TaskSampling;
+}  // namespace XrDap::Vendor
+
 namespace XrDap::Port
 {
+
+/// 采样的运行策略：采样在自己的线程里，RunSamplerTask
+/// Sampling policy: sampling runs in its own thread, RunSamplerTask.
+using SamplerPolicy = Vendor::TaskSampling;
 
 /// 测试用的帧缓冲大小 / Frame buffer size used by the tests.
 inline constexpr uint32_t kRingBytes = 4096U;

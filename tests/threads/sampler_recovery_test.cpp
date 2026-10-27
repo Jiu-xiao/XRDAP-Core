@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Exercise real MemAp/Sampler code against an ADIv5 posted-read model. A framing
+// Exercise real MemAp/Sampler (single-loop policy) code against an ADIv5 posted-read model. A framing
 // failure must remain visible in the failed frame and recover on a later tick.
 #include <cstdio>
 #include <cstdlib>
@@ -156,11 +156,11 @@ void SamplerRecovery()
 {
   ModelSwd swd;
   MemAp mem(swd);
-  Sampler sampler(mem, +[](void*) { return true; }, nullptr);
+  LoopSampler sampler(mem, +[](void*, uint32_t) { return true; }, nullptr);
   Timer timer;
   // AP=0, id=1, u32 at 0x08000000, no dereference, div=1, phase=0.
   const uint8_t entry[] = {0, 1, 0, 4, 0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0};
-  CHECK_RECOVERY(sampler.Start({entry, entry + sizeof(entry), 1}, 10000, false) ==
+  CHECK_RECOVERY(sampler.Start({entry, entry + sizeof(entry), 1}, 10000, false, 1U) ==
                  kStatusOk);
   uint8_t frame[32] = {};
   auto take = [&]()
@@ -285,7 +285,7 @@ void SamplerMergedTicksAndBatches()
   {
     ModelSwd swd;
     MemAp mem(swd);
-    Sampler sampler(mem, +[](void*) { return true; }, nullptr);
+    LoopSampler sampler(mem, +[](void*, uint32_t) { return true; }, nullptr);
     Timer timer;
     Item a;
     a.ap = 0U;
@@ -299,7 +299,7 @@ void SamplerMergedTicksAndBatches()
     if (kind == 6U) swd.fail_drw = 2U;
     const auto bytes = Entries({a, b});
     CHECK_RECOVERY(sampler.Start({bytes.data(), bytes.data() + bytes.size(), 2}, 100000U,
-                                 false) == kStatusOk);
+                                 false, 1U) == kStatusOk);
     // Inject failure after CSW reads during start, at the next two-word frame.
     if (kind == 6U) swd.fail_drw = swd.drw_attempts + 2U;
     if (kind == 7U) swd.parity_rdbuff = true;

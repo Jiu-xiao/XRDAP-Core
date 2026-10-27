@@ -31,8 +31,8 @@ Apart from `swd/F1Gpio`, which reads and writes the STM32F1/CH32V3 GPIO register
 
 | Platform supplies | Notes |
 |---|---|
-| `xrdap_port.hpp` | the sample ring size `Port::kRingBytes` and its spinlock `Port::SpinLock` |
-| tick timer | implements `Vendor::TickTimer`; its interrupt calls `DapVendor::OnTickIsr()`, which reads libxr's `Timebase`, so the time base must be readable from an interrupt |
+| `xrdap_port.hpp` | the sample ring size `Port::kRingBytes` and its spinlock `Port::SpinLock`; the way sampling runs, `Port::SamplerPolicy` (`TaskSampling` or `LoopSampling`, chosen at compile time) |
+| tick timer | implements `Vendor::TickTimer`; its interrupt calls `DapVendor::OnTickIsr()`; under `TaskSampling` that reads libxr's `Timebase`, so the time base must be readable from an interrupt; under `LoopSampling` the interrupt only counts ticks and reads no time base |
 | threads | the sampling task, the USB DAP thread, the serial thread (ESP pins them to the core that drives SWD) |
 | session ends | USB reset count, TCP disconnect, radio session id and ping |
 | lights | driver, pins and the query whether USB is configured |
@@ -51,7 +51,7 @@ target_include_directories(app.elf PRIVATE ${XRDAP_CORE_INCLUDE_DIRS} port)
 
 An ESP-IDF project passes `XRDAP_CORE_SOURCES` and `XRDAP_CORE_INCLUDE_DIRS` to `idf_component_register`.
 
-`xrdap_port.hpp` gives the size of the sample ring (a power of two, reported by INFO) and its lock. Sampling and SUB_READ both hold the lock briefly (at most a 1 KB copy), and it must not block: a blocking mutex would put the highest-priority sampling task to sleep while SUB_READ copies, and ticks would be late at short periods. The dual-core ESP32 parts use a portMUX, a single-core RTOS a critical section, a single-loop probe a no-op:
+`xrdap_port.hpp` gives the size of the sample ring (a power of two, reported by INFO), its lock, and the way sampling runs: `TaskSampling` for a probe with an RTOS whose sampling runs in its own task, `LoopSampling` for a probe without an RTOS that calls `Poll()` in its main loop. Once chosen, `DapVendor` is `DapVendorT<Port::SamplerPolicy>`, and the other way's entry (`RunSamplerTask()` under `LoopSampling`, `Poll()` under `TaskSampling`) does not exist, so calling it does not compile; `LoopSampling` has no semaphore and no yielding to commands, and the `CommandBegin()` and `CommandEnd()` that `Executor` calls for every command are empty functions. Sampling and SUB_READ both hold the lock briefly (at most a 1 KB copy), and it must not block: a blocking mutex would put the highest-priority sampling task to sleep while SUB_READ copies, and ticks would be late at short periods. The dual-core ESP32 parts use a portMUX, a single-core RTOS a critical section, a single-loop probe a no-op:
 
 ```cpp
 // xrdap_port.hpp (single-core FreeRTOS)
@@ -61,9 +61,15 @@ An ESP-IDF project passes `XRDAP_CORE_SOURCES` and `XRDAP_CORE_INCLUDE_DIRS` to 
 #include "FreeRTOS.h"
 #include "task.h"
 
+namespace XrDap::Vendor
+{
+class TaskSampling;  // sampling runs in its own task; without an RTOS write class LoopSampling;
+}
+
 namespace XrDap::Port
 {
 inline constexpr uint32_t kRingBytes = 4096;
+using SamplerPolicy = Vendor::TaskSampling;
 
 class SpinLock
 {
@@ -111,7 +117,7 @@ When a session ends, sampling stops and the extension commands need a new `DAP_C
 
 ### Single-loop probe
 
-A probe without an RTOS alternates USB commands and sampling in its main loop. The tick timer only counts ticks in its interrupt, and `Poll()` samples a tick once it sees a new one:
+A probe without an RTOS (`Port::SamplerPolicy` is `LoopSampling`) alternates USB commands and sampling in its main loop. The tick timer only counts ticks in its interrupt, and `Poll()` samples a tick once it sees a new one:
 
 ```cpp
 #include "xrdap/session/executor.hpp"
@@ -141,7 +147,7 @@ for (;;)
 
 ### Probe with an RTOS
 
-The sampling task blocks on a semaphore; the tick interrupt and a stop both wake it, and it should have the highest priority on the core that drives SWD. The USB DAP thread calls `StepUsb()` in a loop:
+The sampling task of a probe with an RTOS (`Port::SamplerPolicy` is `TaskSampling`) blocks on a semaphore; the tick interrupt, a start, a stop and the end of a yield all wake it. The semaphore exists from the construction of `DapVendor`, so a sampling task that enters `RunSamplerTask()` later than the first `SUB_START` or the first tick interrupt does not lose those wakes. It should have the highest priority on the core that drives SWD. The USB DAP thread calls `StepUsb()` in a loop:
 
 ```cpp
 static LibXR::Thread sampler;

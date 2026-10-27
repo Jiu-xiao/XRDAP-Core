@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
-// Sampler 任务模式（RunTask、OnTickIsr 里的 PostFromCallback、Start/Stop/CommandEnd 里
-// 的 Post、让路停车）在 libxr 的 Linux 系统层上跑。sampler_recovery_test.cpp 只走 Poll，
-// 这里补任务模式，作为把 task_mode_ 拆成两个策略类型之前的行为基准。
+// Sampler 任务策略（RunTask、OnTickIsr 里的 PostFromCallback、Start/Stop/CommandEnd 里的
+// Post、让路停车）在 libxr 的 Linux 系统层上跑，并和单循环策略（Poll）对照同一输入的帧。
+// 启动顺序用例（Start 和节拍中断早于采样任务进入 RunTask）是这次把运行方式拆成两个策略
+// 类型所修的问题的回归。
 //
 // 判据：docs/protocol.md 3.5、xrdap/vendor/sampler.hpp 和 command_yield.hpp 头部的说明。
 // 确定性：不读真实时钟来判对错。节拍由测试线程手动调用 OnTickIsr 注入；等待都带超时，
 // 并且等的是一个明确的状态（帧到了、定时器 Stop 了、采样停车了）；"不应该发生"的事用一小
 // 段静置时间后再查，静置不够只会让坏结果漏过，不会让好结果失败。
 //
-// Sampler task mode (RunTask, the PostFromCallback in OnTickIsr, the Posts in
-// Start/Stop/CommandEnd, parking to yield to commands) on libxr's Linux system layer.
-// sampler_recovery_test.cpp only goes through Poll; this fills in task mode as the
-// behaviour baseline before task_mode_ is split into two policy types.
+// Sampler task policy (RunTask, the PostFromCallback in OnTickIsr, the Posts in
+// Start/Stop/CommandEnd, parking to yield to commands) on libxr's Linux system layer,
+// compared with the single-loop policy (Poll) on the same input. The start-order cases
+// (Start and the tick interrupt before the sampling task enters RunTask) are the
+// regression for the problem fixed by splitting the way to run into two policy types.
 //
 // Oracle: docs/protocol.md 3.5 and the headers of sampler.hpp and command_yield.hpp.
 // Determinism: no verdict depends on the real clock. Ticks are injected by calling
@@ -35,19 +37,15 @@
 #include "semaphore.hpp"
 #include "timebase.hpp"
 
-// 测试要看采样的内部状态（task_mode_、是否停车、信号量计数）来确定"线程已经到了哪一步"，
-// Sampler 没有公开这些，这里只在本文件里放开 private。
-// The test needs the sampler's internal state (task_mode_, parked, semaphore count) to
-// know which step the thread has reached; Sampler does not expose it, so private is
-// opened in this file only.
+// 测试要看采样的内部状态（是否停车、信号量计数）来确定"线程已经到了哪一步"，Sampler
+// 没有公开这些，这里只在本文件里放开 private。
+// The test needs the sampler's internal state (parked, semaphore count) to know which
+// step the thread has reached; Sampler does not expose it, so private is opened in this
+// file only.
 #define private public
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/sampler.hpp"
 #undef private
-
-#ifndef XRDAP_TEST_KNOWN_ISSUES
-#define XRDAP_TEST_KNOWN_ISSUES 0
-#endif
 
 using namespace XrDap::Vendor;
 using LibXR::ErrorCode;
@@ -55,8 +53,6 @@ namespace P = LibXR::Debug::SwdProtocol;
 
 namespace
 {
-int g_soft_failures = 0;
-
 // 致命：直接结束进程（采样线程永远不返回，没有别的收尾办法）/ Fatal: end the process
 // (the sampling thread never returns, so there is no other way to wind down).
 #define CHECK(x)                                                      \
@@ -68,18 +64,6 @@ int g_soft_failures = 0;
       std::fflush(stderr);                                            \
       std::_Exit(1);                                                  \
     }                                                                 \
-  } while (0)
-
-// 非致命：用在已知问题用例里，每个变体各报各的 / Non-fatal: used by the known-issue case so
-// every variant reports on its own.
-#define SOFT_CHECK(x, what)                                                        \
-  do                                                                               \
-  {                                                                                \
-    if (!(x))                                                                      \
-    {                                                                              \
-      std::fprintf(stderr, "FAIL %s:%d: %s (%s)\n", __FILE__, __LINE__, #x, what); \
-      ++g_soft_failures;                                                           \
-    }                                                                              \
   } while (0)
 
 constexpr unsigned kWaitMs = 5000U;   // 等一个明确状态的上限 / Upper bound for a definite state
@@ -245,23 +229,24 @@ struct Frame
   std::vector<uint8_t> body;  // bitmap + values; the timestamp is left out
 };
 
-struct Rig
+template <class SamplerType>
+struct BasicRig
 {
   ModelSwd swd;
   MemAp mem;
   FakeTimer timer;
-  Sampler sampler;
+  SamplerType sampler;
   std::vector<uint8_t> entries = Entries();
   std::vector<Frame> frames;  // taken from the ring so far
   uint32_t skipped = 0U;      // cumulative, as of the last Take
   uint32_t dropped = 0U;
 
-  Rig() : mem(swd), sampler(mem, +[](void*) { return true; }, nullptr) {}
+  BasicRig() : mem(swd), sampler(mem, +[](void*, uint32_t) { return true; }, nullptr) {}
 
   uint8_t Start()
   {
     return sampler.Start({entries.data(), entries.data() + entries.size(), 2}, kPeriodUs,
-                         false);
+                         false, 1U);
   }
 
   void Drain()
@@ -336,6 +321,9 @@ struct Rig
   }
 };
 
+using Rig = BasicRig<TaskSampler>;
+using PollRig = BasicRig<LoopSampler>;
+
 // 采样线程里 RunTask 不返回，Rig 和线程一起泄漏到进程结束 / RunTask never returns in
 // the sampling thread, so the Rig and the thread leak until the process ends.
 Rig& NewRig() { return *new Rig; }
@@ -345,13 +333,10 @@ void SpawnTask(Rig& r)
   std::thread([&r] { r.sampler.RunTask(r.timer); }).detach();
 }
 
-void StartTaskAndWaitReady(Rig& r)
-{
-  SpawnTask(r);
-  // RunTask 第一行置 task_mode_；之后 Start/Stop/ISR 才会 Post / RunTask sets task_mode_
-  // on its first line; only after that do Start, Stop and the ISR Post.
-  CHECK(WaitUntil([&] { return r.sampler.task_mode_.load() == 1U; }));
-}
+// 不等采样任务进入 RunTask：Start、Stop 和中断的唤醒不依赖这一点 / Does not wait for
+// the sampling task to enter RunTask: the wakes of Start, Stop and the interrupt do not
+// depend on it.
+void StartTaskAndWaitReady(Rig& r) { SpawnTask(r); }
 
 // ---------------------------------------------------------------------------------
 // 1. 任务模式基本流程 / Basic task-mode flow
@@ -398,19 +383,16 @@ void TaskBasicFlow()
 // 2. 启动顺序：Start/OnTickIsr 早于 RunTask / Start order: Start and OnTickIsr before
 //    RunTask
 // ---------------------------------------------------------------------------------
-// 当前代码在这个顺序下会卡住：task_mode_ 在 RunTask 第一行（sampler.cpp:95）才置 1，
-// 之前 Start（sampler.cpp:61）和 OnTickIsr（sampler.hpp:137）都因 task_mode_==0 不 Post，
-// RunTask 随后在 wake_.Wait(UINT32_MAX)（sampler.cpp:98）永远等下去。所以默认不编译；
-// cmake -DXRDAP_TEST_KNOWN_ISSUES=ON 打开。
-// The current code hangs in this order: task_mode_ is set only on RunTask's first line
-// (sampler.cpp:95); before that Start (sampler.cpp:61) and OnTickIsr (sampler.hpp:137)
-// skip their Post because task_mode_ is 0, and RunTask then waits forever in
-// wake_.Wait(UINT32_MAX) (sampler.cpp:98). So it is compiled out by default; turn it on
-// with cmake -DXRDAP_TEST_KNOWN_ISSUES=ON.
-#if XRDAP_TEST_KNOWN_ISSUES
+// 唤醒在采样任务进入 RunTask 之前就到了：信号量在策略构造时就存在，先到的唤醒留在里面，
+// 任务一进来就收到。旧代码用采样任务自己在 RunTask 第一行置的运行时标志决定要不要 Post，
+// 这个顺序下 Post 被跳过，任务永远等下去。
+// The wakes come before the sampling task enters RunTask: the semaphore exists from the
+// policy's construction, so a wake that came first stays in it and the task receives it on
+// entry. The old code decided whether to Post from a run-time flag the sampling task set on
+// its first line of RunTask; in this order the Post was skipped and the task waited forever.
 void StartBeforeRunTask()
 {
-  for (int variant = 0; variant < 2; ++variant)
+  for (int variant = 0; variant < 3; ++variant)
   {
     Rig& r = NewRig();
     CHECK(r.Start() == kStatusOk);
@@ -418,17 +400,40 @@ void StartBeforeRunTask()
     {
       r.sampler.OnTickIsr();  // the interrupt also comes before RunTask
     }
-    SpawnTask(r);
-    const bool sampled = r.WaitFrames(1, 2000U);
-    SOFT_CHECK(sampled, variant == 0 ? "Start only, then RunTask: no frame within 2 s"
-                                     : "Start + OnTickIsr, then RunTask: no frame in 2 s");
-    if (sampled)
+    if (variant == 2)
     {
-      r.CheckFrame(0, 0U, 0U);
+      Settle();  // the task starts late, long after Start
     }
+    SpawnTask(r);
+    CHECK(r.WaitFrames(1, 2000U));
+    r.CheckFrame(0, 0U, 0U);
+    CHECK(r.timer.starts == 1U && r.timer.stops == 0U);
+    r.Quiesce();
+    r.swd.bias = 3U;
+    r.sampler.OnTickIsr();  // and the task then goes on as usual
+    CHECK(r.WaitFrames(2));
+    r.CheckFrame(1, 1U, 3U);
   }
 }
-#endif
+
+// Start 然后 Stop，采样任务才进来：定时器一次都不开，没有帧 / Start then Stop before the
+// sampling task comes in: the timer is never started and there is no frame.
+void StartStopBeforeRunTask()
+{
+  Rig& r = NewRig();
+  CHECK(r.Start() == kStatusOk);
+  r.sampler.Stop();
+  SpawnTask(r);
+  Settle();
+  r.Drain();
+  CHECK(r.frames.empty());
+  CHECK(r.timer.starts == 0U && r.timer.stops == 0U);
+  CHECK(!r.sampler.Active());
+  // 之后还能正常开始 / A start afterwards works as usual.
+  CHECK(r.Start() == kStatusOk);
+  CHECK(r.WaitFrames(1));
+  r.CheckFrame(0, 0U, 0U);
+}
 
 // ---------------------------------------------------------------------------------
 // 3. 让路：命令在等时停车，最后一条命令结束时唤醒 / Yielding: park while a command
@@ -446,7 +451,7 @@ void YieldParkAndResume()
   r.Quiesce();
 
   r.sampler.CommandBegin();
-  CHECK(!r.sampler.yield_.Parked());
+  CHECK(!r.sampler.policy_.yield_.Parked());
   r.swd.bias = 2U;
   r.sampler.OnTickIsr();  // tick 2: the one frame a waiting command still allows
   CHECK(r.WaitFrames(3));
@@ -454,19 +459,19 @@ void YieldParkAndResume()
   r.Quiesce();
 
   r.sampler.OnTickIsr();  // tick 3: parks
-  CHECK(WaitUntil([&] { return r.sampler.yield_.Parked(); }));
+  CHECK(WaitUntil([&] { return r.sampler.policy_.yield_.Parked(); }));
   r.Quiesce();
   r.sampler.OnTickIsr();  // ticks 4 and 5 no longer wake the sampler
   r.sampler.OnTickIsr();
   Settle();
   r.Drain();
   CHECK(r.frames.size() == 3U);
-  CHECK(r.sampler.wake_.Value() == 0U);  // no semaphore post accumulated
-  CHECK(r.sampler.yield_.Parked());
+  CHECK(r.sampler.policy_.wake_.Value() == 0U);  // no semaphore post accumulated
+  CHECK(r.sampler.policy_.yield_.Parked());
   CHECK(r.skipped == 0U);  // given-up ticks are counted at the next sample
 
   r.sampler.CommandEnd();  // the last command wakes the parked sampler
-  CHECK(WaitUntil([&] { return !r.sampler.yield_.Parked(); }));
+  CHECK(WaitUntil([&] { return !r.sampler.policy_.yield_.Parked(); }));
   Settle();
   r.Drain();
   CHECK(r.frames.size() == 3U);  // it carries on from the next tick, no catch-up frame
@@ -493,11 +498,11 @@ void YieldReadOnlyCommandDoesNotPark()
     r.sampler.OnTickIsr();
     CHECK(r.WaitFrames(i + 1U));
     r.Quiesce();
-    CHECK(!r.sampler.yield_.Parked());
+    CHECK(!r.sampler.policy_.yield_.Parked());
   }
   r.sampler.CommandEnd();
   Settle();
-  CHECK(r.sampler.wake_.Value() == 0U);  // nothing was parked, so End posts nothing
+  CHECK(r.sampler.policy_.wake_.Value() == 0U);  // nothing was parked, so End posts nothing
   r.sampler.OnTickIsr();
   CHECK(r.WaitFrames(6));
   r.CheckFrame(5, 5U, 0U);
@@ -517,20 +522,20 @@ void YieldTwoCommandsWakeOnLast()
   CHECK(r.WaitFrames(2));
   r.Quiesce();
   r.sampler.OnTickIsr();  // tick 2: parks
-  CHECK(WaitUntil([&] { return r.sampler.yield_.Parked(); }));
+  CHECK(WaitUntil([&] { return r.sampler.policy_.yield_.Parked(); }));
   r.Quiesce();
 
   r.sampler.CommandEnd();  // one command still waits: no wake
   Settle();
-  CHECK(r.sampler.yield_.Parked());
-  CHECK(r.sampler.wake_.Value() == 0U);
+  CHECK(r.sampler.policy_.yield_.Parked());
+  CHECK(r.sampler.policy_.wake_.Value() == 0U);
   r.sampler.OnTickIsr();  // tick 3 still does not wake
   Settle();
   r.Drain();
   CHECK(r.frames.size() == 2U);
 
   r.sampler.CommandEnd();  // the last one wakes
-  CHECK(WaitUntil([&] { return !r.sampler.yield_.Parked(); }));
+  CHECK(WaitUntil([&] { return !r.sampler.policy_.yield_.Parked(); }));
   r.sampler.OnTickIsr();  // tick 4
   CHECK(r.WaitFrames(3));
   r.CheckFrame(2, 4U, 0U);
@@ -549,7 +554,7 @@ void YieldStopWhileParked()
   CHECK(r.WaitFrames(2));
   r.Quiesce();
   r.sampler.OnTickIsr();  // tick 2: parks
-  CHECK(WaitUntil([&] { return r.sampler.yield_.Parked(); }));
+  CHECK(WaitUntil([&] { return r.sampler.policy_.yield_.Parked(); }));
   r.Quiesce();
 
   r.sampler.Stop();
@@ -562,7 +567,7 @@ void YieldStopWhileParked()
   CHECK(r.Start() == kStatusOk);
   CHECK(r.WaitFrames(1));  // the new run is not parked and samples tick 0 at once
   r.CheckFrame(0, 0U, 0U);
-  CHECK(!r.sampler.yield_.Parked());
+  CHECK(!r.sampler.policy_.yield_.Parked());
   r.Quiesce();
   r.sampler.OnTickIsr();
   CHECK(r.WaitFrames(2));
@@ -593,7 +598,7 @@ void SkippedTicksWhenSamplerIsHeldBack()
     {
       r.sampler.OnTickIsr();  // ticks 1..5, only the first one posts
     }
-    CHECK(r.sampler.wake_.Value() <= 1U);
+    CHECK(r.sampler.policy_.wake_.Value() <= 1U);
   }
   CHECK(r.WaitFrames(2));
   r.Quiesce();
@@ -688,7 +693,7 @@ void TaskAndPollGiveSameFrames()
   const uint32_t ticks[] = {0U, 1U, 2U, 5U, 6U, 8U, 9U};
   const size_t steps = sizeof(elapsed) / sizeof(elapsed[0]);
 
-  Rig& poll = NewRig();
+  PollRig& poll = *new PollRig;
   poll.swd.bias = 5U;
   CHECK(poll.Start() == kStatusOk);
   poll.sampler.Poll(poll.timer);
@@ -760,16 +765,8 @@ int main()
   Run("StopStartReentryAfterTimerStopped", [] { StopStartReentry(true); });
   Run("StopStartReentryBackToBack", [] { StopStartReentry(false); });
   Run("TaskAndPollGiveSameFrames", TaskAndPollGiveSameFrames);
-#if XRDAP_TEST_KNOWN_ISSUES
-  StartBeforeRunTask();
-  std::printf("%s StartBeforeRunTask (known issue)\n", g_soft_failures ? "FAIL" : "PASS");
-  std::fflush(stdout);
-#endif
-  if (g_soft_failures != 0)
-  {
-    std::fflush(stderr);
-    std::_Exit(1);
-  }
+  Run("StartBeforeRunTask", StartBeforeRunTask);
+  Run("StartStopBeforeRunTask", StartStopBeforeRunTask);
   std::puts("sampler task mode tests passed");
   std::fflush(stdout);
   // 采样线程不会返回，不跑静态析构直接结束 / Sampling threads never return; end without
