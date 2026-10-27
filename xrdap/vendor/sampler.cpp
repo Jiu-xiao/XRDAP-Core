@@ -153,17 +153,8 @@ bool Sampler::Service(TickTimer& timer)
   {
     const auto t0 = static_cast<uint32_t>(NowUs());
     SampleTick(step);
-    // 占用从节拍中断唤醒的那一刻算起，包括唤醒、切换任务和取链路锁的时间：只量读帧的
-    // 时间会少算，周期接近一帧时留给命令的间隙就只是纸面上的。没有这一拍的中断时刻时
-    // （开始时的节拍 0、不等唤醒接着做的一拍）从读帧开始算。单循环里中断到这里之间是
-    // 主循环在做完手上的命令，不是采样的开销，所以只在任务方式下从中断算起。
-    // Busy time counts from the moment the tick interrupt woke us, including the wake,
-    // the task switch and taking the link lock: timing only the frame read undercounts,
-    // and with a period close to one frame the gap left to commands exists only on
-    // paper. Without this tick's interrupt time (tick 0 at the start, a tick done
-    // without waiting for a wake) it counts from the start of the frame read. In a single
-    // loop the time from the interrupt to here is the main loop finishing its current
-    // command, not a sampling cost, so the interrupt time is used in task mode only.
+    // 任务方式下从中断唤醒起算占用，规则见 FrameBusyUs / In task mode busy time counts
+    // from the interrupt's wake; see FrameBusyUs.
     const uint32_t busy =
         FrameBusyUs(static_cast<uint32_t>(NowUs()), t0,
                     task_mode_.load(std::memory_order_relaxed) != 0U &&
@@ -188,10 +179,6 @@ bool Sampler::Service(TickTimer& timer)
   return TickDue(ticks_.load(std::memory_order_relaxed), next);
 }
 
-// 读一拍里到期的条目，组成帧放进缓冲：节拍号 u32 + 时间戳 u48 + 状态位图 + 各到期条目
-// 的值。持有 MemAp::Lock 时调用。
-// Read the items due in one tick and put the frame into the buffer: tick u32 + timestamp
-// u48 + status bitmap + the due items' values. Called while holding MemAp::Lock.
 void Sampler::SampleTick(const TickAccount::Step& step)
 {
   uint8_t frame[kMaxFrameBytes];

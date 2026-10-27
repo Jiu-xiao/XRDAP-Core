@@ -183,6 +183,12 @@ class Sampler
   /// 返回 true 时要采的节拍已经到了，不等唤醒再来一次 / Returns true when the next tick
   /// to sample has already come, to run again without waiting.
   bool Service(TickTimer& timer);
+  /// @brief 读一拍里到期的条目，组成帧放进缓冲 / Read the items due in one tick and put
+  ///        the frame into the buffer.
+  /// @param step 这一拍的节拍号和漏拍数 / The tick number and skipped count of this tick.
+  /// @note 帧 = 节拍号 u32 + 时间戳 u48 + 状态位图 + 各到期条目的值；持有 MemAp::Lock
+  ///       时调用 / Frame = tick u32 + timestamp u48 + status bitmap + the due items'
+  ///       values; called while holding MemAp::Lock.
   void SampleTick(const TickAccount::Step& step);
 
   MemAp& mem_;

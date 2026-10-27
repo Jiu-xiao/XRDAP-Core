@@ -49,6 +49,11 @@ class CommandYield
   /// @return 采样正在等命令、这是最后一条时 true，调用方唤醒采样 / True when sampling
   ///         waits for commands and this was the last one; the caller wakes sampling.
   /// @note 命令的任务里，不能在中断里 / The command's task, not from an interrupt.
+  /// @note 最后一条做完：这一轮让过的那一帧作废，下一条命令开始等时有自己的一帧。和采样
+  ///       同时发生时最多多读一帧，仍在“一帧”之内 / When the last one is done, the frame
+  ///       used up in this round is cleared, so the next command to start waiting has its
+  ///       own frame. Racing with sampling costs at most one more frame, still within the
+  ///       one frame.
   bool End()
   {
     if (read_only_turn_)
@@ -66,10 +71,7 @@ class CommandYield
     {
       return false;
     }
-    // 最后一条做完：这一轮让过的那一帧作废，下一条命令开始等时有自己的一帧。和采样同时
-    // 发生时最多多读一帧，仍在“一帧”之内 / The last one is done: the frame used up in
-    // this round is cleared, so the next command to start waiting has its own frame.
-    // Racing with sampling costs at most one more frame, still within the one frame.
+    // 清掉这一轮让过的那一帧 / Clear the frame used up in this round.
     used_.store(0U, std::memory_order_seq_cst);
     return parked_.load(std::memory_order_seq_cst) != 0U;
   }
