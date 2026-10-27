@@ -22,6 +22,7 @@ Headers are included as `xrdap/<module>/<file>.hpp`:
 | `vendor/` | `DapVendor` (commands 0x80 to 0x85, plus one extra command a platform attaches, such as XRDAP-ESP's 0x86 Wi-Fi configuration), `MemAp` (MEM-AP access along pointer chains over SWD), `Sampler`, `TickAccount`, `FrameRing` (sampling on the probe), request checks and reply space |
 | `serial/` | `Framer` (serial frames: the header and CRCs are libxr Topic's packing format, only the payload and the streaming resync live here), `SerialLink` (the serial worker thread) |
 | `activity/` | `DapActivity`: DAP activity and the host state reported by DAP_HostStatus |
+| `control/` | the control port: settings requests (Wi-Fi, radio) separate from DAP; a request is `op + payload`, an answer `op + status + payload`, and `Executor::Control` hands it to the execution context one at a time |
 | `light/` | `StatusLight`: computes the colour and level of the light at each moment from the link, the settings and DAP activity |
 | `probe/` | `SetProbeInfo`, `FormatSerial` (DAP_Info strings and the serial rule), `family.hpp` (VID:PID and each board's bcdDevice) |
 | `protocol/` | `dap_cmd.hpp`: aliases for libxr's CMSIS-DAP command ids and status values, defined nowhere else |

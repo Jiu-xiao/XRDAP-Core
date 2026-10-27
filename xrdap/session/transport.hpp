@@ -19,6 +19,7 @@ enum class Transport : uint8_t
   SERIAL = 2,  ///< 串口链路 / Serial link.
   TCP = 3,     ///< TCP 连接 / TCP connection.
   RADIO = 4,   ///< 无线对端（远端探针上）/ Radio peer (on the remote probe).
+  CONSOLE = 5,  ///< 命令行（只发控制请求）/ Console (control requests only).
 };
 
 }  // namespace XrDap

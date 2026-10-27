@@ -11,6 +11,7 @@
 #include "xrdap/serial/serial_link.hpp"
 #include "xrdap/session/executor.hpp"
 #include "xrdap/session/transport.hpp"
+#include "xrdap/control/control.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
 #include "xrdap/vendor/sampling.hpp"
 #include "xrdap/vendor/mem_ap.hpp"

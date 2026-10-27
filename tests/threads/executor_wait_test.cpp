@@ -336,6 +336,66 @@ void ExecuteHereRunsInTheCallersContext()
   std::printf("  ExecuteHereRunsInTheCallersContext: done\n");
 }
 
+void ControlRequestsRunInTheExecutionContext()
+{
+  // 控制请求和 DAP 命令一样在执行上下文里一次一条：处理函数里不会有第二个调用者；没有处理函数时
+  // 回“不支持” / Control requests run in the execution context one at a time like DAP commands: the
+  // handler never has a second caller; without a handler the answer is "unsupported".
+  Probe p;
+  UsbThread usb(p, 5U);
+  uint8_t resp[16] = {};
+  uint16_t out = 0U;
+  const uint8_t req[3] = {0x42U, 0x01U, 0x02U};
+  p.exec.Control(XrDap::Transport::CONSOLE, req, sizeof(req), resp, sizeof(resp), out);
+  EXPECT(out == 2U && resp[0] == 0x42U && resp[1] == XrDap::Control::kStatusUnsupported);
+
+  static std::atomic<int> in_handler{0};
+  static std::atomic<int> max_in_handler{0};
+  static std::atomic<int> calls{0};
+  p.exec.SetControl(
+      +[](void*, const uint8_t* r, uint16_t, uint8_t* o, uint16_t) -> uint16_t
+      {
+        const int now = in_handler.fetch_add(1) + 1;
+        int seen = max_in_handler.load();
+        while (now > seen && !max_in_handler.compare_exchange_weak(seen, now))
+        {
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+        calls.fetch_add(1);
+        in_handler.fetch_sub(1);
+        o[0] = r[0];
+        o[1] = XrDap::Control::kStatusOk;
+        o[2] = r[1];
+        return 3U;
+      },
+      nullptr);
+  std::thread links[4];
+  const XrDap::Transport kinds[4] = {XrDap::Transport::TCP, XrDap::Transport::SERIAL,
+                                     XrDap::Transport::RADIO, XrDap::Transport::CONSOLE};
+  for (int i = 0; i < 4; ++i)
+  {
+    links[i] = std::thread(
+        [&p, &kinds, i]()
+        {
+          for (int n = 0; n < 100; ++n)
+          {
+            uint8_t r[16] = {};
+            uint16_t o = 0U;
+            const uint8_t q[2] = {0x10U, static_cast<uint8_t>(i)};
+            p.exec.Control(kinds[i], q, sizeof(q), r, sizeof(r), o);
+            EXPECT(o == 3U && r[0] == 0x10U && r[1] == 0U && r[2] == i);
+          }
+        });
+  }
+  for (auto& t : links)
+  {
+    t.join();
+  }
+  EXPECT(calls.load() == 400);
+  EXPECT(max_in_handler.load() == 1);
+  std::printf("  ControlRequestsRunInTheExecutionContext: done\n");
+}
+
 void ConnectionFollowsTheLink()
 {
   // DAP_Connect 记下它来自哪条链路；别的链路丢了不影响，这条丢了或 DAP_Disconnect 才作废 /
@@ -472,6 +532,7 @@ int main()
   TcpAnsweredWhileUsbWaits();
   SamplingSharesTheContextWithCommands();
   ExecuteHereRunsInTheCallersContext();
+  ControlRequestsRunInTheExecutionContext();
   UsbRebindLeavesAnotherLinksSwdAlone();
   ConnectionFollowsTheLink();
   UsbResetEndsAUsbConnectionOnly();

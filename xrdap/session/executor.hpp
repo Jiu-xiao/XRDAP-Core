@@ -42,6 +42,7 @@
 #include "semaphore.hpp"
 #include "timebase.hpp"
 #include "xrdap/activity/dap_activity.hpp"
+#include "xrdap/control/control.hpp"
 #include "xrdap/protocol/dap_cmd.hpp"
 #include "xrdap/session/transport.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
@@ -75,6 +76,14 @@ class Executor
     dap_.SetCommandHook(&Executor::Hook, this, &Executor::LengthHook);
     dap_.SetSessionResetGate(&Executor::MayResetSession, this);
     vendor_.SetWake(&Executor::Wake, this);
+  }
+
+  /// @brief 设置控制口的处理函数 / Set the control port's handler.
+  /// @note 初始化时、请求开始之前调用 / Call at initialisation, before requests come.
+  void SetControl(Control::Handler handler, void* ctx)
+  {
+    control_ = handler;
+    control_ctx_ = ctx;
   }
 
   /// @brief 设置平台转发器 / Set the platform forwarder.
@@ -133,16 +142,25 @@ class Executor
   void Execute(Transport t, const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                uint16_t& out)
   {
-    Slot& slot = slots_[SlotOf(t)];
-    slot.t = t;
-    slot.req = req;
-    slot.len = len;
-    slot.resp = resp;
-    slot.cap = cap;
-    slot.out = &out;
-    pending_.fetch_or(1U << SlotOf(t), std::memory_order_release);
-    dap_.WakeStep(false);
-    (void)slot.done.Wait(UINT32_MAX);
+    Post(t, false, req, len, resp, cap, out);
+  }
+
+  /// @brief 别的任务：把一个控制请求交给执行上下文，等它处理完 / Other tasks: hand a control
+  ///        request to the execution context and wait until it is handled.
+  /// @note 与 Execute 相同的限制；控制台用 Transport::CONSOLE / The same limits as Execute;
+  ///       the console uses Transport::CONSOLE.
+  void Control(Transport t, const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
+               uint16_t& out)
+  {
+    Post(t, true, req, len, resp, cap, out);
+  }
+
+  /// @brief 在执行上下文里直接处理一个控制请求 / Handle a control request directly in the
+  ///        execution context.
+  void ControlHere(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
+                   uint16_t& out)
+  {
+    out = HandleControl(req, len, resp, cap);
   }
 
   /// @brief 在执行上下文里直接执行一条命令（单循环的探针里，链路在主循环里被轮询）/ Run one
@@ -189,6 +207,7 @@ class Executor
   struct Slot
   {
     Transport t = Transport::NONE;
+    bool control = false;  ///< 控制请求，不是 DAP 命令 / A control request, not a DAP command.
     const uint8_t* req = nullptr;
     uint16_t len = 0U;
     uint8_t* resp = nullptr;
@@ -197,11 +216,40 @@ class Executor
     LibXR::Semaphore done;
   };
 
-  static constexpr uint32_t kSlots = 3U;  ///< SERIAL、TCP、RADIO
+  static constexpr uint32_t kSlots = 4U;  ///< SERIAL、TCP、RADIO、CONSOLE
 
   static uint32_t SlotOf(Transport t)
   {
     return static_cast<uint32_t>(t) - static_cast<uint32_t>(Transport::SERIAL);
+  }
+
+  void Post(Transport t, bool control, const uint8_t* req, uint16_t len, uint8_t* resp,
+            uint16_t cap, uint16_t& out)
+  {
+    Slot& slot = slots_[SlotOf(t)];
+    slot.t = t;
+    slot.control = control;
+    slot.req = req;
+    slot.len = len;
+    slot.resp = resp;
+    slot.cap = cap;
+    slot.out = &out;
+    pending_.fetch_or(1U << SlotOf(t), std::memory_order_release);
+    dap_.WakeStep(false);
+    (void)slot.done.Wait(UINT32_MAX);
+  }
+
+  uint16_t HandleControl(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap)
+  {
+    if (req == nullptr || len < 1U)
+    {
+      return Control::StatusOnly(0U, Control::kStatusBadRequest, resp, cap);
+    }
+    if (control_ == nullptr)
+    {
+      return Control::StatusOnly(req[0], Control::kStatusUnsupported, resp, cap);
+    }
+    return control_(control_ctx_, req, len, resp, cap);
   }
 
   /// 执行邮箱里的一条请求，各链路轮流 / Run one request from the mailbox, links in turn.
@@ -222,7 +270,14 @@ class Executor
     {
       Scope scope(*this, slot.t);
       *slot.out = 0U;
-      (void)dap_.ExecuteExternal(slot.req, slot.len, slot.resp, slot.cap, *slot.out);
+      if (slot.control)
+      {
+        *slot.out = HandleControl(slot.req, slot.len, slot.resp, slot.cap);
+      }
+      else
+      {
+        (void)dap_.ExecuteExternal(slot.req, slot.len, slot.resp, slot.cap, *slot.out);
+      }
     }
     pending_.fetch_and(~(1U << i), std::memory_order_release);
     slot.done.Post();
@@ -311,6 +366,8 @@ class Executor
   std::atomic<uint32_t> pending_{0U};
   std::atomic<uint32_t> waiting_{0U};  ///< 执行上下文在 WaitForWork 里（或正要进去）/ In WaitForWork, or about to be.
   uint32_t next_ = 0U;
+  Control::Handler control_ = nullptr;
+  void* control_ctx_ = nullptr;
   Transport current_ = Transport::NONE;
 };
 
