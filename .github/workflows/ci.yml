@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+jobs:
+  clang-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format 21.1.8 (libxr configuration)
+        run: |
+          pip install clang-format==21.1.8
+          git ls-files '*.hpp' '*.cpp' | xargs clang-format --dry-run --Werror
+
+  host-tests:
+    runs-on: ubuntu-latest
+    env:
+      # 需要的 libxr：SetCommandHook 带厂商命令长度钩子、WaitForWork、SetSessionResetGate
+      # （feat/xrdap-r2-swd-loop）/ The libxr required: SetCommandHook with the vendor
+      # length hook, WaitForWork and SetSessionResetGate (feat/xrdap-r2-swd-loop).
+      LIBXR_COMMIT: 6497a26e63a2c9eaa3060bb090baf1eada7f4d3b
+    steps:
+      - uses: actions/checkout@v4
+      - name: libxr
+        run: |
+          git clone --filter=blob:none https://github.com/xrobot-org/libxr.git "$RUNNER_TEMP/libxr"
+          git -C "$RUNNER_TEMP/libxr" checkout "$LIBXR_COMMIT"
+      - name: build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libudev-dev
+          cmake -S tests -B build -G Ninja -DLIBXR_DIR="$RUNNER_TEMP/libxr"
+          cmake --build build
+      - name: ctest
+        run: ctest --test-dir build --output-on-failure
