@@ -28,7 +28,7 @@
 #include "timebase.hpp"
 #include "uart.hpp"
 #include "xrdap/serial/serial_frame.hpp"
-#include "xrdap/session/session_owner.hpp"
+#include "xrdap/session/transport.hpp"
 
 namespace XrDap
 {
@@ -117,7 +117,7 @@ class SerialLink
       return LibXR::ErrorCode::OK;
     }
     stop_.store(1U, std::memory_order_release);
-    exec_.EndSession(Transport::SERIAL);
+    exec_.LinkLost(Transport::SERIAL);
     if (exited_.Wait(kStopTimeoutMs) != LibXR::ErrorCode::OK)
     {
       return LibXR::ErrorCode::TIMEOUT;
@@ -160,6 +160,7 @@ class SerialLink
     {
       return false;
     }
+    CheckLease();
     if (uart_.read_port_ == nullptr || !uart_.read_port_->Readable())
     {
       LibXR::Thread::Sleep(1U);
@@ -217,6 +218,11 @@ class SerialLink
     return TxStep::FAILED;
   }
 
+  /// 串口多久没有请求就当链路丢了；上位机至少每 kLeaseMs 发一个请求（SUB_READ 即可）/
+  /// How long without a request before the serial link counts as lost; the host sends a
+  /// request (SUB_READ will do) at least every kLeaseMs.
+  static constexpr uint32_t kLeaseMs = 5000U;
+
  private:
   static constexpr size_t kChunkSize = 512U;
   static constexpr uint32_t kWaitTimeoutMs = 50U;
@@ -233,9 +239,27 @@ class SerialLink
     self->exited_.Post();
   }
 
+  // 串口没有连接和断开：kLeaseMs 内没有请求就当链路丢了 / A serial port has no connect or
+  // disconnect: no request within kLeaseMs counts as the link being lost.
+  void CheckLease()
+  {
+    if (active_.load() == 0U)
+    {
+      return;
+    }
+    const auto now = static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds());
+    if (now - last_request_ms_.load() > kLeaseMs)
+    {
+      active_.store(0U);
+      exec_.LinkLost(Transport::SERIAL);
+    }
+  }
+
   void OnRequest(const uint8_t* req, uint16_t len)
   {
     uint16_t out = 0U;
+    last_request_ms_.store(static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds()));
+    active_.store(1U);
     exec_.Execute(Transport::SERIAL, req, len, resp_, MaxPacket, out);
     const size_t frame = FramerT::PackResponse(
         resp_, out, static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds()), tx_frame_);
@@ -276,6 +300,8 @@ class SerialLink
   LibXR::Thread thread_{};
   bool started_ = false;
   std::atomic<uint32_t> stop_{0U};
+  std::atomic<uint32_t> last_request_ms_{0U};
+  std::atomic<uint32_t> active_{0U};
   LibXR::Semaphore wait_sem_{0U};
   LibXR::Semaphore read_sem_{0U};
   LibXR::Semaphore exited_{0U};

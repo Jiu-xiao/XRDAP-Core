@@ -18,7 +18,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 
 | 模块 | 内容 |
 |---|---|
-| `session/` | `SessionOwner`：哪条传输（USB、串口、TCP、无线）拥有探针，会话什么时候结束；`Executor`：所有进入 libxr DAP 实例的调用都经过它，不是主人的传输回“忙” |
+| `session/` | `Executor`：所有进入 libxr DAP 实例的调用都经过它，一把互斥量保证一次只执行一条命令；`Transport` 只是命令来源的标签 |
 | `vendor/` | `DapVendor`（命令 0x80 到 0x85，以及平台挂上的一条附加命令，例如 XRDAP-ESP 的 0x86 Wi-Fi 配置）、`MemAp`（经 SWD 沿指针链访问 MEM-AP）、`Sampler`、`TickAccount`、`FrameRing`（探针端采样）、请求检查和回复空间 |
 | `serial/` | `Framer`（串口帧：帧头和 CRC 用 libxr Topic 的打包格式，这里只做 payload 和流式重同步）、`SerialLink`（串口收发线程） |
 | `activity/` | `DapActivity`：DAP 活动和 DAP_HostStatus 报告的上位机状态 |
@@ -82,38 +82,34 @@ class SpinLock
 
 ## 用法
 
-### 会话主人和执行器
+### 执行器
 
-所有 DAP 命令都经 `Executor` 进入 libxr 的 DAP 实例：USB 用 `StepUsb()`，别的传输用 `Execute()`。执行器每次只执行一条命令，并记下命令属于哪条传输。命令按 `session/command_class.hpp` 的一张表分两类：只读的状态和设置查询、状态灯（`DAP_Info`、`DAP_HostStatus`、厂商 INFO，以及平台用 `Executor::SetFreeCommands()` 登记的查询，例如 XRDAP-ESP 的 0x86 查询、CH32V3 的 0x9F 0x13）不需要拥有探针，任何传输都照常执行；其余命令要拥有探针。第一条执行要拥有探针的命令的传输成为会话主人；会话结束前别的传输的这类命令回“忙”（标准命令回 `命令号 FF`，厂商命令回 `命令号 05`）：
+所有 DAP 命令都经 `Executor` 进入 libxr 的 DAP 实例：USB 用 `StepUsb()`，别的链路用 `Execute()`。执行器用一把互斥量保证一次只执行一条命令，并记下命令从哪条链路来。探针一次只使用一条链路由使用者保证，Core 不仲裁：没有会话主人、没有排队、不回“忙”；两条链路同时发命令时，后拿到锁的等前一条执行完。`DAP_Connect` 记下它来自哪条链路，`DAP_Disconnect`、这条链路丢了、或连接在 USB 上时总线复位，连接和采样就作废，扩展命令要求重新 `DAP_Connect`：
 
 ```cpp
 #include "xrdap/session/executor.hpp"
 
-static XrDap::SessionOwner session;
-static XrDap::DapVendor vendor(swd, session);
+static XrDap::DapVendor vendor(swd);
 static XrDap::DapActivity activity;
-static XrDap::Executor<Dap> exec(dap, session, vendor, activity);  // 装好命令钩子
+static XrDap::Executor<Dap> exec(dap, vendor, activity);  // 装好命令钩子
 
-session.SetLease(XrDap::Transport::SERIAL, XrDap::kSerialLeaseMs);  // 串口 5 s 无请求即结束
-session.SetUsbResetSource(&BusResetCount, &usb);  // 复位计数变了，USB 的会话结束
+vendor.SetUsbResetSource(&BusResetCount, &usb);  // 复位计数变了，连接在 USB 上时连接作废
 ```
 
-`BusResetCount` 代表平台读取 USB 总线复位次数的函数。各传输按自己的方式结束会话：
+`BusResetCount` 代表平台读取 USB 总线复位次数的函数。各链路在自己丢失时告诉执行器：
 
 ```cpp
 // TCP 服务：每个请求
 exec.Execute(XrDap::Transport::TCP, req, len, resp, sizeof(resp), out);
 // 客户端断开
-exec.EndSession(XrDap::Transport::TCP);
+exec.LinkLost(XrDap::Transport::TCP);
 
-// 无线远端：执行对端发来的命令；收到会话号不变的 ping 时刷新租期，
-// 会话号变了或为 0 时结束会话
+// 无线远端：执行对端发来的命令；会话号变了或为 0 时链路丢了
 exec.Execute(XrDap::Transport::RADIO, req, len, resp, sizeof(resp), out);
-exec.TouchSession(XrDap::Transport::RADIO);
-exec.EndSession(XrDap::Transport::RADIO);
+exec.LinkLost(XrDap::Transport::RADIO);
 ```
 
-会话结束后采样停止，扩展命令要求重新 `DAP_Connect`。
+串口链路（`SerialLink`）自己记最后一个请求的时间，`kLeaseMs`（5 s）内没有请求就调 `LinkLost(SERIAL)`。连接不在这条链路上时，`LinkLost` 什么也不做。
 
 ### 单循环探针
 
@@ -168,7 +164,7 @@ usb_dap.Create<XrDap::Executor<Dap>*>(
     "dap_usb", 4096, LibXR::Thread::Priority::HIGH);
 ```
 
-`StepUsb(wait_ms)` 先在 libxr 的 `WaitForWork` 里等 USB 命令，等待时不占执行轮次；有了命令才排队执行。执行轮次只在执行一条命令时持有，按到达先后交接（`TurnQueue`），持有者不能抢在已经排队的传输前面，所以任何传输的 `DAP_Info` 和“忙”回复都不取决于别的传输什么时候空闲。需要 libxr 提供 `WaitForWork`。
+`StepUsb(wait_ms)` 先在 libxr 的 `WaitForWork` 里等 USB 命令，等待时不持有锁；有了命令才拿锁执行。锁只在执行一条命令时持有，不保证先来先到。需要 libxr 提供 `WaitForWork`。
 
 ### 串口链路
 
@@ -231,7 +227,7 @@ for (;;)
 
 ## 测试
 
-`tests/` 在电脑上编译不依赖硬件和 libxr 的纯逻辑（会话主人、命令归类、执行轮次、忙回复、回复空间、请求长度、SUB_START 检查、节拍账目、采样给命令让路、按 CPU 模拟的采样与命令、帧缓冲、条目解析、串口帧和补位、DAP 活动、序列号），用 ctest 运行，带 AddressSanitizer 和 UBSan；判据来自协议文档、CMSIS-DAP 规范和用户的决定。另一个 ctest 检查 `xrdap/` 里的原子变量只用 32 位整数。给出 libxr 的路径时，另外把全部源文件和公开头文件按 libxr 的 Linux 系统层编译一遍，并运行两个用 libxr 的测试：多线程下的执行器（等输入时不占轮次、忙回复、转发的断开、USB 重新连接不动别人的 SWD、串口写的结果归类）和 MEM-AP 的写入与总线错误：
+`tests/` 在电脑上编译不依赖硬件和 libxr 的纯逻辑（回复空间、请求长度、SUB_START 检查、节拍账目、采样给命令让路、按 CPU 模拟的采样与命令、帧缓冲、条目解析、串口帧和补位、DAP 活动、序列号），用 ctest 运行，带 AddressSanitizer 和 UBSan；判据来自协议文档、CMSIS-DAP 规范和用户的决定。另一个 ctest 检查 `xrdap/` 里的原子变量只用 32 位整数。给出 libxr 的路径时，另外把全部源文件和公开头文件按 libxr 的 Linux 系统层编译一遍，并运行两个用 libxr 的测试：多线程下的执行器（等输入时不占锁、连接跟着链路、USB 复位只让 USB 上的连接作废、几条链路同时发命令时一次只执行一条、USB 重新连接不动别的链路的 SWD、串口写的结果归类）和 MEM-AP 的写入与总线错误：
 
 ```bash
 cmake -S tests -B build -DLIBXR_DIR=<libxr>

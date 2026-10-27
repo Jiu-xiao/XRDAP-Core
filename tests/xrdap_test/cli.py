@@ -51,7 +51,7 @@ def add_run_args(p):
     p.add_argument("--clock", type=hz, default=R.CLOCK_HZ, help="SWD clock for vendor/target cases")
     p.add_argument("--max-clock", type=hz, help="max stable clock when SWD-01 is not in the run")
     p.add_argument("--via-radio", action="store_true", help="the link reaches the target over the radio pair")
-    p.add_argument("--link2", help="second path to the same probe (MC-02, MC-03)")
+    p.add_argument("--link2", help="second path to the same probe (STAB-08)")
     p.add_argument("--rounds", type=int, default=20, help="SWD-01 write/readback rounds per clock")
     p.add_argument("--attach-count", type=int, default=20, help="TOOL-* attach repetitions")
     p.add_argument("--long-s", type=float, default=3600.0, help="STAB-01/02 duration")

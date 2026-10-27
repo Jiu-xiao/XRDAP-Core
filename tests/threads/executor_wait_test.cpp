@@ -19,7 +19,7 @@
 #include "xrdap/protocol/dap_cmd.hpp"
 #include "xrdap/serial/serial_link.hpp"
 #include "xrdap/session/executor.hpp"
-#include "xrdap/session/session_owner.hpp"
+#include "xrdap/session/transport.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
 
 namespace
@@ -110,7 +110,7 @@ class FakeDap
     {
       return ErrorCode::TIMEOUT;
     }
-    const uint8_t req[2] = {usb_cmd_, 0x01};
+    const uint8_t req[2] = {usb_cmd_.load(), 0x01};
     uint8_t resp[64];
     uint16_t out = 0U;
     (void)Run(req, sizeof(req), resp, sizeof(resp), out);
@@ -133,6 +133,10 @@ class FakeDap
 
   std::atomic<uint32_t> usb_done_{0U};
   uint32_t usb_cost_ms_ = 0U;
+  /// 同时在 Run 里的调用数最大值：执行器的锁应保证它是 1 / Largest number of calls in Run
+  /// at once: the executor's lock must keep it at 1.
+  std::atomic<int> max_in_flight_{0};
+  std::atomic<int> in_flight_{0};
 
  private:
   // 钩子没处理的标准命令由“libxr”回复成功 / Standard commands the hook leaves are
@@ -141,12 +145,18 @@ class FakeDap
                 uint16_t& out)
   {
     out = 0U;
+    const int now_in = in_flight_.fetch_add(1) + 1;
+    int seen = max_in_flight_.load();
+    while (now_in > seen && !max_in_flight_.compare_exchange_weak(seen, now_in))
+    {
+    }
     if (!hook_(ctx_, req, len, resp, cap, out))
     {
       resp[0] = req[0];
       resp[1] = 0x00U;
       out = 2U;
     }
+    in_flight_.fetch_sub(1);
     return ErrorCode::OK;
   }
 
@@ -155,17 +165,16 @@ class FakeDap
   SessionResetGate gate_ = nullptr;
   void* gate_ctx_ = nullptr;
   LibXR::Semaphore usb_{0};
-  uint8_t usb_cmd_ = Byte(DapCmd::INFO);
+  std::atomic<uint8_t> usb_cmd_{Byte(DapCmd::INFO)};
 };
 
 struct Probe
 {
   NoSwd swd;
-  XrDap::SessionOwner session;
-  XrDap::DapVendor vendor{swd, session};
+  XrDap::DapVendor vendor{swd};
   XrDap::DapActivity activity;
   FakeDap dap;
-  XrDap::Executor<FakeDap> exec{dap, session, vendor, activity};
+  XrDap::Executor<FakeDap> exec{dap, vendor, activity};
 };
 
 // TCP 发一条命令，返回用时（毫秒）和回复的前两个字节 / TCP sends one command; returns the
@@ -177,15 +186,20 @@ struct Answer
   uint8_t status;
 };
 
-Answer TcpCommand(Probe& p, uint8_t cmd)
+Answer CommandOn(Probe& p, XrDap::Transport t, uint8_t cmd)
 {
   const uint8_t req[2] = {cmd, 0x01};
   uint8_t resp[64] = {};
   uint16_t out = 0U;
   const auto t0 = Clock::now();
-  p.exec.Execute(XrDap::Transport::TCP, req, sizeof(req), resp, sizeof(resp), out);
+  p.exec.Execute(t, req, sizeof(req), resp, sizeof(resp), out);
   const std::chrono::duration<double, std::milli> dt = Clock::now() - t0;
   return {dt.count(), resp[0], resp[1]};
+}
+
+Answer TcpCommand(Probe& p, uint8_t cmd)
+{
+  return CommandOn(p, XrDap::Transport::TCP, cmd);
 }
 
 // USB 线程照 ESP 的 DAP 线程那样循环 StepUsb(wait_ms) / The USB thread loops
@@ -235,215 +249,114 @@ void TcpAnsweredWhileUsbWaits()
   EXPECT(worst < 50.0);
 }
 
-void BusyAnsweredWhileUsbOwnerWaits()
+void ConnectionFollowsTheLink()
 {
-  // USB 执行过 DAP_Connect 成为主人，之后阻塞等下一条：TCP 的 DAP_Connect 马上得到
-  // “忙”（02 FF），DAP_Info 照常回复 / USB ran DAP_Connect and owns the probe, then
-  // blocks waiting for the next command: TCP's DAP_Connect gets busy (02 FF) at once and
-  // DAP_Info is answered as usual.
+  // DAP_Connect 记下它来自哪条链路；别的链路丢了不影响，这条丢了或 DAP_Disconnect 才作废 /
+  // DAP_Connect notes the link it came from; another link being lost changes nothing, this
+  // one being lost or DAP_Disconnect makes it lapse.
   Probe p;
-  UsbThread usb(p, 500U);
-  p.dap.Feed(Byte(DapCmd::CONNECT));
-  for (int i = 0; i < 100 && p.dap.usb_done_.load() == 0U; ++i)
-  {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  EXPECT(p.session.Owner() == XrDap::Transport::USB);
-  const Answer busy = TcpCommand(p, Byte(DapCmd::CONNECT));
-  EXPECT(busy.cmd == Byte(DapCmd::CONNECT));
-  EXPECT(busy.status == 0xFFU);
-  EXPECT(busy.ms < 50.0);
-  const Answer info = TcpCommand(p, Byte(DapCmd::INFO));
-  EXPECT(info.cmd == Byte(DapCmd::INFO));
-  EXPECT(info.ms < 50.0);
-  // 状态灯命令不需要拥有探针：照常执行，不回忙，USB 仍是主人 / The status light command
-  // does not need to own the probe: it runs, is not busy, and USB stays the owner.
-  const Answer led = TcpCommand(p, Byte(DapCmd::HOST_STATUS));
-  EXPECT(led.cmd == Byte(DapCmd::HOST_STATUS));
-  EXPECT(led.status == 0x00U);
-  EXPECT(p.session.Owner() == XrDap::Transport::USB);
-  std::printf("  BusyAnsweredWhileUsbOwnerWaits: busy %.2f ms, info %.2f ms\n", busy.ms,
-              info.ms);
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::NONE);
+  (void)CommandOn(p, XrDap::Transport::TCP, Byte(DapCmd::INFO));
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::NONE);  // 只查信息不算连接
+  (void)CommandOn(p, XrDap::Transport::TCP, Byte(DapCmd::CONNECT));
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::TCP);
+  p.exec.LinkLost(XrDap::Transport::SERIAL);
+  p.exec.LinkLost(XrDap::Transport::USB);
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::TCP);
+  p.exec.LinkLost(XrDap::Transport::TCP);
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::NONE);
+  (void)CommandOn(p, XrDap::Transport::SERIAL, Byte(DapCmd::CONNECT));
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::SERIAL);
+  (void)CommandOn(p, XrDap::Transport::SERIAL, Byte(DapCmd::DISCONNECT));
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::NONE);
+  std::printf("  ConnectionFollowsTheLink: done\n");
 }
 
-void TcpServedBetweenBackToBackUsbCommands()
+void UsbResetEndsAUsbConnectionOnly()
 {
-  // USB 不停地来 DAP_Info，每条执行 5 ms：TCP 最多等一条 USB 命令 / USB sends DAP_Info
-  // back to back, 5 ms each: TCP waits for at most one USB command.
+  // 连接在 USB 上时总线复位使它作废；连接在别的链路上时 USB 复位不影响 / A bus reset makes
+  // a connection on USB lapse; with the connection on another link it changes nothing.
   Probe p;
-  p.dap.usb_cost_ms_ = 5U;
-  std::atomic<bool> feeding{true};
+  static std::atomic<uint32_t> resets{0U};
+  p.vendor.SetUsbResetSource(+[](void*) -> uint32_t { return resets.load(); }, nullptr);
+  (void)CommandOn(p, XrDap::Transport::TCP, Byte(DapCmd::CONNECT));
+  resets.fetch_add(1U);
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::TCP);
+  p.exec.LinkLost(XrDap::Transport::TCP);
+  (void)CommandOn(p, XrDap::Transport::USB, Byte(DapCmd::CONNECT));
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::USB);
+  resets.fetch_add(1U);
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::NONE);
+  std::printf("  UsbResetEndsAUsbConnectionOnly: done\n");
+}
+
+void LinksNeverRunTwoCommandsAtOnce()
+{
+  // USB 线程和三条别的链路的线程不停地发命令：libxr 的 DAP 类里同一时刻只有一条命令在
+  // 执行 / The USB thread and three threads of other links send commands without pause:
+  // only one command runs in the libxr DAP class at any moment.
+  Probe p;
+  p.dap.usb_cost_ms_ = 1U;
+  std::atomic<bool> stop{false};
   std::thread feeder(
       [&]()
       {
-        while (feeding.load())
+        while (!stop.load())
         {
           p.dap.Feed(Byte(DapCmd::INFO));
-          std::this_thread::sleep_for(std::chrono::microseconds(200));
+          std::this_thread::sleep_for(std::chrono::milliseconds(3));
         }
       });
-  double worst = 0.0;
-  {
-    UsbThread usb(p, 10U);
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    for (int i = 0; i < 20; ++i)
-    {
-      const Answer a = TcpCommand(p, Byte(DapCmd::INFO));
-      worst = a.ms > worst ? a.ms : worst;
-      std::this_thread::sleep_for(std::chrono::milliseconds(3));
-    }
-  }
-  feeding.store(false);
-  feeder.join();
-  std::printf("  TcpServedBetweenBackToBackUsbCommands: worst %.2f ms\n", worst);
-  EXPECT(worst < 25.0);
-}
-void ForwardedDisconnectEndsTheSession()
-{
-  // CH32 的无线主机把 USB 的命令全部交给转发器执行，DAP_Disconnect 也是：主人发的
-  // DAP_Disconnect 不管由谁执行都结束主人的会话（protocol 3.1），之后无线的命令不回忙。
-  // The CH32 radio host has its forwarder execute every USB command, DAP_Disconnect
-  // included: the owner's DAP_Disconnect ends its session whoever executes it (protocol
-  // 3.1), and radio commands are not busy afterwards.
-  Probe p;
-  p.exec.SetForwarder(
-      +[](void*, XrDap::Transport, const uint8_t* req, uint16_t, uint8_t* resp, uint16_t,
-          uint16_t& out)
+  std::thread usb(
+      [&]()
       {
-        resp[0] = req[0];
-        resp[1] = 0x00U;
-        out = 2U;
-        return true;
-      },
-      nullptr);
-  auto run = [&](XrDap::Transport t, uint8_t cmd)
+        while (!stop.load())
+        {
+          (void)p.exec.StepUsb(5U);
+        }
+      });
+  std::thread links[3];
+  const XrDap::Transport kinds[3] = {XrDap::Transport::TCP, XrDap::Transport::SERIAL,
+                                     XrDap::Transport::RADIO};
+  for (int i = 0; i < 3; ++i)
   {
-    const uint8_t req[2] = {cmd, 0x01};
-    uint8_t resp[8] = {};
-    uint16_t out = 0U;
-    p.exec.Execute(t, req, sizeof(req), resp, sizeof(resp), out);
-    return resp[1];
-  };
-  EXPECT(run(XrDap::Transport::USB, Byte(DapCmd::CONNECT)) == 0x00U);
-  EXPECT(p.session.Owner() == XrDap::Transport::USB);
-  EXPECT(run(XrDap::Transport::USB, Byte(DapCmd::DISCONNECT)) == 0x00U);
-  EXPECT(p.session.Owner() == XrDap::Transport::NONE);
-  EXPECT(run(XrDap::Transport::RADIO, Byte(DapCmd::CONNECT)) == 0x00U);
-  EXPECT(p.session.Owner() == XrDap::Transport::RADIO);
-  std::printf("  ForwardedDisconnectEndsTheSession: done\n");
+    links[i] = std::thread(
+        [&p, &kinds, i]()
+        {
+          for (int n = 0; n < 300; ++n)
+          {
+            (void)CommandOn(p, kinds[i], Byte(DapCmd::INFO));
+          }
+        });
+  }
+  for (auto& t : links)
+  {
+    t.join();
+  }
+  stop.store(true);
+  feeder.join();
+  usb.join();
+  EXPECT(p.dap.max_in_flight_.load() == 1);
+  std::printf("  LinksNeverRunTwoCommandsAtOnce: max in flight %d\n",
+              p.dap.max_in_flight_.load());
 }
 
-void UsbRebindLeavesAnotherOwnersSwdAlone()
+void UsbRebindLeavesAnotherLinksSwdAlone()
 {
-  // USB 绑定或解绑只属于 USB 自己的会话：无线拥有探针时不复位 SWD，USB 拥有或没有主人
-  // 时照常复位（CH32 上开关一次 USB 曾让无线会话的 DP 读一直回 ACK 7）/ A USB bind or
-  // unbind belongs to USB's own session: with the radio owning the probe SWD is not
-  // reset, with USB owning it or nobody it is (opening and closing USB once on the CH32
-  // used to make every DP read of the radio session answer ACK 7).
+  // USB 绑定或解绑时：连接在别的链路上不复位 SWD，连接在 USB 上或没有连接时照常复位（CH32
+  // 上开关一次 USB 曾让无线连接的 DP 读一直回 ACK 7）/ On a USB bind or unbind: SWD is not
+  // reset while the connection is on another link, and is as usual when it is on USB or
+  // there is none (opening and closing USB once on the CH32 used to make every DP read of
+  // the radio connection answer ACK 7).
   Probe p;
-  const uint8_t connect[2] = {Byte(DapCmd::CONNECT), 0x01};
-  uint8_t resp[8] = {};
-  uint16_t out = 0U;
-  p.exec.Execute(XrDap::Transport::RADIO, connect, sizeof(connect), resp, sizeof(resp),
-                 out);
-  EXPECT(p.session.Owner() == XrDap::Transport::RADIO);
+  (void)CommandOn(p, XrDap::Transport::RADIO, Byte(DapCmd::CONNECT));
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::RADIO);
   p.dap.Rebind();
   EXPECT(p.dap.swd_open_);
-  p.exec.EndSession(XrDap::Transport::RADIO);
+  p.exec.LinkLost(XrDap::Transport::RADIO);
   p.dap.Rebind();
   EXPECT(!p.dap.swd_open_);
-  std::printf("  UsbRebindLeavesAnotherOwnersSwdAlone: done\n");
-}
-bool ExtraLength(const uint8_t*, uint16_t avail, uint16_t& len)
-{
-  if (avail < 2U)
-  {
-    return false;
-  }
-  len = 2U;
-  return true;
-}
-
-bool ExtraHandler(void*, const uint8_t* req, uint16_t, uint8_t* resp, uint16_t, uint16_t& out)
-{
-  resp[0] = req[0];
-  resp[1] = 0x00U;
-  out = 2U;
-  return true;
-}
-
-void PlatformCommandIsMeasuredAndClassedByThePlatform()
-{
-  // 附加命令的长度和“不需要拥有探针”都由平台登记：Core 不认识 0x86。USB 是主人时，登记过
-  // 的只读查询得到回应，同一命令的写操作回“忙” / The length of an extra command and
-  // whether it needs ownership are registered by the platform; Core does not know 0x86.
-  // With USB as the owner, the registered read-only query is answered and the write of
-  // the same command is busy.
-  static const XrDap::FreeCommand kFree[] = {{2, {0x86, 0x00}}};
-  Probe p;
-  p.vendor.SetExtraCommand(0x86U, 0U, &ExtraHandler, nullptr, &ExtraLength);
-  p.exec.SetFreeCommands(kFree, 1U);
-  const uint8_t query[2] = {0x86U, 0x00U};
-  uint16_t len = 0U;
-  EXPECT(p.vendor.RequestLength(query, 2U, len) && len == 2U);
-  EXPECT(!p.vendor.RequestLength(query, 1U, len));
-  UsbThread usb(p, 500U);
-  p.dap.Feed(Byte(DapCmd::CONNECT));
-  for (int i = 0; i < 100 && p.dap.usb_done_.load() == 0U; ++i)
-  {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  EXPECT(p.session.Owner() == XrDap::Transport::USB);
-  uint8_t resp[8] = {};
-  uint16_t out = 0U;
-  p.exec.Execute(XrDap::Transport::TCP, query, sizeof(query), resp, sizeof(resp), out);
-  EXPECT(out == 2U && resp[0] == 0x86U && resp[1] == 0x00U);
-  const uint8_t save[2] = {0x86U, 0x01U};
-  out = 0U;
-  p.exec.Execute(XrDap::Transport::TCP, save, sizeof(save), resp, sizeof(resp), out);
-  EXPECT(out == 2U && resp[0] == 0x86U && resp[1] == XrDap::kStatusBusy);
-  std::printf("  PlatformCommandIsMeasuredAndClassedByThePlatform: done\n");
-}
-
-struct SingleProbe
-{
-  NoSwd swd;
-  XrDap::SessionOwner session;
-  XrDap::DapVendor vendor{swd, session};
-  XrDap::DapActivity activity;
-  FakeDap dap;
-  XrDap::Executor<FakeDap, XrDap::Session::SingleTransport> exec{dap, session, vendor,
-                                                                 activity};
-};
-
-void SingleTransportHasNoQueueAndKeepsItsSession()
-{
-  // 只有 USB 一条传输：没有排队的状态；每条命令由 USB 准入，没有会话时开始一个，
-  // DAP_Disconnect 结束它，之后的命令再开始新的一个 / USB is the only transport: no
-  // queueing state; USB admits every command and starts a session when there is none,
-  // DAP_Disconnect ends it, and the next command starts a new one.
-  using Single = XrDap::Executor<FakeDap, XrDap::Session::SingleTransport>;
-  using Multi = XrDap::Executor<FakeDap, XrDap::Session::MultiTransport>;
-  static_assert(!Single::kMultiTransport && Multi::kMultiTransport, "policy flag");
-  static_assert(sizeof(Single) < sizeof(Multi), "no queue, no wake semaphores");
-  SingleProbe p;
-  EXPECT(p.session.Session() == 0U);
-  p.dap.Feed(Byte(DapCmd::CONNECT));
-  EXPECT(p.exec.StepUsb(100U) == ErrorCode::OK);
-  EXPECT(p.session.Owner() == XrDap::Transport::USB);
-  const uint32_t first = p.session.Session();
-  EXPECT(first != 0U);
-  p.dap.Feed(Byte(DapCmd::INFO));
-  EXPECT(p.exec.StepUsb(100U) == ErrorCode::OK);
-  EXPECT(p.session.Session() == first);  // 同一个会话 / the same session
-  p.dap.Feed(Byte(DapCmd::DISCONNECT));
-  EXPECT(p.exec.StepUsb(100U) == ErrorCode::OK);
-  EXPECT(p.session.Owner() == XrDap::Transport::NONE);
-  EXPECT(!p.session.Alive(first, 0U));
-  p.dap.Feed(Byte(DapCmd::CONNECT));
-  EXPECT(p.exec.StepUsb(100U) == ErrorCode::OK);
-  EXPECT(p.session.Session() != 0U && p.session.Session() != first);
-  std::printf("  SingleTransportHasNoQueueAndKeepsItsSession: done\n");
+  std::printf("  UsbRebindLeavesAnotherLinksSwdAlone: done\n");
 }
 
 void SerialWriteResultsAreUnambiguous()
@@ -466,12 +379,10 @@ int main()
 {
   LibXR::PlatformInit();
   TcpAnsweredWhileUsbWaits();
-  BusyAnsweredWhileUsbOwnerWaits();
-  TcpServedBetweenBackToBackUsbCommands();
-  ForwardedDisconnectEndsTheSession();
-  UsbRebindLeavesAnotherOwnersSwdAlone();
-  PlatformCommandIsMeasuredAndClassedByThePlatform();
-  SingleTransportHasNoQueueAndKeepsItsSession();
+  UsbRebindLeavesAnotherLinksSwdAlone();
+  ConnectionFollowsTheLink();
+  UsbResetEndsAUsbConnectionOnly();
+  LinksNeverRunTwoCommandsAtOnce();
   SerialWriteResultsAreUnambiguous();
   std::printf("%d failed\n", g_failures);
   return g_failures == 0 ? 0 : 1;

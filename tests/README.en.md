@@ -46,7 +46,7 @@ python -m xrdap_test run --link tcp:HOST --target my-target.toml --cases VND-06,
 python -m xrdap_test run --link usb --target my-target.toml --cases STAB-01 --long-s 3600
 ```
 
-Cases that need a second link (MC-02, MC-03) take another path to the same probe with `--link2`; when an assisted case reaches an operator step it prompts and waits for Enter, and with `--no-prompt` it is recorded as n/a.
+Cases that need a second link (STAB-08) take another path to the same probe with `--link2`; when an assisted case reaches an operator step it prompts and waits for Enter, and with `--no-prompt` it is recorded as n/a.
 
 The commit IDs of the image under test are written into the result:
 

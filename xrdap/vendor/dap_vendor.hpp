@@ -4,7 +4,7 @@
 // XR 厂商扩展命令（0x80 到 0x85，协议版本
 // 2）：多地址读写、指针链解引用、探针端周期采样。还可挂一条
 // 附加命令（SetExtraCommand，由平台挂上，例如 XRDAP-ESP 的 Wi-Fi 配置）。由 Executor 在 libxr
-// DAP 执行上下文里调用，命令属于哪条传输、能不能执行由 SessionOwner 决定。协议见
+// DAP 执行上下文里调用。连接在哪条链路上、链路丢了怎么办见 OnLinkLost。协议见
 // docs/protocol.md 第 3 节。
 //
 // 采样有两种运行方式，平台在 xrdap_port.hpp 里用 Port::SamplerPolicy 二选一，编译期决定：
@@ -16,8 +16,8 @@
 // read/write, pointer-chain
 // dereference and probe-side periodic sampling. One extra command can be attached
 // (SetExtraCommand, attached by the platform, e.g. XRDAP-ESP's Wi-Fi configuration). Executor calls it in the
-// libxr DAP execution context; SessionOwner decides which transport a command belongs to
-// and whether it runs. See docs/protocol.md section 3.
+// libxr DAP execution context. Which link the connection is on and what happens when the
+// link is lost: see OnLinkLost. See docs/protocol.md section 3.
 //
 // Sampling runs one of two ways, chosen by the platform at compile time with
 // Port::SamplerPolicy in xrdap_port.hpp: a single-loop probe (LoopSampling) calls Poll()
@@ -27,11 +27,12 @@
 // Sampling and the DAP_Connect state are tied to the session number and lapse when the
 // session ends.
 
+#include <atomic>
 #include <cstdint>
 #include <type_traits>
 
 #include "debug/swd.hpp"
-#include "xrdap/session/session_owner.hpp"
+#include "xrdap/session/transport.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/sampler.hpp"
 #include "xrdap/vendor/sampler_policy.hpp"
@@ -78,6 +79,45 @@ class DapVendorBase
   void SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler, void* ctx,
                        ExtraLength length);
 
+  /// 读取 USB 总线复位计数的函数 / Function returning the USB bus-reset count.
+  using ResetCountFn = uint32_t (*)(void* ctx);
+
+  /// @brief 设置 USB 复位计数来源：连接在 USB 上时计数变了，连接和采样作废 / Set the USB
+  ///        reset-count source: when the connection is on USB and the count changes, the
+  ///        connection and sampling lapse.
+  /// @note 初始化时调用；fn 只能读一个计数，不能阻塞或取锁 / Call at initialisation; fn
+  ///       must only read a counter and must not block or take a lock.
+  void SetUsbResetSource(ResetCountFn fn, void* ctx)
+  {
+    usb_reset_fn_ = fn;
+    usb_reset_ctx_ = ctx;
+  }
+
+  /// @brief 链路 t 丢了（TCP 断开、串口链路停止或太久没有请求、无线会话结束）：连接在 t
+  ///        上时，连接和采样作废 / Link t is gone (TCP closed, serial link stopped or
+  ///        silent too long, radio session ended): when the connection is on t, the
+  ///        connection and sampling lapse.
+  /// @note 任何任务，不能在中断里 / Any task, not from an interrupt.
+  void OnLinkLost(Transport t)
+  {
+    if (connected_link_.load() == static_cast<uint32_t>(t))
+    {
+      Drop();
+    }
+  }
+
+  /// @brief 当前连接在哪条链路上，没有连接为 NONE / The link the connection is on, NONE
+  ///        when not connected.
+  Transport ConnectedLink()
+  {
+    CheckUsbReset();
+    return static_cast<Transport>(connected_link_.load());
+  }
+
+  /// @brief 下一条命令从哪条链路来 / Which link the next command comes from.
+  /// @note 执行器在执行前调用 / Called by the executor before it runs a command.
+  void SetCurrentLink(Transport t) { current_link_ = t; }
+
   /// @brief DAP_ExecuteCommands / DAP_QueueCommands 里一条厂商命令的请求字节数：0x80 到
   ///        0x85，以及挂上的附加命令 / Request bytes of one vendor command inside
   ///        DAP_ExecuteCommands / DAP_QueueCommands: 0x80 to 0x85, and the extra command
@@ -89,13 +129,13 @@ class DapVendorBase
   bool RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len) const;
 
  protected:
-  DapVendorBase(LibXR::Debug::Swd& swd, SessionOwner& session)
-      : session_(session), mem_(swd)
-  {
-  }
+  explicit DapVendorBase(LibXR::Debug::Swd& swd) : mem_(swd) {}
   ~DapVendorBase() = default;
 
   bool Connected();
+  /// 采样发起时的链路代数是否还有效 / Whether the link epoch sampling started in is
+  /// still valid.
+  bool LinkAlive(uint32_t epoch);
   bool IsVendor(uint8_t cmd) const;
   bool CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out);
   /// @param sampling 正在采样：沿用采样稳定的 CSW 位 / Sampling is running: reuse its
@@ -104,13 +144,31 @@ class DapVendorBase
                bool sampling);
   bool CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out);
 
-  SessionOwner& session_;
+  /// USB 复位计数变了且连接在 USB 上：链路丢了 / The USB reset count changed while the
+  /// connection is on USB: the link is gone.
+  void CheckUsbReset();
+  /// 连接和采样就此作废 / The connection and sampling lapse here.
+  void Drop();
+
   Vendor::MemAp mem_;
 
-  /// 收到 DAP_Connect 时的会话编号，0 表示没有连接；只在 DAP 执行上下文里读写 / Session
-  /// number at DAP_Connect, 0 when not connected; read and written in the DAP execution
-  /// context only.
-  uint32_t connected_session_ = 0U;
+  /// 当前这条命令从哪条链路来，Executor 在执行前设置；只在 DAP 执行上下文里读写 /
+  /// Which link the current command came from, set by the Executor before it runs; read
+  /// and written in the DAP execution context only.
+  Transport current_link_ = Transport::NONE;
+  /// DAP_Connect 成功的链路，NONE 表示没有连接 / The link whose DAP_Connect succeeded,
+  /// NONE when not connected.
+  std::atomic<uint32_t> connected_link_{static_cast<uint32_t>(Transport::NONE)};
+  /// 链路代数：连接作废（DAP_Disconnect、链路丢了、USB 复位）就加一，采样记着开始时的
+  /// 代数，变了就停 / Link epoch: incremented whenever the connection lapses
+  /// (DAP_Disconnect, link lost, USB reset); sampling remembers the epoch it started in
+  /// and stops once it changes.
+  std::atomic<uint32_t> epoch_{1U};
+  /// 连接成功时的代数 / The epoch at the successful connection.
+  uint32_t connected_epoch_ = 0U;
+  ResetCountFn usb_reset_fn_ = nullptr;
+  void* usb_reset_ctx_ = nullptr;
+  uint32_t usb_reset_base_ = 0U;
 
   uint8_t extra_cmd_ = 0U;
   uint32_t extra_feature_ = 0U;
@@ -130,17 +188,14 @@ class DapVendorT : public DapVendorBase
  public:
   /// @param swd SWD 实现，生命周期需长于本对象 / SWD implementation; must outlive this
   ///        object.
-  /// @param session 会话主人，生命周期需长于本对象 / Session owner; must outlive this
-  ///        object.
-  DapVendorT(LibXR::Debug::Swd& swd, SessionOwner& session)
-      : DapVendorBase(swd, session), sampler_(mem_, &DapVendorT::KeepSampling, this)
+  explicit DapVendorT(LibXR::Debug::Swd& swd)
+      : DapVendorBase(swd), sampler_(mem_, &DapVendorT::KeepSampling, this)
   {
   }
 
   /// @brief 处理一条命令 / Handle one command.
-  /// @note 只在 libxr DAP 执行上下文里调用（Executor 的钩子），调用方已确认这条命令的
-  ///       传输拥有探针 / Call only in the libxr DAP execution context (Executor's hook),
-  ///       after the caller confirmed the command's transport owns the probe.
+  /// @note 只在 libxr DAP 执行上下文里调用（Executor 的钩子）/ Call only in the libxr DAP
+  ///       execution context (Executor's hook).
   Result OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                    uint16_t& out);
 
@@ -193,7 +248,7 @@ class DapVendorT : public DapVendorBase
   void OnTickIsr(uint32_t elapsed_ticks = 1U) { sampler_.OnTickIsr(elapsed_ticks); }
 
  private:
-  static bool KeepSampling(void* ctx, uint32_t session);
+  static bool KeepSampling(void* ctx, uint32_t epoch);
 
   bool HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len, uint8_t* resp,
                     uint16_t cap, uint16_t& out);

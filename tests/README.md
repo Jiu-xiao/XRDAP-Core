@@ -46,7 +46,7 @@ python -m xrdap_test run --link tcp:HOST --target my-target.toml --cases VND-06,
 python -m xrdap_test run --link usb --target my-target.toml --cases STAB-01 --long-s 3600
 ```
 
-需要第二条链路的用例（MC-02、MC-03）用 `--link2` 给出同一块探针的另一条路径；辅助用例运行到操作者步骤时会提示并等待回车，加 `--no-prompt` 则记为 n/a。
+需要第二条链路的用例（STAB-08）用 `--link2` 给出同一块探针的另一条路径；辅助用例运行到操作者步骤时会提示并等待回车，加 `--no-prompt` 则记为 n/a。
 
 被测镜像的提交号写进结果：
 

@@ -18,7 +18,7 @@ Headers are included as `xrdap/<module>/<file>.hpp`:
 
 | Module | Contents |
 |---|---|
-| `session/` | `SessionOwner`: which transport (USB, serial, TCP, radio) owns the probe and when its session ends; `Executor`: every call into the libxr DAP instance goes through it, and a transport that is not the owner gets busy |
+| `session/` | `Executor`: every call into the libxr DAP instance goes through it, one mutex keeps it to one command at a time; `Transport` is only a label of where a command came from |
 | `vendor/` | `DapVendor` (commands 0x80 to 0x85, plus one extra command a platform attaches, such as XRDAP-ESP's 0x86 Wi-Fi configuration), `MemAp` (MEM-AP access along pointer chains over SWD), `Sampler`, `TickAccount`, `FrameRing` (sampling on the probe), request checks and reply space |
 | `serial/` | `Framer` (serial frames: the header and CRCs are libxr Topic's packing format, only the payload and the streaming resync live here), `SerialLink` (the serial worker thread) |
 | `activity/` | `DapActivity`: DAP activity and the host state reported by DAP_HostStatus |
@@ -82,38 +82,35 @@ class SpinLock
 
 ## Usage
 
-### Session owner and executor
+### Executor
 
-Every DAP command enters the libxr DAP instance through `Executor`: USB with `StepUsb()`, the other transports with `Execute()`. The executor runs one command at a time and notes which transport each command belongs to. One table in `session/command_class.hpp` puts commands in two classes: read-only status and settings queries and the status light (`DAP_Info`, `DAP_HostStatus`, vendor INFO, and the queries a platform registers with `Executor::SetFreeCommands()`, e.g. the 0x86 query of XRDAP-ESP and 0x9F 0x13 of the CH32V3) need no ownership and run from any transport; every other command needs to own the probe. The first transport that runs a command needing ownership becomes the session owner; until its session ends such commands from the other transports get busy (`command FF` for standard commands, `command 05` for vendor commands):
+Every DAP command enters the libxr DAP instance through `Executor`: USB with `StepUsb()`, the other links with `Execute()`. The executor keeps it to one command at a time with a mutex and notes which link each command came from. That the probe is used over one link at a time is up to the user, so Core does not arbitrate: there is no session owner, no queue and no busy reply; when two links send commands at once, the one that gets the lock second waits for the first to finish. `DAP_Connect` notes the link it came from; `DAP_Disconnect`, that link being lost, or (for a connection on USB) a bus reset makes the connection and sampling lapse, and the extension commands need a new `DAP_Connect`:
 
 ```cpp
 #include "xrdap/session/executor.hpp"
 
-static XrDap::SessionOwner session;
-static XrDap::DapVendor vendor(swd, session);
+static XrDap::DapVendor vendor(swd);
 static XrDap::DapActivity activity;
-static XrDap::Executor<Dap> exec(dap, session, vendor, activity);  // installs the hook
+static XrDap::Executor<Dap> exec(dap, vendor, activity);  // installs the hook
 
-session.SetLease(XrDap::Transport::SERIAL, XrDap::kSerialLeaseMs);  // serial: 5 s silence ends it
-session.SetUsbResetSource(&BusResetCount, &usb);  // a changed count ends the USB session
+vendor.SetUsbResetSource(&BusResetCount, &usb);  // a changed count lapses a connection on USB
 ```
 
-`BusResetCount` stands for the platform function that returns the USB bus reset count. Each transport ends its session its own way:
+`BusResetCount` stands for the platform function that returns the USB bus reset count. Each link tells the executor when it is lost:
 
 ```cpp
 // TCP server: every request
 exec.Execute(XrDap::Transport::TCP, req, len, resp, sizeof(resp), out);
 // client disconnected
-exec.EndSession(XrDap::Transport::TCP);
+exec.LinkLost(XrDap::Transport::TCP);
 
-// Radio remote: run the commands the peer sends; a ping with an unchanged session id
-// refreshes the lease, a changed or zero session id ends the session
+// Radio remote: run the commands the peer sends; a changed or zero session id means the
+// link is lost
 exec.Execute(XrDap::Transport::RADIO, req, len, resp, sizeof(resp), out);
-exec.TouchSession(XrDap::Transport::RADIO);
-exec.EndSession(XrDap::Transport::RADIO);
+exec.LinkLost(XrDap::Transport::RADIO);
 ```
 
-When a session ends, sampling stops and the extension commands need a new `DAP_Connect`.
+The serial link (`SerialLink`) notes the time of its last request and calls `LinkLost(SERIAL)` when none came within `kLeaseMs` (5 s). When the connection is not on that link, `LinkLost` does nothing.
 
 ### Single-loop probe
 
@@ -168,7 +165,7 @@ usb_dap.Create<XrDap::Executor<Dap>*>(
     "dap_usb", 4096, LibXR::Thread::Priority::HIGH);
 ```
 
-`StepUsb(wait_ms)` first waits for a USB command in libxr's `WaitForWork` without holding a turn, and queues to run it once it is there. A turn is held only while one command runs and is handed over in arrival order (`TurnQueue`); the holder cannot get ahead of a transport already queued, so no transport's `DAP_Info` or busy reply depends on another transport's idle time. This needs libxr's `WaitForWork`.
+`StepUsb(wait_ms)` first waits for a USB command in libxr's `WaitForWork` without holding the lock, and takes the lock to run it once it is there. The lock is held only while one command runs and does not promise first come first served. This needs libxr's `WaitForWork`.
 
 ### Serial link
 
@@ -231,7 +228,7 @@ for (;;)
 
 ## Tests
 
-`tests/` builds the pure logic that depends on neither hardware nor libxr (session owner, command classes, execution turns, busy replies, reply space, request lengths, SUB_START checks, tick accounting, sampling yielding to commands, a CPU simulation of sampling and commands, frame ring, item parsing, serial frames and padding, DAP activity, serial numbers) on a PC and runs it with ctest under AddressSanitizer and UBSan; the oracles come from the protocol document, the CMSIS-DAP specification and the user's decisions. Another ctest checks that atomics in `xrdap/` are 32-bit integers only. Given a libxr path, every source and public header is also compiled against libxr's Linux system layer, and two tests that use libxr run: the executor with threads (no turn held while waiting for input, busy replies, forwarded disconnect, a USB re-attach leaving another owner's SWD alone, serial write results) and MEM-AP writes and bus faults:
+`tests/` builds the pure logic that depends on neither hardware nor libxr (reply space, request lengths, SUB_START checks, tick accounting, sampling yielding to commands, a CPU simulation of sampling and commands, frame ring, item parsing, serial frames and padding, DAP activity, serial numbers) on a PC and runs it with ctest under AddressSanitizer and UBSan; the oracles come from the protocol document, the CMSIS-DAP specification and the user's decisions. Another ctest checks that atomics in `xrdap/` are 32-bit integers only. Given a libxr path, every source and public header is also compiled against libxr's Linux system layer, and two tests that use libxr run: the executor with threads (no lock held while waiting for input, the connection following its link, a USB reset lapsing only a connection on USB, one command at a time when several links send at once, a USB re-attach leaving another link's SWD alone, serial write results) and MEM-AP writes and bus faults:
 
 ```bash
 cmake -S tests -B build -DLIBXR_DIR=<libxr>

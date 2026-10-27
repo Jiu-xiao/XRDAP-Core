@@ -21,7 +21,6 @@ enum class SubCtrlOp : uint8_t
   CLEAR = 2,
 };
 
-uint32_t NowMs() { return static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds()); }
 uint64_t NowUs() { return static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds()); }
 
 uint8_t ToU8(Cmd c) { return static_cast<uint8_t>(c); }
@@ -41,16 +40,40 @@ void DapVendorBase::SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler 
 // Returns false once the session that started sampling has ended, which stops sampling.
 // Called by the sampling task or the main loop.
 template <class Policy>
-bool DapVendorT<Policy>::KeepSampling(void* ctx, uint32_t session)
+bool DapVendorT<Policy>::KeepSampling(void* ctx, uint32_t epoch)
 {
-  return static_cast<DapVendorT*>(ctx)->session_.Alive(session, NowMs());
+  return static_cast<DapVendorT*>(ctx)->LinkAlive(epoch);
 }
 
 // 扩展命令要求本会话里已经 DAP_Connect。 / Extension commands need a DAP_Connect in this
 // session.
 bool DapVendorBase::Connected()
 {
-  return connected_session_ != 0U && session_.Alive(connected_session_, NowMs());
+  CheckUsbReset();
+  return connected_link_.load() != static_cast<uint32_t>(Transport::NONE) &&
+         connected_epoch_ == epoch_.load();
+}
+
+bool DapVendorBase::LinkAlive(uint32_t epoch)
+{
+  CheckUsbReset();
+  return epoch == epoch_.load();
+}
+
+void DapVendorBase::CheckUsbReset()
+{
+  if (usb_reset_fn_ != nullptr &&
+      connected_link_.load() == static_cast<uint32_t>(Transport::USB) &&
+      usb_reset_fn_(usb_reset_ctx_) != usb_reset_base_)
+  {
+    Drop();
+  }
+}
+
+void DapVendorBase::Drop()
+{
+  connected_link_.store(static_cast<uint32_t>(Transport::NONE));
+  epoch_.fetch_add(1U);
 }
 
 template <class Policy>
@@ -100,11 +123,23 @@ DapVendorBase::Result DapVendorT<Policy>::OnCommand(const uint8_t* req, uint16_t
   if (cmd == Byte(DapCmd::CONNECT))
   {
     const uint8_t port = (len >= 2U) ? req[1] : 0U;
-    connected_session_ = (port == 0U || port == 1U) ? session_.Session() : 0U;
+    if (port == 0U || port == 1U)
+    {
+      connected_epoch_ = epoch_.load();
+      if (current_link_ == Transport::USB && usb_reset_fn_ != nullptr)
+      {
+        usb_reset_base_ = usb_reset_fn_(usb_reset_ctx_);
+      }
+      connected_link_.store(static_cast<uint32_t>(current_link_));
+    }
+    else
+    {
+      Drop();
+    }
   }
   else if (cmd == Byte(DapCmd::DISCONNECT))
   {
-    connected_session_ = 0U;
+    Drop();
   }
   return Result::PASS;
 }
@@ -317,10 +352,10 @@ bool DapVendorT<Policy>::CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* 
   {
     return Reply(resp, kStatusNoTarget, out);
   }
-  // 采样归发起它的会话 / Sampling belongs to the session that starts it.
+  // 采样随发起它的连接作废而停 / Sampling stops when the connection that started it lapses.
   return Reply(resp,
                sampler_.Start(start.items, start.period_us, start.stop_on_full,
-                              session_.Session()),
+                              epoch_.load()),
                out);
 }
 

@@ -2,11 +2,11 @@
 
 [中文](protocol.md)
 
-This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (protocol version 2; 0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only) and the rule that one transport owns the probe at a time, the probe identity and mDNS advertisement, how the ESP32-C3 USB port separates the DAP link from the command line, the USB/IP virtual device served by `xrdap share usbip`, and the zero-length packet USB hosts must send. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. These rules are implemented in `xrdap/` of this repository: serial frames in `xrdap/serial/`, the session owner in `xrdap/session/`, the vendor extension in `xrdap/vendor/`.
+This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (protocol version 2; 0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only) and the rule that the probe is used over one link at a time, the probe identity and mDNS advertisement, how the ESP32-C3 USB port separates the DAP link from the command line, the USB/IP virtual device served by `xrdap share usbip`, and the zero-length packet USB hosts must send. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. These rules are implemented in `xrdap/` of this repository: serial frames in `xrdap/serial/`, the session owner in `xrdap/session/`, the vendor extension in `xrdap/vendor/`.
 
 All integers are little-endian. Spaces in hexadecimal examples are for readability only.
 
-Contents: 1 Serial frames; 2 TCP frames; 3 XR vendor extension (3.1 rules and session owner, 3.2 status and reply space, 3.3 items, 3.4 commands, 3.5 sampling, 3.6 SWD access, 3.7 0x86, 3.8 byte examples); 4 Probe identity and discovery (DAP_Info, mDNS); 5 The ESP32-C3 USB port; 6 USB/IP virtual device; 7 Notes for USB hosts.
+Contents: 1 Serial frames; 2 TCP frames; 3 XR vendor extension (3.1 rules and one link at a time, 3.2 status and reply space, 3.3 items, 3.4 commands, 3.5 sampling, 3.6 SWD access, 3.7 0x86, 3.8 byte examples); 4 Probe identity and discovery (DAP_Info, mDNS); 5 The ESP32-C3 USB port; 6 USB/IP virtual device; 7 Notes for USB hosts.
 
 ## 1. Serial frames
 
@@ -47,7 +47,7 @@ Requests and responses correspond one to one. The host sends one request at a ti
 
 The firmware baud rate is 4 000 000 (`kSerialBaud` in XRDAP-ESP `firmware/esp32sx/main/config.hpp` for the S2 and S3; the C3 uses USB Serial/JTAG, where the baud rate has no effect; the classic ESP32 is limited to 921 600 by its on-board USB-UART chip, see `firmware/esp32/main/config.hpp`), 8 data bits, no parity, 1 stop bit, no flow control.
 
-A serial port has no notion of connecting or disconnecting. While serial owns the probe, 5 seconds without any request end the session, see section 3.1.
+A serial port has no notion of connecting or disconnecting. With the connection on serial, 5 seconds without any request make it lapse, see section 3.1.
 
 ## 2. TCP frames
 
@@ -77,37 +77,29 @@ This section is protocol version 2 and is not compatible with version 1: version
 - Before using the extension commands, the host connects with `DAP_Connect` in SWD mode (port 0 or 1) and makes sure the target is reachable. The probe does not connect on the host's behalf; without a connection in the current session READ, WRITE and SUB_START return 0x04. After `DAP_Disconnect` or the end of the session, `DAP_Connect` is needed again.
 - After READ, WRITE or sampling, the host must treat DP SELECT, AP CSW and TAR as unknown and write them again. OpenOCD caches these registers, so the extension commands and OpenOCD are not mixed on one connection.
 
-#### Session owner
+#### One link at a time
 
-At any time one transport (USB, serial, TCP, radio remote) owns the probe and SWD; that transport is the session owner. Commands fall into two classes:
+That the probe is used over one link (USB, serial, TCP, radio peer) at a time is up to the user; the probe does not arbitrate: there is no session owner, no queue and no busy reply. Every command runs whoever sends it; when two links send commands at once, the probe runs one at a time and the later one waits for the earlier to finish, not necessarily in arrival order, and using two links at once can corrupt the SWD state.
 
-| Class | Commands |
+`DAP_Connect` (port 0 or 1) notes the link it came from. This connection lapses in the cases below; the extension commands then need a new `DAP_Connect`, and sampling in progress stops:
+
+| Case | Connection that lapses |
 |---|---|
-| No ownership needed | `DAP_Info` (0x00); `DAP_HostStatus` (0x01, status light only); the `DAP_ExecuteCommands` (0x7F) and `DAP_QueueCommands` (0x7E) containers themselves, each command inside classed on its own; vendor INFO (0x80); 0x86 op 0 Wi-Fi status query (XRDAP-ESP); 0x9F 0x13 reading this probe's radio settings, pairing and role (XRDAP-CH32V307; 0x9F 0x30, forwarded over the radio, needs ownership) |
-| Ownership needed | every other command: connect, SWD, SWJ, reset and every standard command that touches the target, READ, WRITE, sampling (SUB_START, SUB_CTRL, SUB_READ), settings writes (0x86 save and clear; 0x9F role, settings, pairing and forwarding) |
+| `DAP_Disconnect` is sent | the connection, on any link |
+| A TCP client disconnects, the serial link stops | when the connection is on that link |
+| No serial request for 5 s | when the connection is on serial |
+| USB bus reset (unplugged or host reset) | when the connection is on USB |
+| Radio session id changes or is 0, or no ping within the lease | when the connection is on the radio peer (XRDAP-CH32V307) |
 
-Commands that need no ownership run from any transport, never make that transport the owner and never make another transport busy. When there is no owner, the first transport that runs a command needing ownership becomes the owner and starts a session. From then on, commands needing ownership from any other transport are answered busy and not run:
+When the connection is not on the link that was lost, nothing happens.
 
-| Command | Reply |
-|---|---|
-| standard commands | `command FF` (DAP_ERROR) |
-| vendor commands 0x80 to 0x9F | `command 05` (busy) |
+With the connection on serial, the host sends a request at least every 5 s (SUB_READ will do).
 
-With only 1 byte of reply space the reply is `FF` alone; with none there is no reply.
+USB connecting and disconnecting (the host opens or closes USB, re-enumerates) belongs to USB alone: only when the connection is on USB or there is none does the probe reset the SWD and DAP state because of it; with the connection on another link, its SWD connection, clock and settings stay as they are.
 
-The session ends in the following cases; afterwards any transport may become the new owner:
+The host should send `DAP_Disconnect` when it exits (XRDAP-Host does): closing a USB device on Windows produces no USB event, so this command is the only way the probe learns that the connection ended.
 
-| Case | Session that ends |
-|---|---|
-| The owner sends `DAP_Disconnect` | the owner's session |
-| The TCP client disconnects, the serial link stops | that transport's session |
-| USB bus reset (unplug or host reset) | the USB session |
-| No serial request for 5 seconds | the serial session |
-| The radio session id changes or is 0, or no ping within the lease | the radio remote's session (XRDAP-CH32V307) |
-
-While serial owns the probe, the host sends a request at least every 5 seconds (SUB_READ will do).
-
-USB attaching and detaching (the host opening or closing USB, a re-enumeration) belongs to USB's own session: the probe resets its SWD and DAP state for it only when USB is the owner or nobody is; while another transport owns the probe, that transport's SWD connection, clock and settings stay as they are.
+When earlier commands in a `DAP_ExecuteCommands` have used up the space in the packet and only 5 bytes are left for a READ whose reply needs 10, that READ is answered `81 03` and not executed. With only 1 byte left it is `FF`.
 
 #### Sampling
 
@@ -132,7 +124,7 @@ Reply space: before a vendor command runs, the probe works out from the request 
 | 0x02 | State not allowed: SUB_START while sampling; SUB_READ while not sampling (the reply still carries data) |
 | 0x03 | Insufficient resources: more than 32 items, the reply does not fit the space left, more than 8 distinct APs in one sampling run, the frame with every item due does not fit the buffer |
 | 0x04 | No target connected: no `DAP_Connect` in this session yet, or reading an AP's CSW failed |
-| 0x05 | Busy: another transport owns the probe (section 3.1) |
+| 0x05 | Busy: a reserved value the current firmware no longer sends (section 3.1) |
 
 Item status (one byte per item for READ and WRITE; in sample frames only 1 bit marks success or failure):
 
@@ -435,10 +427,6 @@ Request: `84 00`, response: `84 00`
 #### Not enough reply space
 
 Inside `DAP_ExecuteCommands` the commands before used up the packet, and 5 bytes are left when a READ whose reply needs 10 bytes comes: this READ's reply is `81 03`, and it does not run. With 1 byte left it is `FF`.
-
-#### Another transport owns the probe
-
-USB is the owner; a READ over serial: `81 05`; a `DAP_Transfer` over serial: `05 FF`; a `DAP_Info` or `DAP_HostStatus` over serial: answered as usual, and USB stays the owner.
 
 #### 0x86 query
 

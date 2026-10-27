@@ -344,9 +344,8 @@ void SamplerMergedTicksAndBatches()
 void StandardInfoDoesNotParkSampler()
 {
   ModelSwd swd;
-  XrDap::SessionOwner session;
-  CHECK_RECOVERY(session.Admit(XrDap::Transport::USB, 0U));
-  XrDap::DapVendor vendor(swd, session);
+  XrDap::DapVendor vendor(swd);
+  vendor.SetCurrentLink(XrDap::Transport::USB);
   Timer timer;
   uint8_t response[128] = {};
   uint16_t length = 0U;
@@ -458,9 +457,8 @@ void ReuseCswKeepsDataFreshAndInvalidatesOnFailure()
 void OnlyActiveSamplingReusesCommandCsw()
 {
   ModelSwd swd;
-  XrDap::SessionOwner session;
-  CHECK_RECOVERY(session.Admit(XrDap::Transport::USB, 0U));
-  XrDap::DapVendor vendor(swd, session);
+  XrDap::DapVendor vendor(swd);
+  vendor.SetCurrentLink(XrDap::Transport::USB);
   Timer timer;
   uint8_t response[128] = {};
   uint16_t length = 0U;
