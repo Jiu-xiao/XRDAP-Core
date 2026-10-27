@@ -116,8 +116,8 @@ class Executor
 
   /// @brief 别的链路：把一条命令交给执行上下文，等它执行完 / Other links: hand a command
   ///        to the execution context and wait until it has run.
-  /// @note 链路自己的任务里调用，不能在中断里；每条链路同时只有一条在途；执行上下文要在
-  ///       跑 Run() / Call from the link's own task, not from an interrupt; one in flight
+  /// @note 链路自己的任务里调用，不能在中断里，也不能在执行上下文里（那里用 ExecuteHere）；
+  ///       每条链路同时只有一条在途；执行上下文要在跑 Run() / Call from the link's own task, not from an interrupt; one in flight
   ///       per link; the execution context must be running Run().
   void Execute(Transport t, const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                uint16_t& out)
@@ -132,6 +132,20 @@ class Executor
     pending_.fetch_or(1U << SlotOf(t), std::memory_order_release);
     dap_.WakeStep(false);
     (void)slot.done.Wait(UINT32_MAX);
+  }
+
+  /// @brief 在执行上下文里直接执行一条命令（单循环的探针里，链路在主循环里被轮询）/ Run one
+  ///        command directly in the execution context (on a single-loop probe, where the
+  ///        link is polled in the main loop).
+  /// @note 只能在执行上下文里调用；别的任务用 Execute，在这里调用 Execute 会等不到应答 /
+  ///       Call it in the execution context only; other tasks use Execute, and calling
+  ///       Execute here would wait forever for a reply.
+  void ExecuteHere(Transport t, const uint8_t* req, uint16_t len, uint8_t* resp,
+                   uint16_t cap, uint16_t& out)
+  {
+    Scope scope(*this, t);
+    out = 0U;
+    (void)dap_.ExecuteExternal(req, len, resp, cap, out);
   }
 
   /// @brief 链路 t 丢了（TCP 客户端关闭、串口链路停止或太久没有请求、无线会话结束）：

@@ -320,6 +320,22 @@ void SamplingSharesTheContextWithCommands()
   EXPECT(frames >= 5U);  // 回复只放得下 6 帧 / the reply holds 6 frames at most
 }
 
+void ExecuteHereRunsInTheCallersContext()
+{
+  // 单循环探针：链路在主循环里被轮询，命令在调用者的上下文里直接执行，没有执行线程也不等 /
+  // Single-loop probe: the link is polled in the main loop and the command runs directly in the
+  // caller's context, without an execution thread and without waiting.
+  Probe p;
+  const uint8_t connect[2] = {Byte(DapCmd::CONNECT), 0x01};
+  uint8_t resp[64] = {};
+  uint16_t out = 0U;
+  p.exec.ExecuteHere(XrDap::Transport::RADIO, connect, sizeof(connect), resp, sizeof(resp),
+                     out);
+  EXPECT(out == 2U && resp[0] == Byte(DapCmd::CONNECT));
+  EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::RADIO);
+  std::printf("  ExecuteHereRunsInTheCallersContext: done\n");
+}
+
 void ConnectionFollowsTheLink()
 {
   // DAP_Connect 记下它来自哪条链路；别的链路丢了不影响，这条丢了或 DAP_Disconnect 才作废 /
@@ -455,6 +471,7 @@ int main()
   LibXR::PlatformInit();
   TcpAnsweredWhileUsbWaits();
   SamplingSharesTheContextWithCommands();
+  ExecuteHereRunsInTheCallersContext();
   UsbRebindLeavesAnotherLinksSwdAlone();
   ConnectionFollowsTheLink();
   UsbResetEndsAUsbConnectionOnly();
