@@ -92,6 +92,11 @@ class SessionOwner
   Transport Owner() const;
 
  private:
+  /// @brief 主人的租期过了，或 USB 主人的总线复位了：会话结束 / The owner's lease ran
+  ///        out, or the USB owner's bus reset: the session ends.
+  /// @param now_ms 当前时间（毫秒，32 位）/ Current time in milliseconds (32-bit).
+  /// @note 时间按无符号差算，跨越 32 位回绕也对 / Time is compared as an unsigned
+  ///       difference, so a 32-bit wrap is handled.
   void ExpireLocked(uint32_t now_ms);
   void EndLocked();
 

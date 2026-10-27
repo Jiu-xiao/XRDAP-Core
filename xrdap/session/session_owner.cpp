@@ -100,10 +100,6 @@ Transport SessionOwner::Owner() const
   return owner_;
 }
 
-// 主人的租期过了，或 USB 主人的总线复位了：会话结束。时间按无符号差算，跨越 32 位回绕
-// 也对。
-// The owner's lease ran out, or the USB owner's bus reset: the session ends. Time is
-// compared as an unsigned difference, so a 32-bit wrap is handled.
 void SessionOwner::ExpireLocked(uint32_t now_ms)
 {
   if (owner_ == Transport::NONE)
