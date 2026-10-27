@@ -160,6 +160,11 @@ class SerialLink
   /// @note 工作线程的循环体，也可以由协作调度的平台在自己的任务里循环调用 / The worker's
   ///       loop body; a cooperatively scheduled platform may also loop it in its own
   ///       task.
+  /// @note 先用零长度的阻塞读等“队列非空”（不取字节），再按队列里的量一次取走；直接发
+  ///       定长读会等满长度，重新带来几十毫秒的攒批延迟 / Waits for a nonempty queue with
+  ///       a zero-length blocking read (it takes no bytes), then takes what is queued in
+  ///       one read; a fixed-length read would wait for the whole length and bring back
+  ///       tens of milliseconds of batching.
   bool Poll()
   {
     if (stop_.load(std::memory_order_acquire) != 0U)
@@ -172,11 +177,8 @@ class SerialLink
       LibXR::Thread::Sleep(1U);
       return true;
     }
-    // 先用零长度的阻塞读等“队列非空”（不取字节），再按队列里的量一次取走；直接发定长读
-    // 会等满长度，重新带来几十毫秒的攒批延迟。
-    // Wait for a nonempty queue with a zero-length blocking read (it takes no bytes),
-    // then take what is queued in one read; a fixed-length read would wait for the whole
-    // length and bring back tens of milliseconds of batching.
+    // 零长度读只等队列非空，不取字节 / A zero-length read only waits for a nonempty
+    // queue and takes no bytes.
     LibXR::ReadOperation wait_op(wait_sem_, kWaitTimeoutMs);
     const LibXR::ErrorCode wait_ec =
         uart_.Read(LibXR::RawData(static_cast<void*>(nullptr), 0U), wait_op);
@@ -268,16 +270,19 @@ class SerialLink
     WriteFrame(FramerT::AppendPad(tx_frame_, frame));
   }
 
+  /// @brief 把 tx_frame_ 里的一帧写出，等写端口有空位，最多等 kTxTimeoutMs / Write the
+  ///        frame in tx_frame_, waiting for room in the write port for up to kTxTimeoutMs.
+  /// @param len 帧长 / Frame length.
+  /// @note 不带完成通知地写：返回 OK 时这一帧已复制进写端口的队列、一定会发出；FULL、
+  ///       BUSY 时什么都没进队列，可以重试。阻塞写的 TIMEOUT 含义不定（可能已排队、也可能
+  ///       没交出），重试会重发、当作已发会丢帧，所以不用它 / Writes without completion
+  ///       notification: on OK the frame has been copied into the write port's queue and
+  ///       will be sent; on FULL or BUSY nothing was queued, so a retry is safe. A
+  ///       blocking write's TIMEOUT is ambiguous (maybe queued, maybe not submitted):
+  ///       retrying would send twice and assuming sent would lose the frame, so it is not
+  ///       used.
   void WriteFrame(size_t len)
   {
-    // 不带完成通知地写：返回 OK 时这一帧已复制进写端口的队列、一定会发出；FULL、BUSY
-    // 时什么都没进队列，可以重试。阻塞写的 TIMEOUT 含义不定（可能已排队、也可能没交出），
-    // 重试会重发、当作已发会丢帧，所以不用它。
-    // Write without completion notification: on OK the frame has been copied into the
-    // write port's queue and will be sent; on FULL or BUSY nothing was queued, so a retry
-    // is safe. A blocking write's TIMEOUT is ambiguous (maybe queued, maybe not
-    // submitted): retrying would send twice and assuming sent would lose the frame, so
-    // it is not used.
     for (uint32_t waited = 0U;; ++waited)
     {
       LibXR::WriteOperation op;
