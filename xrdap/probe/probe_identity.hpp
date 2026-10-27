@@ -13,7 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "xrdap/protocol/dap_ids.hpp"
+#include "xrdap/protocol/dap_cmd.hpp"
 
 namespace XrDap
 {
@@ -22,6 +22,8 @@ namespace XrDap
 inline constexpr char kVendorName[] = "XRobot";
 /// 序列号前缀 / Serial number prefix.
 inline constexpr char kSerialPrefix[] = "XRobot-XRDAP-";
+/// DAP_Info 报告的 CMSIS-DAP 协议版本 / CMSIS-DAP protocol version reported by DAP_Info.
+inline constexpr char kProtocolVersion[] = "2.0.0";
 
 /// 序列号缓冲需要的字节数（含结尾 0）/ Bytes a serial buffer needs (with the trailing 0).
 constexpr size_t SerialBufferSize(size_t id_bytes)
@@ -63,7 +65,7 @@ void SetProbeInfo(DapT& dap, const ProbeIdentity& id)
       kVendorName,            // 厂商 / vendor
       id.product,             // 产品 / product
       id.serial,              // 序列号 / serial
-      Dap::kProtocolVersion,  // CMSIS-DAP 协议版本 / CMSIS-DAP protocol version
+      kProtocolVersion,  // CMSIS-DAP 协议版本 / CMSIS-DAP protocol version
       nullptr,                // 目标芯片厂商（不固定）/ target device vendor (not fixed)
       nullptr,                // 目标芯片名 / target device name
       kVendorName,            // 板子厂商 / board vendor

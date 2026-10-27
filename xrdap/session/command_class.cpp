@@ -3,7 +3,7 @@
 
 #include <cstring>
 
-#include "xrdap/protocol/dap_ids.hpp"
+#include "xrdap/protocol/dap_cmd.hpp"
 #include "xrdap/vendor/vendor_protocol.hpp"
 
 namespace XrDap
@@ -22,11 +22,11 @@ struct FreeCommand
 // command not listed does.
 constexpr FreeCommand kFree[] = {
     // 标准命令：探针信息、状态灯 / Standard: probe information, the status light.
-    {1, {Dap::kInfo}},
-    {1, {Dap::kHostStatus}},
+    {1, {Byte(DapCmd::INFO)}},
+    {1, {Byte(DapCmd::HOST_STATUS)}},
     // 容器：里面的命令各自归类 / Containers: the commands inside are classed one by one.
-    {1, {Dap::kQueueCommands}},
-    {1, {Dap::kExecuteCommands}},
+    {1, {Byte(DapCmd::QUEUE_COMMANDS)}},
+    {1, {Byte(DapCmd::EXECUTE_COMMANDS)}},
     // 厂商 INFO：能力和探针时间 / Vendor INFO: capabilities and probe time.
     {1, {static_cast<uint8_t>(Vendor::Cmd::INFO)}},
     // 0x86 查询 Wi-Fi 状态（XRDAP-ESP）/ 0x86 Wi-Fi status query (XRDAP-ESP).

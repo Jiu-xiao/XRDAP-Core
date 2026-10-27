@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "xrdap/session/busy_reply.hpp"
 
-#include "xrdap/protocol/dap_ids.hpp"
+#include "xrdap/protocol/dap_cmd.hpp"
 
 namespace XrDap
 {
@@ -19,13 +19,13 @@ void WriteBusyReply(uint8_t cmd, uint8_t* resp, uint16_t cap, uint16_t& out)
   {
     if (cap == 1U)
     {
-      resp[0] = Dap::kInvalid;
+      resp[0] = Byte(DapCmd::INVALID);
     }
     out = cap;
     return;
   }
   resp[0] = cmd;
-  resp[1] = (cmd >= kVendorFirst && cmd <= kVendorLast) ? kStatusBusy : Dap::kError;
+  resp[1] = (cmd >= kVendorFirst && cmd <= kVendorLast) ? kStatusBusy : Byte(DapStatus::ERROR);
   out = 2U;
 }
 

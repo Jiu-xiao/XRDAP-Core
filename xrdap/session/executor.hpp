@@ -37,7 +37,7 @@
 #include "thread.hpp"
 #include "timebase.hpp"
 #include "xrdap/activity/dap_activity.hpp"
-#include "xrdap/protocol/dap_ids.hpp"
+#include "xrdap/protocol/dap_cmd.hpp"
 #include "xrdap/session/busy_reply.hpp"
 #include "xrdap/session/command_class.hpp"
 #include "xrdap/session/session_owner.hpp"
@@ -267,7 +267,7 @@ class Executor
   void Ran(Transport t, const uint8_t* req, uint16_t len, uint32_t now)
   {
     activity_.Observe(req, len, now, t == Transport::USB || t == Transport::SERIAL);
-    if (req[0] == Dap::kDisconnect)
+    if (req[0] == Byte(DapCmd::DISCONNECT))
     {
       session_.End(t);
     }

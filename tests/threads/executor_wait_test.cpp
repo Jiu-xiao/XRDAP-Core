@@ -16,7 +16,7 @@
 #include "libxr.hpp"
 #include "semaphore.hpp"
 #include "xrdap/activity/dap_activity.hpp"
-#include "xrdap/protocol/dap_ids.hpp"
+#include "xrdap/protocol/dap_cmd.hpp"
 #include "xrdap/serial/serial_link.hpp"
 #include "xrdap/session/executor.hpp"
 #include "xrdap/session/session_owner.hpp"
@@ -26,6 +26,8 @@ namespace
 {
 using Clock = std::chrono::steady_clock;
 using LibXR::ErrorCode;
+using XrDap::Byte;
+using XrDap::DapCmd;
 
 int g_failures = 0;
 #define EXPECT(cond)                                                \
@@ -153,7 +155,7 @@ class FakeDap
   SessionResetGate gate_ = nullptr;
   void* gate_ctx_ = nullptr;
   LibXR::Semaphore usb_{0};
-  uint8_t usb_cmd_ = XrDap::Dap::kInfo;
+  uint8_t usb_cmd_ = Byte(DapCmd::INFO);
 };
 
 struct Probe
@@ -224,8 +226,8 @@ void TcpAnsweredWhileUsbWaits()
   double worst = 0.0;
   for (int i = 0; i < 10; ++i)
   {
-    const Answer a = TcpCommand(p, XrDap::Dap::kInfo);
-    EXPECT(a.cmd == XrDap::Dap::kInfo);
+    const Answer a = TcpCommand(p, Byte(DapCmd::INFO));
+    EXPECT(a.cmd == Byte(DapCmd::INFO));
     worst = a.ms > worst ? a.ms : worst;
     std::this_thread::sleep_for(std::chrono::milliseconds(7));
   }
@@ -241,23 +243,23 @@ void BusyAnsweredWhileUsbOwnerWaits()
   // DAP_Info is answered as usual.
   Probe p;
   UsbThread usb(p, 500U);
-  p.dap.Feed(XrDap::Dap::kConnect);
+  p.dap.Feed(Byte(DapCmd::CONNECT));
   for (int i = 0; i < 100 && p.dap.usb_done_.load() == 0U; ++i)
   {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   EXPECT(p.session.Owner() == XrDap::Transport::USB);
-  const Answer busy = TcpCommand(p, XrDap::Dap::kConnect);
-  EXPECT(busy.cmd == XrDap::Dap::kConnect);
+  const Answer busy = TcpCommand(p, Byte(DapCmd::CONNECT));
+  EXPECT(busy.cmd == Byte(DapCmd::CONNECT));
   EXPECT(busy.status == 0xFFU);
   EXPECT(busy.ms < 50.0);
-  const Answer info = TcpCommand(p, XrDap::Dap::kInfo);
-  EXPECT(info.cmd == XrDap::Dap::kInfo);
+  const Answer info = TcpCommand(p, Byte(DapCmd::INFO));
+  EXPECT(info.cmd == Byte(DapCmd::INFO));
   EXPECT(info.ms < 50.0);
   // 状态灯命令不需要拥有探针：照常执行，不回忙，USB 仍是主人 / The status light command
   // does not need to own the probe: it runs, is not busy, and USB stays the owner.
-  const Answer led = TcpCommand(p, XrDap::Dap::kHostStatus);
-  EXPECT(led.cmd == XrDap::Dap::kHostStatus);
+  const Answer led = TcpCommand(p, Byte(DapCmd::HOST_STATUS));
+  EXPECT(led.cmd == Byte(DapCmd::HOST_STATUS));
   EXPECT(led.status == 0x00U);
   EXPECT(p.session.Owner() == XrDap::Transport::USB);
   std::printf("  BusyAnsweredWhileUsbOwnerWaits: busy %.2f ms, info %.2f ms\n", busy.ms,
@@ -276,7 +278,7 @@ void TcpServedBetweenBackToBackUsbCommands()
       {
         while (feeding.load())
         {
-          p.dap.Feed(XrDap::Dap::kInfo);
+          p.dap.Feed(Byte(DapCmd::INFO));
           std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
       });
@@ -286,7 +288,7 @@ void TcpServedBetweenBackToBackUsbCommands()
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     for (int i = 0; i < 20; ++i)
     {
-      const Answer a = TcpCommand(p, XrDap::Dap::kInfo);
+      const Answer a = TcpCommand(p, Byte(DapCmd::INFO));
       worst = a.ms > worst ? a.ms : worst;
       std::this_thread::sleep_for(std::chrono::milliseconds(3));
     }
@@ -322,11 +324,11 @@ void ForwardedDisconnectEndsTheSession()
     p.exec.Execute(t, req, sizeof(req), resp, sizeof(resp), out);
     return resp[1];
   };
-  EXPECT(run(XrDap::Transport::USB, XrDap::Dap::kConnect) == 0x00U);
+  EXPECT(run(XrDap::Transport::USB, Byte(DapCmd::CONNECT)) == 0x00U);
   EXPECT(p.session.Owner() == XrDap::Transport::USB);
-  EXPECT(run(XrDap::Transport::USB, XrDap::Dap::kDisconnect) == 0x00U);
+  EXPECT(run(XrDap::Transport::USB, Byte(DapCmd::DISCONNECT)) == 0x00U);
   EXPECT(p.session.Owner() == XrDap::Transport::NONE);
-  EXPECT(run(XrDap::Transport::RADIO, XrDap::Dap::kConnect) == 0x00U);
+  EXPECT(run(XrDap::Transport::RADIO, Byte(DapCmd::CONNECT)) == 0x00U);
   EXPECT(p.session.Owner() == XrDap::Transport::RADIO);
   std::printf("  ForwardedDisconnectEndsTheSession: done\n");
 }
@@ -339,7 +341,7 @@ void UsbRebindLeavesAnotherOwnersSwdAlone()
   // reset, with USB owning it or nobody it is (opening and closing USB once on the CH32
   // used to make every DP read of the radio session answer ACK 7).
   Probe p;
-  const uint8_t connect[2] = {XrDap::Dap::kConnect, 0x01};
+  const uint8_t connect[2] = {Byte(DapCmd::CONNECT), 0x01};
   uint8_t resp[8] = {};
   uint16_t out = 0U;
   p.exec.Execute(XrDap::Transport::RADIO, connect, sizeof(connect), resp, sizeof(resp),

@@ -7,7 +7,7 @@
 #include "xrdap/probe/chip_uid.hpp"
 #include "xrdap/probe/family.hpp"
 #include "xrdap/probe/probe_identity.hpp"
-#include "xrdap/protocol/dap_ids.hpp"
+#include "xrdap/protocol/dap_cmd.hpp"
 #include "xrdap/serial/serial_frame.hpp"
 #include "xrdap/serial/serial_link.hpp"
 #include "xrdap/session/busy_reply.hpp"

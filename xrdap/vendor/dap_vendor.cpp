@@ -4,7 +4,7 @@
 #include <cstring>
 
 #include "timebase.hpp"
-#include "xrdap/protocol/dap_ids.hpp"
+#include "xrdap/protocol/dap_cmd.hpp"
 #include "xrdap/vendor/reply_space.hpp"
 #include "xrdap/vendor/request_length.hpp"
 #include "xrdap/vendor/sub_start.hpp"
@@ -65,8 +65,8 @@ DapVendorBase::Result DapVendorT<Policy>::OnCommand(const uint8_t* req, uint16_t
 
   // SUB_READ, both INFO commands and HOST_STATUS only consume metadata/ring data. They
   // should not repeatedly park the SWD sampler while a host drains a high-rate stream.
-  if (cmd == ToU8(Cmd::SUB_READ) || cmd == ToU8(Cmd::INFO) || cmd == Dap::kInfo ||
-      cmd == Dap::kHostStatus)
+  if (cmd == ToU8(Cmd::SUB_READ) || cmd == ToU8(Cmd::INFO) || cmd == Byte(DapCmd::INFO) ||
+      cmd == Byte(DapCmd::HOST_STATUS))
   {
     sampler_.CommandReadOnly();
   }
@@ -76,13 +76,13 @@ DapVendorBase::Result DapVendorT<Policy>::OnCommand(const uint8_t* req, uint16_t
     // 采样期间探针被订阅独占：只放行 DAP_Info、DAP_HostStatus 和厂商命令。
     // While sampling the probe belongs to the subscription: only DAP_Info, DAP_HostStatus
     // and vendor commands pass.
-    if (cmd == Dap::kInfo || cmd == Dap::kHostStatus)
+    if (cmd == Byte(DapCmd::INFO) || cmd == Byte(DapCmd::HOST_STATUS))
     {
       return Result::PASS;
     }
     if (!IsVendor(cmd))
     {
-      resp[0] = Dap::kInvalid;
+      resp[0] = Byte(DapCmd::INVALID);
       out = 1U;
       return Result::REFUSED;
     }
@@ -96,12 +96,12 @@ DapVendorBase::Result DapVendorT<Policy>::OnCommand(const uint8_t* req, uint16_t
 
   // 跟踪 DAP_Connect / DAP_Disconnect：扩展命令要求先连接到 SWD 目标。
   // Track DAP_Connect / DAP_Disconnect: extension commands need an SWD target connected.
-  if (cmd == Dap::kConnect)
+  if (cmd == Byte(DapCmd::CONNECT))
   {
     const uint8_t port = (len >= 2U) ? req[1] : 0U;
     connected_session_ = (port == 0U || port == 1U) ? session_.Session() : 0U;
   }
-  else if (cmd == Dap::kDisconnect)
+  else if (cmd == Byte(DapCmd::DISCONNECT))
   {
     connected_session_ = 0U;
   }

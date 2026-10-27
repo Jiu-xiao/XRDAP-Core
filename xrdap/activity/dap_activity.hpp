@@ -13,7 +13,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "xrdap/protocol/dap_ids.hpp"
+#include "xrdap/protocol/dap_cmd.hpp"
 
 namespace XrDap
 {
@@ -26,6 +26,10 @@ namespace XrDap
 class DapActivity
 {
  public:
+  /// DAP_HostStatus 的类型：已连接灯 / DAP_HostStatus type: the connected light.
+  static constexpr uint8_t kHostStatusConnected = 0x00U;
+  /// DAP_HostStatus 的类型：运行中灯 / DAP_HostStatus type: the running light.
+  static constexpr uint8_t kHostStatusRunning = 0x01U;
   /// 多久收不到命令就认为上位机已离开 / How long without commands before the host is
   /// taken as gone.
   static constexpr uint32_t kHostQuietMs = 5000U;
@@ -59,21 +63,21 @@ class DapActivity
     {
       return;
     }
-    if (req[0] == Dap::kHostStatus && len >= 3U)
+    if (req[0] == Byte(DapCmd::HOST_STATUS) && len >= 3U)
     {
       // DAP_HostStatus：类型 0 是“已连接”灯，1 是“运行中”灯，其他类型不是这两个灯；
       // 状态 1 亮、0 灭 / DAP_HostStatus: type 0 is the "connected" light, 1 the
       // "running" light, other types are neither; status 1 on, 0 off.
-      if (req[1] == Dap::kHostStatusConnected)
+      if (req[1] == kHostStatusConnected)
       {
         connected_.store(req[2] != 0U ? 1U : 0U, std::memory_order_relaxed);
       }
-      else if (req[1] == Dap::kHostStatusRunning)
+      else if (req[1] == kHostStatusRunning)
       {
         running_.store(req[2] != 0U ? 1U : 0U, std::memory_order_relaxed);
       }
     }
-    else if (req[0] == Dap::kDisconnect)
+    else if (req[0] == Byte(DapCmd::DISCONNECT))
     {
       connected_.store(0U, std::memory_order_relaxed);
       running_.store(0U, std::memory_order_relaxed);
