@@ -4,7 +4,6 @@
 #include "daplink_v2.hpp"
 #include "xrdap/activity/dap_activity.hpp"
 #include "xrdap/light/status_light.hpp"
-#include "xrdap/probe/chip_uid.hpp"
 #include "xrdap/probe/family.hpp"
 #include "xrdap/probe/probe_identity.hpp"
 #include "xrdap/protocol/dap_cmd.hpp"

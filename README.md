@@ -23,7 +23,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 | `serial/` | `Framer`（串口帧：帧头和 CRC 用 libxr Topic 的打包格式，这里只做 payload 和流式重同步）、`SerialLink`（串口收发线程） |
 | `activity/` | `DapActivity`：DAP 活动和 DAP_HostStatus 报告的上位机状态 |
 | `light/` | `StatusLight`：由连接、设置和 DAP 活动算出每一刻的灯色和亮度 |
-| `probe/` | `SetProbeInfo`、`FormatSerial`（DAP_Info 字符串和序列号规则）、`family.hpp`（VID:PID 和各板的 bcdDevice）、`chip_uid.hpp`（STM32F1/CH32V3 的芯片唯一标识） |
+| `probe/` | `SetProbeInfo`、`FormatSerial`（DAP_Info 字符串和序列号规则）、`family.hpp`（VID:PID 和各板的 bcdDevice） |
 | `protocol/` | `dap_cmd.hpp`：取 libxr 的 CMSIS-DAP 命令号和状态值的别名，不再重复定义 |
 | `swd/` | `F1Gpio`：STM32F1 和 CH32V3 共用的寄存器级 SWD 引脚 |
 
@@ -184,12 +184,12 @@ link.Start();  // 用 LibXR::Thread 建收发线程
 ### 身份和家族常量
 
 ```cpp
-#include "xrdap/probe/chip_uid.hpp"
 #include "xrdap/probe/family.hpp"
 #include "xrdap/probe/probe_identity.hpp"
 
-static char serial[XrDap::SerialBufferSize(XrDap::kF1ChipUidBytes)];
-XrDap::FormatSerial(XrDap::F1ChipUid(), XrDap::kF1ChipUidBytes, serial);
+// uid、uid_bytes：芯片唯一标识，由板级代码读取
+static char serial[XrDap::SerialBufferSize(uid_bytes)];
+XrDap::FormatSerial(uid, uid_bytes, serial);
 XrDap::SetProbeInfo(dap, {"XR-DAP-F103", "STLINK-V2", serial, "0.6.0"});
 // USB 设备描述符：XrDap::Family::kUsbVid、kUsbPid、kBcdF103
 ```

@@ -23,7 +23,7 @@ Headers are included as `xrdap/<module>/<file>.hpp`:
 | `serial/` | `Framer` (serial frames: the header and CRCs are libxr Topic's packing format, only the payload and the streaming resync live here), `SerialLink` (the serial worker thread) |
 | `activity/` | `DapActivity`: DAP activity and the host state reported by DAP_HostStatus |
 | `light/` | `StatusLight`: computes the colour and level of the light at each moment from the link, the settings and DAP activity |
-| `probe/` | `SetProbeInfo`, `FormatSerial` (DAP_Info strings and the serial rule), `family.hpp` (VID:PID and each board's bcdDevice), `chip_uid.hpp` (the STM32F1/CH32V3 unique id) |
+| `probe/` | `SetProbeInfo`, `FormatSerial` (DAP_Info strings and the serial rule), `family.hpp` (VID:PID and each board's bcdDevice) |
 | `protocol/` | `dap_cmd.hpp`: aliases for libxr's CMSIS-DAP command ids and status values, defined nowhere else |
 | `swd/` | `F1Gpio`: the register-level SWD pin shared by the STM32F1 and the CH32V3 |
 
@@ -184,12 +184,12 @@ When the thread that runs DAP must be pinned to one core, supply a starter with 
 ### Identity and family constants
 
 ```cpp
-#include "xrdap/probe/chip_uid.hpp"
 #include "xrdap/probe/family.hpp"
 #include "xrdap/probe/probe_identity.hpp"
 
-static char serial[XrDap::SerialBufferSize(XrDap::kF1ChipUidBytes)];
-XrDap::FormatSerial(XrDap::F1ChipUid(), XrDap::kF1ChipUidBytes, serial);
+// uid / uid_bytes: the chip unique id, read by the board support code
+static char serial[XrDap::SerialBufferSize(uid_bytes)];
+XrDap::FormatSerial(uid, uid_bytes, serial);
 XrDap::SetProbeInfo(dap, {"XR-DAP-F103", "STLINK-V2", serial, "0.6.0"});
 // USB device descriptor: XrDap::Family::kUsbVid, kUsbPid, kBcdF103
 ```
