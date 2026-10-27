@@ -2,7 +2,8 @@
 #pragma once
 
 // 探针端周期采样（docs/protocol.md 3.5）。节拍定时器（TickTimer，平台实现）是唯一的
-// 时钟：它的中断调用 OnTickIsr()，把节拍计数加 1，计数到达下一个要采的节拍时唤醒采样。
+// 时钟：它的中断调用
+// OnTickIsr()，把节拍计数加上实际跨过的周期数，计数到达下一个要采的节拍时唤醒采样。
 // 采样醒来后按 TickAccount 决定采哪一拍、跳过了几拍；时基只用来给帧打时间戳。两种运行
 // 方式，逻辑相同：
 //   任务：平台建一个任务运行
@@ -16,9 +17,9 @@
 //
 // Probe-side periodic sampling (docs/protocol.md 3.5). The tick timer (TickTimer,
 // implemented by the platform) is the only clock: its interrupt calls OnTickIsr(), which
-// adds 1 to the tick count and wakes sampling when the count reaches the next tick to
-// sample. On waking, TickAccount decides which tick to sample and how many were skipped;
-// the time base only stamps frames. Two ways to run it, with the same logic:
+// adds elapsed_ticks to the tick count and wakes sampling when the count reaches the next
+// tick to sample. On waking, TickAccount decides which tick to sample and how many were
+// skipped; the time base only stamps frames. Two ways to run it, with the same logic:
 //   Task: the platform creates a task that runs RunTask(); it blocks on a semaphore with
 //     no timeout, and a stop wakes it through the semaphore too. The task should have
 //     the highest priority on the core that drives SWD. It does not starve command
@@ -40,6 +41,7 @@
 #include "xrdap/vendor/command_yield.hpp"
 #include "xrdap/vendor/frame_ring.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
+#include "xrdap/vendor/sampler_timing.hpp"
 #include "xrdap/vendor/tick_account.hpp"
 #include "xrdap/vendor/vendor_protocol.hpp"
 
@@ -96,6 +98,35 @@ class Sampler
   /// @note 任何上下文 / Any context.
   bool Active() const { return active_.load(std::memory_order_acquire) != 0U; }
 
+  struct Statistics
+  {
+    uint32_t ticks;  // Timer ticks since start, excluding the immediate tick 0.
+    uint32_t frames;
+    uint32_t skipped;
+    uint32_t max_frame_us;
+    uint32_t max_wake_us;
+    uint32_t merged_callbacks;
+    uint32_t merged_ticks;
+    uint32_t swd_failures;
+    uint32_t swd_resyncs;
+  };
+
+  /// Diagnostic snapshot of the current/last run; counters reset at timer start.
+  /// Independent counters may advance while this snapshot is read.
+  Statistics Stats() const
+  {
+    const auto memory = mem_.Stats();
+    return {ticks_.load(),
+            frames_.load(),
+            skipped_.load(),
+            max_frame_us_.load(),
+            max_wake_us_.load(),
+            merged_callbacks_.load(),
+            merged_ticks_.load(),
+            memory.failed_transactions - swd_failures_start_.load(),
+            memory.resyncs - swd_resyncs_start_.load()};
+  }
+
   /// @brief 清空帧缓冲和计数 / Clear the frame buffer and the counters.
   /// @note DAP 执行上下文 / DAP execution context.
   void ClearFrames() { ring_.Reset(); }
@@ -107,17 +138,36 @@ class Sampler
     return ring_.Take(dst, limit);
   }
 
-  /// @brief 节拍定时器中断调用：计数加 1；计数到达下一个要采的节拍时记下这一刻，任务
-  ///        方式下唤醒采样任务 / Called by the tick timer interrupt: adds 1 to the count;
-  ///        when the count reaches the next tick to sample, notes the time and, in task
-  ///        mode, wakes the sampling task.
+  /// @brief 节拍定时器中断调用：计数加
+  /// elapsed_ticks；到达或越过要采的节拍时记下这一刻，任务
+  ///        方式下唤醒采样任务 / Called by the tick timer interrupt: adds elapsed_ticks
+  ///        to the count; when the count reaches or passes the next tick, notes the time
+  ///        and, in task mode, wakes the sampling task.
+  /// @param late_us Delay since the latest elapsed tick, included in wake latency.
   /// @note 中断上下文；平台的时基须能在中断里读 / Interrupt context; the platform's time
   ///       base must be readable from an interrupt.
-  void OnTickIsr()
+  void OnTickIsr(uint32_t elapsed_ticks = 1U, uint32_t late_us = 0U)
   {
-    const uint32_t count = ticks_.fetch_add(1U, std::memory_order_relaxed) + 1U;
-    if (TickWakes(count, wake_at_.load(std::memory_order_relaxed)))
+    if (elapsed_ticks == 0U)
     {
+      return;
+    }
+    if (elapsed_ticks > 1U)
+    {
+      merged_callbacks_.fetch_add(1U, std::memory_order_relaxed);
+      merged_ticks_.fetch_add(elapsed_ticks - 1U, std::memory_order_relaxed);
+    }
+    const uint32_t count =
+        ticks_.fetch_add(elapsed_ticks, std::memory_order_relaxed) + elapsed_ticks;
+    uint32_t wake_at = wake_at_.load(std::memory_order_relaxed);
+    if (TickWakes(count, wake_at) &&
+        wake_at_.compare_exchange_strong(wake_at, count + 0x40000000U,
+                                         std::memory_order_relaxed))
+    {
+      // Consume this wake deadline. While a long frame runs, repeated interrupts
+      // must not accumulate semaphore posts and starve command handling.
+      wake_lag_ticks_.store(count - wake_at, std::memory_order_relaxed);
+      wake_late_us_.store(late_us, std::memory_order_relaxed);
       woke_us_.store(static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds()),
                      std::memory_order_relaxed);
       woke_tick_.store(count, std::memory_order_release);
@@ -134,6 +184,9 @@ class Sampler
   /// @note 命令的任务里，排队等执行轮次之前 / The command's task, before it queues for an
   ///       execution turn.
   void CommandBegin() { yield_.Begin(); }
+
+  /// SUB_READ and status queries do not touch SWD; let sampling continue while they run.
+  void CommandReadOnly() { yield_.ReadOnly(); }
 
   /// @brief 一条命令执行完；最后一条做完时唤醒让路的采样 / A command has run; the last
   ///        one wakes sampling that yielded.
@@ -183,7 +236,19 @@ class Sampler
   /// (low 32 bits of µs) of the interrupt's wake; that tick's busy time counts from here.
   std::atomic<uint32_t> woke_tick_{0U};
   std::atomic<uint32_t> woke_us_{0U};
+  /// Whole periods missed since the requested wake deadline; kept separate from
+  /// woke_us_ so inter-frame fairness still uses the latest elapsed tick.
+  std::atomic<uint32_t> wake_lag_ticks_{0U};
+  std::atomic<uint32_t> wake_late_us_{0U};
   std::atomic<uint32_t> task_mode_{0U};
+  std::atomic<uint32_t> frames_{0U};
+  std::atomic<uint32_t> skipped_{0U};
+  std::atomic<uint32_t> max_frame_us_{0U};
+  std::atomic<uint32_t> max_wake_us_{0U};
+  std::atomic<uint32_t> merged_callbacks_{0U};
+  std::atomic<uint32_t> merged_ticks_{0U};
+  std::atomic<uint32_t> swd_failures_start_{0U};
+  std::atomic<uint32_t> swd_resyncs_start_{0U};
   LibXR::Semaphore wake_{0};
 
   // 以下在 MemAp::Lock 里读写 / The members below are read and written under
@@ -199,6 +264,8 @@ class Sampler
   // context.
   uint32_t run_gen_ = 0U;
   bool timer_on_ = false;
+  bool resync_pending_ = false;
+  uint64_t resync_after_us_ = 0U;
   TickAccount account_;
 
   // 命令的任务调用 Begin/End，采样的执行上下文做决定；成员都是原子量 / Command tasks

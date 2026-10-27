@@ -38,6 +38,7 @@ class CommandYield
   void Begin()
   {
     waiting_.fetch_add(1U, std::memory_order_seq_cst);
+    read_only_turn_ = false;
     if (framing_.load(std::memory_order_seq_cst) != 0U)
     {
       used_.store(1U, std::memory_order_seq_cst);
@@ -50,6 +51,17 @@ class CommandYield
   /// @note 命令的任务里，不能在中断里 / The command's task, not from an interrupt.
   bool End()
   {
+    if (read_only_turn_)
+    {
+      read_only_turn_ = false;
+      if (parked_.load(std::memory_order_seq_cst) != 0U &&
+          waiting_.load(std::memory_order_seq_cst) == 0U)
+      {
+        used_.store(0U, std::memory_order_seq_cst);
+        return true;
+      }
+      return false;
+    }
     if (waiting_.fetch_sub(1U, std::memory_order_seq_cst) != 1U)
     {
       return false;
@@ -60,6 +72,19 @@ class CommandYield
     // Racing with sampling costs at most one more frame, still within the one frame.
     used_.store(0U, std::memory_order_seq_cst);
     return parked_.load(std::memory_order_seq_cst) != 0U;
+  }
+
+  /// Mark the current command as a read-only frame fetch or status query. It may
+  /// run concurrently with the producer, so it is removed from the blocking count
+  /// after Begin() and End() will not decrement it a second time.
+  void ReadOnly()
+  {
+    if (read_only_turn_)
+    {
+      return;
+    }
+    read_only_turn_ = true;
+    (void)waiting_.fetch_sub(1U, std::memory_order_seq_cst);
   }
 
   /// @brief 停下后醒来：命令都做完了就结束停下 / A wake while parked: ends the park
@@ -142,6 +167,7 @@ class CommandYield
   std::atomic<uint32_t> used_{0U};
   /// 正在读一帧 / A frame is being read.
   std::atomic<uint32_t> framing_{0U};
+  static inline thread_local bool read_only_turn_ = false;
 };
 
 /// 一次醒来的决定 / Decision on one wake.

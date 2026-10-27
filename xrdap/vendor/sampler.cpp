@@ -25,6 +25,7 @@ uint8_t Sampler::Start(const SubItemList& items, uint32_t period_us, bool stop_o
 {
   {
     MemAp::Lock lock(mem_);
+    mem_.ResetCache();
     count_ = 0U;
     items.ForEach([&](const SubItem& sub) { items_[count_++] = sub; });
     period_us_ = period_us;
@@ -43,7 +44,9 @@ uint8_t Sampler::Start(const SubItemList& items, uint32_t period_us, bool stop_o
       }
       ApCsw& dst = csw_[csw_count_++];
       dst.ap = ap;
-      dst.valid = mem_.ReadCsw(ap, dst.base_csw);
+      const auto* state = mem_.EnsureAp(ap);
+      dst.valid = state != nullptr;
+      dst.base_csw = dst.valid ? state->base_csw : 0U;
       ok = ok && dst.valid;
     }
     if (!ok)
@@ -104,8 +107,8 @@ void Sampler::RunTask(TickTimer& timer)
 // then set the count of the next wake.
 bool Sampler::Service(TickTimer& timer)
 {
-  uint32_t count = ticks_.load(std::memory_order_relaxed);
   MemAp::Lock lock(mem_);
+  uint32_t count = ticks_.load(std::memory_order_relaxed);
   if (active_.load(std::memory_order_acquire) == 0U)
   {
     if (timer_on_)
@@ -125,10 +128,21 @@ bool Sampler::Service(TickTimer& timer)
       timer.Stop();
     }
     ticks_.store(0U, std::memory_order_relaxed);
+    frames_.store(0U);
+    skipped_.store(0U);
+    max_frame_us_.store(0U);
+    max_wake_us_.store(0U);
+    merged_callbacks_.store(0U);
+    merged_ticks_.store(0U);
+    const auto memory = mem_.Stats();
+    swd_failures_start_.store(memory.failed_transactions);
+    swd_resyncs_start_.store(memory.resyncs);
     woke_tick_.store(UINT32_MAX, std::memory_order_relaxed);
     count = 0U;
     account_.Begin();
     yield_.Restart();
+    resync_pending_ = false;
+    resync_after_us_ = 0U;
     run_gen_ = gen;
     timer.Start(period_us_);
     timer_on_ = true;
@@ -147,7 +161,24 @@ bool Sampler::Service(TickTimer& timer)
   if (step.sample)
   {
     const auto t0 = static_cast<uint32_t>(NowUs());
+    const uint32_t woke_tick = woke_tick_.load(std::memory_order_acquire);
+    if (woke_tick != UINT32_MAX && TickDue(step.tick, woke_tick))
+    {
+      const uint32_t latency =
+          WakeLatencyUs(t0, woke_us_.load(std::memory_order_relaxed),
+                        wake_late_us_.load(std::memory_order_relaxed),
+                        wake_lag_ticks_.load(std::memory_order_relaxed), period_us_);
+      if (latency > max_wake_us_.load(std::memory_order_relaxed))
+      {
+        max_wake_us_.store(latency, std::memory_order_relaxed);
+      }
+    }
     SampleTick(step);
+    const uint32_t frame_us = static_cast<uint32_t>(NowUs()) - t0;
+    if (frame_us > max_frame_us_.load(std::memory_order_relaxed))
+    {
+      max_frame_us_.store(frame_us, std::memory_order_relaxed);
+    }
     // 占用从节拍中断唤醒的那一刻算起，包括唤醒、切换任务和取链路锁的时间：只量读帧的
     // 时间会少算，周期接近一帧时留给命令的间隙就只是纸面上的。没有这一拍的中断时刻时
     // （开始时的节拍 0、不等唤醒接着做的一拍）从读帧开始算。单循环里中断到这里之间是
@@ -159,17 +190,11 @@ bool Sampler::Service(TickTimer& timer)
     // without waiting for a wake) it counts from the start of the frame read. In a single
     // loop the time from the interrupt to here is the main loop finishing its current
     // command, not a sampling cost, so the interrupt time is used in task mode only.
-    uint32_t start = t0;
-    if (task_mode_.load(std::memory_order_relaxed) != 0U &&
-        woke_tick_.load(std::memory_order_acquire) == step.tick)
-    {
-      const uint32_t woke = woke_us_.load(std::memory_order_relaxed);
-      if (t0 - woke <= period_us_)
-      {
-        start = woke;
-      }
-    }
-    const uint32_t busy = static_cast<uint32_t>(NowUs()) - start;
+    const uint32_t busy =
+        FrameBusyUs(static_cast<uint32_t>(NowUs()), t0,
+                    task_mode_.load(std::memory_order_relaxed) != 0U &&
+                        woke_tick_.load(std::memory_order_acquire) == step.tick,
+                    woke_us_.load(std::memory_order_relaxed), period_us_);
     account_.OnDone(ticks_.load(std::memory_order_relaxed), busy, period_us_);
     yield_.FrameEnd();
 
@@ -210,6 +235,7 @@ void Sampler::SampleTick(const TickAccount::Step& step)
   if (step.skipped != 0U)
   {
     ring_.AddSkipped(step.skipped);
+    skipped_.fetch_add(step.skipped, std::memory_order_relaxed);
   }
   if (due == 0U)
   {
@@ -222,8 +248,26 @@ void Sampler::SampleTick(const TickAccount::Step& step)
   std::memset(frame + 10, 0, bitmap + values_size);
   uint8_t* marks = frame + 10;
   uint8_t* values = marks + bitmap;
+  // Preserve the failed frame. Recover before a later frame, at most once per second
+  // while the target is unavailable; repeated reads can have peripheral side effects.
+  const uint64_t now = NowUs();
+  if (resync_pending_ && now >= resync_after_us_)
+  {
+    resync_after_us_ = now + 1000000U;
+    if (mem_.Resync())
+    {
+      resync_pending_ = false;
+      for (uint8_t i = 0; i < csw_count_; ++i)
+      {
+        const auto* state = mem_.EnsureAp(csw_[i].ap);
+        csw_[i].valid = state != nullptr;
+        csw_[i].base_csw = csw_[i].valid ? state->base_csw : 0U;
+        resync_pending_ = resync_pending_ || !csw_[i].valid;
+      }
+    }
+  }
   MemAp::ApState ap{};
-  for (uint16_t i = 0; i < due; ++i)
+  for (uint16_t i = 0; i < due;)
   {
     const Item& it = items_[order[i]].item;
     if (ap.ap != it.ap)
@@ -234,13 +278,53 @@ void Sampler::SampleTick(const TickAccount::Step& step)
       ap.valid = (csw != nullptr) && csw->valid;
       ap.written = false;
     }
-    if (mem_.ReadItem(ap, it, values) != kItemOk)
+    uint16_t run = 1U;
+    const uint32_t addr = it.base + static_cast<uint32_t>(it.final_off);
+    if (it.n == 0U && it.size == 4U && (addr & 3U) == 0U && !resync_pending_)
+    {
+      const uint16_t window = static_cast<uint16_t>((1024U - (addr & 1023U)) / 4U);
+      while (i + run < due && run < window)
+      {
+        const Item& next = items_[order[i + run]].item;
+        if (next.ap != it.ap || next.n != 0U || next.size != 4U ||
+            next.base + static_cast<uint32_t>(next.final_off) != addr + run * 4U)
+        {
+          break;
+        }
+        ++run;
+      }
+    }
+    if (run > 1U)
+    {
+      const uint16_t confirmed = mem_.ReadWords(ap, addr, run, values);
+      for (uint16_t j = confirmed; j < run; ++j)
+      {
+        MarkFailed(marks, static_cast<uint16_t>(i + j));
+      }
+      if (confirmed != run)
+      {
+        resync_pending_ = true;
+        ap.written = false;
+      }
+      values += run * 4U;
+      i += run;
+      continue;
+    }
+    const uint8_t status = mem_.ReadItem(ap, it, values);
+    if (status != kItemOk)
     {
       MarkFailed(marks, i);
+      if (status >= kItemSwdChain && status <= kItemSwdLast)
+      {
+        resync_pending_ = true;
+        ap.written = false;
+      }
     }
     values += it.size;
+    ++i;
   }
   ring_.Push(frame, static_cast<uint16_t>(10U + bitmap + values_size), stop_on_full_);
+  frames_.fetch_add(1U, std::memory_order_relaxed);
 }
 
 }  // namespace XrDap::Vendor

@@ -11,6 +11,7 @@
 // invalidates the SWD SELECT cache, so the host must treat SELECT, CSW and TAR as
 // unknown.
 
+#include <atomic>
 #include <cstdint>
 
 #include "debug/swd.hpp"
@@ -66,20 +67,41 @@ class MemAp
   ///        object.
   explicit MemAp(LibXR::Debug::Swd& swd) : swd_(swd) {}
 
+  struct Statistics
+  {
+    uint32_t failed_transactions;
+    uint32_t last_ack;
+    uint32_t last_error;
+    uint32_t resyncs;
+  };
+  /// Diagnostic counters, readable without taking the SWD link.
+  Statistics Stats() const
+  {
+    return {failed_transactions_.load(), last_ack_.load(), last_error_.load(),
+            resyncs_.load()};
+  }
+
   // 以下方法都要求调用方持有 Lock / Every method below requires the caller to hold a
   // Lock.
 
-  /// 清空命令用的 AP 缓存，每条命令开始时调用 / Clear the per-command AP cache; call at
-  /// the start of every command.
-  void ResetCache();
-  /// @brief 本命令里第一次用到某个 AP 时读一次它的 CSW / Read an AP's CSW the first time
-  ///        a command uses it.
+  /// @brief 开始一条命令时清除 AP 写入状态 / Clear AP write state at command start.
+  /// @param reuse_csw 采样独占 SWD 时保留已读成功的 CSW 基值；发生过传输失败时仍清空。
+  ///        Keep successful CSW base values while sampling owns SWD exclusively;
+  ///        any intervening transfer failure still clears them.
+  /// @note 每次都清除 written，命令须重新设置硬件访问宽度和自增方式。目标数据不缓存。
+  ///       Always clears written: access width and increment mode must be programmed
+  ///       again. Target data is never cached.
+  void ResetCache(bool reuse_csw = false);
+  /// @brief 取得 AP 状态；没有有效 CSW 基值时读取硬件 / Get an AP's state, reading
+  ///        hardware when no valid CSW base is cached. Reuse follows ResetCache.
   /// @return 读不到 CSW 时返回 nullptr；缓存满时复用最后一格 / nullptr when the CSW
   ///         cannot be read; the last slot is reused when the cache is full.
   ApState* EnsureAp(uint8_t ap);
   /// 读一个 AP 的 CSW，失败时清粘滞错误再试一次 / Read an AP's CSW; on failure clear the
   /// sticky errors and retry once.
   bool ReadCsw(uint8_t ap, uint32_t& csw);
+  /// Restore SWD framing and clear DP errors; never resets or halts the target CPU.
+  bool Resync();
   /// 读一个条目，返回条目状态 / Read one item; returns the item status.
   uint8_t Read(const Item& it, uint8_t* out);
   /// 写一个条目，返回条目状态 / Write one item; returns the item status.
@@ -88,10 +110,19 @@ class MemAp
   /// state (used by sampling); returns the item status.
   uint8_t ReadItem(ApState& ap, const Item& it, uint8_t* out);
 
+  /// Read consecutive aligned u32 words within one 1 KiB TAR window. Returns
+  /// the number of confirmed values; the remaining values must be marked failed.
+  /// No failed target read is replayed. Caller holds Lock, count is nonzero.
+  uint16_t ReadWords(ApState& ap, uint32_t addr, uint16_t count, uint8_t* out);
+
  private:
   using Ack = LibXR::Debug::SwdProtocol::Ack;
 
-  bool SetSize(ApState& st, uint8_t size);
+  // Bind ack by reference: the transaction argument must finish updating it before
+  // its value is inspected, regardless of the compiler's argument evaluation order.
+  bool TxnOk(LibXR::ErrorCode ec, const Ack& ack);
+
+  bool SetSize(ApState& st, uint8_t size, bool increment = false);
   bool ReadWord(uint32_t addr, uint32_t& val);
   bool WriteWord(uint32_t addr, uint32_t val);
   bool CheckCtrlStat();
@@ -103,6 +134,11 @@ class MemAp
   LibXR::Mutex mutex_;
   ApState ap_[kMaxAps];
   uint8_t ap_count_ = 0U;
+  uint32_t cache_failure_count_ = 0U;
+  std::atomic<uint32_t> failed_transactions_{0U};
+  std::atomic<uint32_t> last_ack_{0U};
+  std::atomic<uint32_t> last_error_{0U};
+  std::atomic<uint32_t> resyncs_{0U};
 };
 
 }  // namespace XrDap::Vendor

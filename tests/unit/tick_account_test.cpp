@@ -11,6 +11,18 @@
 #include "check.hpp"
 
 using XrDap::Vendor::TickAccount;
+using XrDap::Vendor::TickWakes;
+
+TEST(WakeWhenMergedTicksPassDeadline)
+{
+  CHECK(!TickWakes(6U, 7U));
+  CHECK(TickWakes(7U, 7U));
+  CHECK(TickWakes(10U, 7U));
+  CHECK(!TickWakes(0xFFFFFFFEU, 1U));
+  CHECK(TickWakes(1U, 0xFFFFFFFEU));
+  CHECK(TickWakes(0U, 0U));
+  CHECK(!TickWakes(3U, 3U + 0x40000000U));  // Parked command.
+}
 
 namespace
 {

@@ -29,6 +29,7 @@
 // sit inside DAP_ExecuteCommands / DAP_QueueCommands, as in the CMSIS-DAP reference
 // implementation. Needs libxr 1c06b874 or later.
 
+#include <atomic>
 #include <cstdint>
 
 #include "libxr_def.hpp"
@@ -123,6 +124,18 @@ class Executor
   /// @note 任何任务，不能在中断里 / Any task, not from an interrupt.
   void EndSession(Transport t) { session_.End(t); }
 
+  struct CommandStatistics
+  {
+    uint32_t last_usb_owner_command;
+    uint32_t last_tcp_owner_command;
+    uint32_t busy_replies;
+  };
+  CommandStatistics CommandStats() const
+  {
+    return {last_usb_owner_command_.load(), last_tcp_owner_command_.load(),
+            busy_replies_.load()};
+  }
+
   /// @brief t 是主人时刷新它的租期（例如无线 ping）/ Refresh t's lease if it is the
   ///        owner (for example a radio ping).
   /// @note 任何任务，不能在中断里 / Any task, not from an interrupt.
@@ -210,10 +223,22 @@ class Executor
     const Transport t = current_;
     const uint8_t cmd = req[0];
     const auto now = static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds());
-    if (ClassifyCommand(req, len) == CommandClass::OWNER && !session_.Admit(t, now))
+    if (ClassifyCommand(req, len) == CommandClass::OWNER)
     {
-      WriteBusyReply(cmd, resp, cap, out);
-      return true;
+      if (!session_.Admit(t, now))
+      {
+        busy_replies_.fetch_add(1U);
+        WriteBusyReply(cmd, resp, cap, out);
+        return true;
+      }
+      if (t == Transport::USB)
+      {
+        last_usb_owner_command_.store(cmd);
+      }
+      else if (t == Transport::TCP)
+      {
+        last_tcp_owner_command_.store(cmd);
+      }
     }
     if (forwarder_ != nullptr && forwarder_(forwarder_ctx_, t, req, len, resp, cap, out))
     {
@@ -260,6 +285,9 @@ class Executor
   /// on a hand-over.
   LibXR::Semaphore wake_[static_cast<uint8_t>(Transport::RADIO) + 1U];
   Transport current_ = Transport::NONE;
+  std::atomic<uint32_t> last_usb_owner_command_{0xFFU};
+  std::atomic<uint32_t> last_tcp_owner_command_{0xFFU};
+  std::atomic<uint32_t> busy_replies_{0U};
 };
 
 }  // namespace XrDap

@@ -35,26 +35,74 @@ constexpr uint32_t kCtrlStatErrors = (1U << 1) | (1U << 5) | (1U << 7);
 // WDERRCLR, ORUNERRCLR.
 constexpr uint32_t kAbortClearAll = 0x1EU;
 
-// 先取返回码、再判 ack：TxnOk(swd_.Xxx(ack), ack) 这种写法里两个实参的求值顺序没有规定，
-// 不开优化时会先读到调用前的 ack（NO_ACK），于是把成功的传输判成失败。
-// Take the error code first and judge the ack after: in `TxnOk(swd_.Xxx(ack), ack)` the
-// argument evaluation order is unspecified, and without optimisation the ack is read
-// before the call (NO_ACK), which turns a good transfer into a failure.
-bool TxnOk(LibXR::ErrorCode ec, Ack ack)
-{
-  return ec == LibXR::ErrorCode::OK && ack == Ack::OK;
-}
-
 uint8_t SizeCode(uint8_t size) { return (size == 1U) ? 0U : (size == 2U) ? 1U : 2U; }
 }  // namespace
 
-void MemAp::ResetCache()
+// ack 按引用传入：实参 swd_.Xxx(ack) 和 ack 的求值顺序没有规定，传值时不开优化会先读到调用前的
+// NO_ACK（V305-2）。
+// ack is taken by reference: the evaluation order of `swd_.Xxx(ack)` and `ack` is unspecified,
+// and passed by value an unoptimised build reads the NO_ACK from before the call (V305-2).
+bool MemAp::TxnOk(LibXR::ErrorCode ec, const Ack& ack)
 {
-  for (ApState& st : ap_)
+  if (ec == LibXR::ErrorCode::OK && ack == Ack::OK)
   {
-    st = ApState{};
+    return true;
   }
-  ap_count_ = 0U;
+  last_ack_.store(static_cast<uint32_t>(ack));
+  last_error_.store(static_cast<uint32_t>(ec));
+  failed_transactions_.fetch_add(1U);
+  return false;
+}
+
+bool MemAp::Resync()
+{
+  ResetCache();
+  resyncs_.fetch_add(1U);
+  swd_.InvalidateSelectCache();
+  // Re-enter SWD as well as resetting the line. A malformed request can leave the
+  // target's debug port in the other wire protocol; a bare line reset does not
+  // switch it back. EnterSwd() never touches the target CPU run/halt state.
+  if (swd_.EnterSwd() != LibXR::ErrorCode::OK)
+  {
+    return false;
+  }
+  Ack ack = Ack::NO_ACK;
+  // Clear sticky DP errors before probing IDCODE. Use the transaction wrappers so a
+  // transient WAIT does not turn a recoverable link into a failed sample forever.
+  if (!TxnOk(swd_.WriteAbortTxn(kAbortClearAll, ack), ack))
+  {
+    return false;
+  }
+  uint32_t id = 0U;
+  if (!TxnOk(swd_.DpReadTxn(DpReadReg::IDCODE, id, ack), ack))
+  {
+    return false;
+  }
+  return true;
+}
+
+void MemAp::ResetCache(bool reuse_csw)
+{
+  const uint32_t failures = failed_transactions_.load(std::memory_order_relaxed);
+  reuse_csw = reuse_csw && failures == cache_failure_count_;
+  cache_failure_count_ = failures;
+  uint8_t kept = 0U;
+  if (reuse_csw)
+  {
+    for (uint8_t i = 0U; i < ap_count_; ++i)
+    {
+      if (ap_[i].valid)
+      {
+        ap_[kept] = ap_[i];
+        ap_[kept++].written = false;
+      }
+    }
+  }
+  for (size_t i = kept; i < kMaxAps; ++i)
+  {
+    ap_[i] = ApState{};
+  }
+  ap_count_ = kept;
 }
 
 MemAp::ApState* MemAp::EnsureAp(uint8_t ap)
@@ -128,20 +176,25 @@ bool MemAp::ReadCsw(uint8_t ap, uint32_t& csw)
 }
 
 // 写 CSW：保留原值里 Size 和 AddrInc 以外的位，关闭自增。
-bool MemAp::SetSize(ApState& st, uint8_t size)
+bool MemAp::SetSize(ApState& st, uint8_t size, bool increment)
 {
   if (!st.valid)
   {
     return false;
   }
-  const uint32_t csw = (st.base_csw & ~kCswSizeAndInc) | SizeCode(size);
+  Ack ack = Ack::NO_ACK;
+  if (!TxnOk(swd_.SetSelectCached(static_cast<uint32_t>(st.ap) << 24, ack), ack))
+  {
+    st.written = false;
+    return false;
+  }
+  const uint32_t csw =
+      (st.base_csw & ~kCswSizeAndInc) | SizeCode(size) | (increment ? 0x10U : 0U);
   if (st.written && st.written_csw == csw)
   {
     return true;
   }
-  Ack ack = Ack::NO_ACK;
-  const LibXR::ErrorCode EC = swd_.ApWriteTxn(kApCsw, csw, ack);
-  if (!TxnOk(EC, ack))
+  if (!TxnOk(swd_.ApWriteTxn(kApCsw, csw, ack), ack))
   {
     st.written = false;
     ClearSticky();
@@ -150,6 +203,43 @@ bool MemAp::SetSize(ApState& st, uint8_t size)
   st.written = true;
   st.written_csw = csw;
   return true;
+}
+
+uint16_t MemAp::ReadWords(ApState& ap, uint32_t addr, uint16_t count, uint8_t* out)
+{
+  if (count == 0U || (addr & 3U) != 0U || count > (1024U - (addr & 1023U)) / 4U ||
+      !SetSize(ap, 4U, true))
+  {
+    return 0U;
+  }
+  Ack ack = Ack::NO_ACK;
+  uint32_t value = 0U;
+  uint16_t confirmed = 0U;
+  if (TxnOk(swd_.ApWriteTxn(kApTar, addr, ack), ack) &&
+      TxnOk(swd_.ApReadPostedTxn(kApDrw, value, ack), ack))
+  {
+    // The first AP read launches word 0; each later AP read returns the previous
+    // word and launches the next one. Only RDBUFF drains the final word.
+    for (uint16_t i = 1U; i < count; ++i)
+    {
+      if (!TxnOk(swd_.ApReadPostedTxn(kApDrw, value, ack), ack))
+      {
+        ap.written = false;
+        ClearSticky();
+        return confirmed;
+      }
+      std::memcpy(out + confirmed * 4U, &value, 4U);
+      ++confirmed;
+    }
+    if (TxnOk(swd_.DpReadRdbuffTxn(value, ack), ack))
+    {
+      std::memcpy(out + confirmed * 4U, &value, 4U);
+      return static_cast<uint16_t>(confirmed + 1U);
+    }
+  }
+  ap.written = false;
+  ClearSticky();
+  return confirmed;
 }
 
 bool MemAp::ReadWord(uint32_t addr, uint32_t& val)
