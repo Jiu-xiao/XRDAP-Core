@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// 串口链路的帧（docs/protocol.md 第 1 节，与 XRDAP-Host 的串口传输一致）：
+// 串口链路的帧（docs/protocol.md 第 1 节，与 XRDAP-Host 的串口传输一致）。帧头和尾是 libxr
+// Topic 的打包格式（Topic::PackedDataHeader、PACKET_PREFIX、PACKET_VERSION，CRC 用
+// LibXR::CRC8、CRC32），这里只有 payload 和流式重同步：
 //   0x5A + data_len(3) + topic_crc32(4) + timestamp_us(6) + version 1 + header_crc8 +
 //   payload + crc8，payload = n(2) + DAP 包(n)。
 // 请求的 topic 是 dap_req，响应的是 dap_resp。帧头 CRC8 或尾 CRC8 错、版本或 topic 不对、
@@ -9,7 +11,9 @@
 // 不碰串口，也不执行命令。
 //
 // Frames of the serial link (docs/protocol.md section 1, matching the serial transport
-// of XRDAP-Host):
+// of XRDAP-Host). The header and trailer are libxr's Topic packing format
+// (Topic::PackedDataHeader, PACKET_PREFIX, PACKET_VERSION, CRCs from LibXR::CRC8 and
+// CRC32); only the payload and the streaming resync live here:
 //   0x5A + data_len(3) + topic_crc32(4) + timestamp_us(6) + version 1 + header_crc8 +
 //   payload + crc8, with payload = n(2) + DAP packet(n).
 // Requests use topic dap_req, responses dap_resp. A wrong header or trailing CRC8, a
@@ -21,42 +25,33 @@
 #include <cstdint>
 #include <cstring>
 
+#include "crc.hpp"
+#include "topic.hpp"
+
 namespace XrDap::Serial
 {
 
 /// 帧前缀 / Frame prefix.
-inline constexpr uint8_t kPrefix = 0x5AU;
+inline constexpr uint8_t kPrefix = LibXR::Topic::PACKET_PREFIX;
 /// 帧版本 / Frame version.
-inline constexpr uint8_t kVersion = 0x01U;
+inline constexpr uint8_t kVersion = LibXR::Topic::PACKET_VERSION;
 /// 帧头字节数 / Header bytes.
-inline constexpr size_t kHeaderSize = 16U;
+inline constexpr size_t kHeaderSize = sizeof(LibXR::Topic::PackedDataHeader);
 /// USB 全速 bulk 端点的包长 / Packet size of a USB full-speed bulk endpoint.
 inline constexpr size_t kUsbPacket = 64U;
 /// 补的字节 / The pad byte.
 inline constexpr uint8_t kPad = 0x00U;
-/// 请求 topic "dap_req" 的 CRC32 / CRC32 of the request topic "dap_req".
-inline constexpr uint32_t kRequestTopic = 0xDC8309C5U;
-/// 响应 topic "dap_resp" 的 CRC32 / CRC32 of the response topic "dap_resp".
-inline constexpr uint32_t kResponseTopic = 0x89E1A688U;
+/// 请求 topic 的名字 / Name of the request topic.
+inline constexpr char kRequestTopicName[] = "dap_req";
+/// 响应 topic 的名字 / Name of the response topic.
+inline constexpr char kResponseTopicName[] = "dap_resp";
 
-/// @brief CRC8：反射多项式 0x8C，初值 0xFF / CRC8: reflected polynomial 0x8C, initial
-///        value 0xFF.
-/// @note 纯函数，任何上下文 / Pure function, any context.
-uint8_t Crc8(const uint8_t* data, size_t len);
-
-/// @brief CRC32：反射多项式 0xEDB88320，初值 0xFFFFFFFF，结果不取反 / CRC32: reflected
-///        polynomial 0xEDB88320, initial value 0xFFFFFFFF, no final inversion.
-/// @note 纯函数，任何上下文 / Pure function, any context.
-uint32_t Crc32(const uint8_t* data, size_t len);
-
-/// 帧解析的统计 / Frame parsing statistics.
-struct FrameStats
+/// topic 名字的 CRC32 键，与 libxr Topic 的算法相同 / The CRC32 key of a topic name, the
+/// same as libxr's Topic computes.
+inline uint32_t TopicKey(const char* name)
 {
-  uint32_t frames = 0U;         ///< 交出的请求数 / Requests handed out.
-  uint32_t crc_errors = 0U;     ///< 头或尾 CRC8 错 / Header or trailing CRC8 errors.
-  uint32_t header_errors = 0U;  ///< 版本、topic、长度不对 / Bad version, topic, length.
-  uint32_t dropped = 0U;        ///< 丢掉的字节和帧 / Dropped bytes and frames.
-};
+  return LibXR::CRC32::Calculate(name, std::strlen(name));
+}
 
 /// @brief 请求帧的拼接和响应帧的打包 / Request frame assembly and response packing.
 /// @tparam MaxPacket DAP 包长上限 / Maximum DAP packet size.
@@ -84,16 +79,14 @@ class Framer
     {
       if (fill_ == 0U)
       {
-        // 还没有候选帧：在输入里找前缀，跳过的字节算丢弃 / No candidate yet: find the
-        // prefix in the input; skipped bytes count as dropped.
+        // 还没有候选帧：在输入里找前缀，跳过前面的字节 / No candidate yet: find the
+        // prefix in the input and skip the bytes before it.
         const void* hit = std::memchr(data + index, kPrefix, len - index);
         if (hit == nullptr)
         {
-          stats_.dropped += static_cast<uint32_t>(len - index);
           return handed;
         }
         const size_t at = static_cast<size_t>(static_cast<const uint8_t*>(hit) - data);
-        stats_.dropped += static_cast<uint32_t>(at - index);
         index = at;
       }
       const size_t target = (total_ != 0U) ? total_ : kHeaderSize;
@@ -121,28 +114,23 @@ class Framer
       len = MaxPacket;
     }
     const uint32_t payload = 2U + len;
-    out[0] = kPrefix;
-    out[1] = static_cast<uint8_t>(payload);
-    out[2] = static_cast<uint8_t>(payload >> 8);
-    out[3] = static_cast<uint8_t>(payload >> 16);
-    for (int i = 0; i < 4; ++i)
-    {
-      out[4 + i] = static_cast<uint8_t>(kResponseTopic >> (8 * i));
-    }
-    for (int i = 0; i < 6; ++i)
-    {
-      out[8 + i] = static_cast<uint8_t>(timestamp_us >> (8 * i));
-    }
-    out[14] = kVersion;
-    out[15] = Crc8(out, kHeaderSize - 1U);
-    out[16] = static_cast<uint8_t>(len);
-    out[17] = static_cast<uint8_t>(len >> 8);
+    LibXR::Topic::PackedDataHeader header;
+    header.prefix = kPrefix;
+    header.SetDataLen(payload);
+    header.topic_name_crc32 = TopicKey(kResponseTopicName);
+    header.SetTimestamp(LibXR::MicrosecondTimestamp(timestamp_us));
+    header.version = kVersion;
+    header.pack_header_crc8 =
+        LibXR::CRC8::Calculate(&header, kHeaderSize - sizeof(header.pack_header_crc8));
+    std::memcpy(out, &header, kHeaderSize);
+    out[kHeaderSize] = static_cast<uint8_t>(len);
+    out[kHeaderSize + 1U] = static_cast<uint8_t>(len >> 8);
     if (len != 0U)
     {
-      std::memcpy(out + 18, dap, len);
+      std::memcpy(out + kHeaderSize + 2U, dap, len);
     }
     const size_t body = kHeaderSize + payload;
-    out[body] = Crc8(out, body);
+    out[body] = LibXR::CRC8::Calculate(out, body);
     return body + 1U;
   }
 
@@ -170,11 +158,6 @@ class Framer
     out[len] = kPad;
     return len + 1U;
   }
-
-  /// 统计 / Statistics.
-  const FrameStats& Stats() const { return stats_; }
-  /// 清零统计 / Clear the statistics.
-  void ResetStats() { stats_ = FrameStats{}; }
 
  private:
   // 用缓冲里已有的字节把解析推进到不能再推进。重新同步后缓冲里可能留下不止一帧头的
@@ -213,21 +196,15 @@ class Framer
       {
         return handed;
       }
-      if (Crc8(frame_, total_ - 1U) != frame_[total_ - 1U])
+      if (!LibXR::CRC8::Verify(frame_, total_))
       {
-        ++stats_.crc_errors;
         DropFront(1U);
         continue;
       }
       const uint8_t* payload = frame_ + kHeaderSize;
       const uint32_t n = payload[0] | (static_cast<uint32_t>(payload[1]) << 8);
-      if (n > MaxPacket || n + 2U > payload_len_)
+      if (n <= MaxPacket && n + 2U <= payload_len_)
       {
-        ++stats_.dropped;
-      }
-      else
-      {
-        ++stats_.frames;
         ++handed;
         on_request(payload + 2, static_cast<uint16_t>(n));
       }
@@ -240,20 +217,16 @@ class Framer
 
   bool AcceptHeader()
   {
-    if (Crc8(frame_, kHeaderSize - 1U) != frame_[kHeaderSize - 1U])
+    LibXR::Topic::PackedDataHeader header;
+    std::memcpy(&header, frame_, kHeaderSize);
+    if (!LibXR::CRC8::Verify(frame_, kHeaderSize))
     {
-      ++stats_.crc_errors;
       return false;
     }
-    const uint32_t topic = frame_[4] | (static_cast<uint32_t>(frame_[5]) << 8) |
-                           (static_cast<uint32_t>(frame_[6]) << 16) |
-                           (static_cast<uint32_t>(frame_[7]) << 24);
-    const uint32_t len = frame_[1] | (static_cast<uint32_t>(frame_[2]) << 8) |
-                         (static_cast<uint32_t>(frame_[3]) << 16);
-    if (frame_[14] != kVersion || topic != kRequestTopic || len < 2U ||
-        len > kPayloadCapacity)
+    const uint32_t len = header.GetDataLen();
+    if (header.version != kVersion || header.topic_name_crc32 != request_topic_ ||
+        len < 2U || len > kPayloadCapacity)
     {
-      ++stats_.header_errors;
       return false;
     }
     payload_len_ = len;
@@ -270,7 +243,6 @@ class Framer
     {
       ++next;
     }
-    stats_.dropped += static_cast<uint32_t>(next);
     std::memmove(frame_, frame_ + next, fill_ - next);
     fill_ -= next;
     total_ = 0U;
@@ -280,7 +252,7 @@ class Framer
   size_t fill_ = 0U;
   size_t total_ = 0U;
   uint32_t payload_len_ = 0U;
-  FrameStats stats_;
+  uint32_t request_topic_ = TopicKey(kRequestTopicName);
 };
 
 }  // namespace XrDap::Serial

@@ -13,6 +13,11 @@ using namespace XrDap::Serial;
 
 namespace
 {
+uint8_t Crc8(const uint8_t* data, size_t len) { return LibXR::CRC8::Calculate(data, len); }
+}  // namespace
+
+namespace
+{
 // 文档第 1 节的例子：DAP_Info(0xFF) 请求，DAP 包 00 FF / The example of section 1:
 // the DAP_Info(0xFF) request, DAP packet 00 FF.
 const uint8_t kInfoFrame[] = {0x5A, 0x04, 0x00, 0x00, 0xC5, 0x09, 0x83,
@@ -33,9 +38,10 @@ const uint8_t* Str(const char* s) { return reinterpret_cast<const uint8_t*>(s); 
 
 TEST(CrcCheckValues)
 {
-  CHECK_EQ(Crc32(Str("123456789"), 9), 0x340BC6D9U);
-  CHECK_EQ(Crc32(Str("dap_req"), 7), kRequestTopic);
-  CHECK_EQ(Crc32(Str("dap_resp"), 8), kResponseTopic);
+  // libxr 的 CRC 与文档第 1 节的参数一致 / libxr's CRCs match the parameters of section 1.
+  CHECK_EQ(LibXR::CRC32::Calculate(Str("123456789"), 9), 0x340BC6D9U);
+  CHECK_EQ(TopicKey(kRequestTopicName), 0xDC8309C5U);
+  CHECK_EQ(TopicKey(kResponseTopicName), 0x89E1A688U);
   CHECK_EQ(Crc8(kInfoFrame, 15), 0xB1U);
   CHECK_EQ(Crc8(kInfoFrame, sizeof(kInfoFrame) - 1), 0x32U);
 }
@@ -70,7 +76,6 @@ TEST(GarbageBeforeAndBetweenFrames)
   in.insert(in.end(), kInfoFrame, kInfoFrame + sizeof(kInfoFrame));
   (void)f.Feed(in.data(), in.size(), sink);
   CHECK_EQ(sink.requests.size(), 2U);
-  CHECK(f.Stats().dropped > 0U);
 }
 
 TEST(BadTrailingCrcIsDropped)
@@ -82,7 +87,6 @@ TEST(BadTrailingCrcIsDropped)
   bad[sizeof(bad) - 1] ^= 0x01U;
   (void)f.Feed(bad, sizeof(bad), sink);
   CHECK_EQ(sink.requests.size(), 0U);
-  CHECK_EQ(f.Stats().crc_errors, 1U);
   (void)f.Feed(kInfoFrame, sizeof(kInfoFrame), sink);  // 之后照常 / works afterwards
   CHECK_EQ(sink.requests.size(), 1U);
 }
@@ -96,7 +100,6 @@ TEST(WrongTopicIsHeaderError)
   const size_t n = Framer<1024>::PackResponse(dap, 2, 0, resp);  // topic dap_resp
   (void)f.Feed(resp, n, sink);
   CHECK_EQ(sink.requests.size(), 0U);
-  CHECK_EQ(f.Stats().header_errors, 1U);
 }
 
 TEST(PacketLongerThanMaximumIsDropped)
@@ -143,7 +146,6 @@ TEST(FramesInsideABadFrameAreAllFound)
   Sink sink;
   (void)f.Feed(in.data(), in.size(), sink);
   CHECK_EQ(sink.requests.size(), 2U);
-  CHECK_EQ(f.Stats().crc_errors, 1U);
 }
 
 namespace
@@ -223,7 +225,4 @@ TEST(PaddedStreamYieldsTheSameRequests)
   CHECK_EQ(sink.requests.size(), 4U);
   CHECK(sink.requests.size() == 4U && sink.requests[0].size() == 45U &&
         sink.requests[2].size() == 109U && sink.requests[3][0] == 45U);
-  CHECK_EQ(fr.Stats().crc_errors, 0U);
-  CHECK_EQ(fr.Stats().header_errors, 0U);
-  CHECK_EQ(fr.Stats().dropped, 3U);  // 三个补的字节 / the three pad bytes
 }

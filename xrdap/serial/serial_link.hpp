@@ -56,16 +56,6 @@ class SerialLink
   using ThreadStarter = void (*)(void* ctx, const ThreadConfig& config,
                                  void (*entry)(void*), void* arg);
 
-  /// 统计快照 / Statistics snapshot.
-  struct Stats
-  {
-    Serial::FrameStats frames;  ///< 帧解析 / Frame parsing.
-    uint32_t rx_bytes = 0U;     ///< 收到的字节 / Bytes received.
-    uint32_t tx_bytes = 0U;     ///< 发出的字节 / Bytes transmitted.
-    uint32_t rx_errors = 0U;    ///< 串口读失败 / UART read failures.
-    uint32_t tx_errors = 0U;    ///< 串口写失败或超时 / UART write failures or timeouts.
-  };
-
   /// @note 初始化时调用；只保存引用 / Call at initialisation; stores references only.
   SerialLink(ExecT& exec, LibXR::UART& uart) : exec_(exec), uart_(uart) {}
 
@@ -148,7 +138,6 @@ class SerialLink
     {
       return 0U;
     }
-    rx_bytes_.fetch_add(static_cast<uint32_t>(len), std::memory_order_relaxed);
     return framer_.Feed(data, len, [this](const uint8_t* req, uint16_t req_len)
                         { OnRequest(req, req_len); });
   }
@@ -173,7 +162,6 @@ class SerialLink
     }
     if (uart_.read_port_ == nullptr || !uart_.read_port_->Readable())
     {
-      rx_errors_.fetch_add(1U, std::memory_order_relaxed);
       LibXR::Thread::Sleep(1U);
       return true;
     }
@@ -188,7 +176,6 @@ class SerialLink
     }
     if (wait_ec != LibXR::ErrorCode::OK)
     {
-      rx_errors_.fetch_add(1U, std::memory_order_relaxed);
       LibXR::Thread::Sleep(1U);
       return true;
     }
@@ -201,7 +188,6 @@ class SerialLink
     LibXR::ReadOperation read_op(read_sem_);
     if (uart_.Read(LibXR::RawData(rx_chunk_, take), read_op) != LibXR::ErrorCode::OK)
     {
-      rx_errors_.fetch_add(1U, std::memory_order_relaxed);
       return true;
     }
     (void)Feed(rx_chunk_, take);
@@ -229,20 +215,6 @@ class SerialLink
       return TxStep::RETRY;
     }
     return TxStep::FAILED;
-  }
-
-  /// @brief 统计快照 / Statistics snapshot.
-  /// @note 任何任务，帧统计在执行时可能正被更新 / Any task; frame counts may be updating
-  ///       meanwhile.
-  Stats GetStats() const
-  {
-    Stats s;
-    s.frames = framer_.Stats();
-    s.rx_bytes = rx_bytes_.load(std::memory_order_relaxed);
-    s.tx_bytes = tx_bytes_.load(std::memory_order_relaxed);
-    s.rx_errors = rx_errors_.load(std::memory_order_relaxed);
-    s.tx_errors = tx_errors_.load(std::memory_order_relaxed);
-    return s;
   }
 
  private:
@@ -288,14 +260,8 @@ class SerialLink
       LibXR::WriteOperation op;
       const LibXR::ErrorCode ec = uart_.Write(LibXR::ConstRawData(tx_frame_, len), op);
       const TxStep step = TxStepFor(ec);
-      if (step == TxStep::QUEUED)
+      if (step == TxStep::QUEUED || step == TxStep::FAILED || waited >= kTxTimeoutMs)
       {
-        tx_bytes_.fetch_add(static_cast<uint32_t>(len), std::memory_order_relaxed);
-        return;
-      }
-      if (step == TxStep::FAILED || waited >= kTxTimeoutMs)
-      {
-        tx_errors_.fetch_add(1U, std::memory_order_relaxed);
         return;
       }
       LibXR::Thread::Sleep(1U);
@@ -318,11 +284,6 @@ class SerialLink
   uint8_t rx_chunk_[kChunkSize] = {};
   alignas(8) uint8_t resp_[MaxPacket] = {};
   alignas(8) uint8_t tx_frame_[FramerT::kTxCapacity] = {};
-
-  std::atomic<uint32_t> rx_bytes_{0U};
-  std::atomic<uint32_t> tx_bytes_{0U};
-  std::atomic<uint32_t> rx_errors_{0U};
-  std::atomic<uint32_t> tx_errors_{0U};
 };
 
 }  // namespace XrDap
