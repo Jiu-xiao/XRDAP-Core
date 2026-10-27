@@ -15,7 +15,7 @@
 | `usb` | CMSIS-DAP v2 Bulk | 全部（ESP32-S3、F103、CH32V307；ESP32-C3 和传统 ESP32 没有 USB DAP） |
 | `serial` | libxr Topic 串口帧（协议第 1 节） | XRDAP-ESP |
 | `tcp` | OpenOCD CMSIS-DAP TCP 帧（协议第 2 节） | XRDAP-ESP；`xrdap share openocd` 共享出来的任何探针 |
-| `usbip` | USB/IP，TCP 3240（协议第 6 节） | XRDAP-ESP；`xrdap share usbip` 共享出来的任何探针 |
+| `usbip` | USB/IP，TCP 3240（协议第 6 节） | `xrdap share usbip` 共享出来的任何探针 |
 | `radio` | 经无线对端到目标，上位机侧是 USB | XRDAP-CH32V307 无线板对 |
 
 每个用例在第 3 节列出适用的链路。探针不具备某条链路时，该格记为 n/a。

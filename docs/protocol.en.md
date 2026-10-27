@@ -2,7 +2,7 @@
 
 [中文](protocol.md)
 
-This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (protocol version 2; 0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only) and the rule that one transport owns the probe at a time, the probe identity and mDNS advertisement, how the ESP32-C3 USB port separates the DAP link from the command line, the USB/IP virtual device, and the zero-length packet USB hosts must send. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. These rules are implemented in `xrdap/` of this repository: serial frames in `xrdap/serial/`, the session owner in `xrdap/session/`, the vendor extension in `xrdap/vendor/`.
+This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (protocol version 2; 0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only) and the rule that one transport owns the probe at a time, the probe identity and mDNS advertisement, how the ESP32-C3 USB port separates the DAP link from the command line, the USB/IP virtual device served by `xrdap share usbip`, and the zero-length packet USB hosts must send. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. These rules are implemented in `xrdap/` of this repository: serial frames in `xrdap/serial/`, the session owner in `xrdap/session/`, the vendor extension in `xrdap/vendor/`.
 
 All integers are little-endian. Spaces in hexadecimal examples are for readability only.
 
@@ -512,7 +512,7 @@ As a result DAP frames and command-line output never mix: the debug tool always 
 
 ## 6. USB/IP virtual device
 
-The probe serves USB/IP on TCP port 3240 (protocol in the Linux kernel document `usb/usbip_protocol.rst`, fields big-endian). The implementation is in XRDAP-ESP `firmware/common/net/usbip_device.hpp`, and the `usbip` module of the host xrdap library is the same device model.
+The probe carries no USB device model; it only speaks DAP (USB, serial, TCP). `xrdap share usbip` on a computer (the `usbip` module of the host xrdap library) serves USB/IP on TCP port 3240 (protocol in the Linux kernel document `usb/usbip_protocol.rst`, fields big-endian) and turns any probe attached over serial, TCP or USB into a USB CMSIS-DAP v2 probe. The device model is as follows.
 
 | Operation | Handling |
 |---|---|

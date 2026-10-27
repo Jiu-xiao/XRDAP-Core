@@ -15,7 +15,7 @@ Contents: 1 Scope; 2 Fixed conditions; 3 Case table; 4 Case descriptions; 5 Resu
 | `usb` | CMSIS-DAP v2 Bulk | All (ESP32-S3, F103, CH32V307; ESP32-C3 and the original ESP32 have no USB DAP) |
 | `serial` | libxr Topic serial frames (protocol section 1) | XRDAP-ESP |
 | `tcp` | OpenOCD CMSIS-DAP TCP frames (protocol section 2) | XRDAP-ESP; any probe shared with `xrdap share openocd` |
-| `usbip` | USB/IP, TCP 3240 (protocol section 6) | XRDAP-ESP; any probe shared with `xrdap share usbip` |
+| `usbip` | USB/IP, TCP 3240 (protocol section 6) | Any probe shared with `xrdap share usbip` |
 | `radio` | To the target through the wireless peer; the host side is USB | XRDAP-CH32V307 wireless board pair |
 
 Section 3 lists the applicable links of each case. If a probe does not have a link, that cell is recorded as n/a.

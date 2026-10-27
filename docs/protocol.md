@@ -2,7 +2,7 @@
 
 [English](protocol.en.md)
 
-本文说明 XR-DAP 系列探针（XRDAP-ESP、XRDAP-F103C8、XRDAP-CH32V307）与上位机之间的协议：XRDAP-ESP 在串口和 TCP 上传输 CMSIS-DAP 包时使用的帧格式，全系列都实现的 XR 厂商扩展命令（协议版本 2；0x80 到 0x85 为数据命令；0x86 为 Wi-Fi 配置，仅 XRDAP-ESP）和同一时间只有一条传输拥有探针的规则，探针的身份信息和 mDNS 广播，ESP32-C3 的 USB 口上 DAP 链路与命令行的分流，USB/IP 虚拟设备，以及 USB 主机要注意的零长度包。USB 上的 DAP 包按 CMSIS-DAP v2 的 Bulk 端点收发，没有额外的帧。这些规则在本仓库的 `xrdap/` 里实现：串口帧在 `xrdap/serial/`，会话主人在 `xrdap/session/`，厂商扩展在 `xrdap/vendor/`。
+本文说明 XR-DAP 系列探针（XRDAP-ESP、XRDAP-F103C8、XRDAP-CH32V307）与上位机之间的协议：XRDAP-ESP 在串口和 TCP 上传输 CMSIS-DAP 包时使用的帧格式，全系列都实现的 XR 厂商扩展命令（协议版本 2；0x80 到 0x85 为数据命令；0x86 为 Wi-Fi 配置，仅 XRDAP-ESP）和同一时间只有一条传输拥有探针的规则，探针的身份信息和 mDNS 广播，ESP32-C3 的 USB 口上 DAP 链路与命令行的分流，`xrdap share usbip` 提供的 USB/IP 虚拟设备，以及 USB 主机要注意的零长度包。USB 上的 DAP 包按 CMSIS-DAP v2 的 Bulk 端点收发，没有额外的帧。这些规则在本仓库的 `xrdap/` 里实现：串口帧在 `xrdap/serial/`，会话主人在 `xrdap/session/`，厂商扩展在 `xrdap/vendor/`。
 
 目录：1 串口帧；2 TCP 帧；3 XR 厂商扩展（3.1 规则与会话主人，3.2 状态与回复空间，3.3 条目，3.4 命令，3.5 采样，3.6 SWD 访问，3.7 0x86，3.8 字节示例）；4 探针身份与发现（DAP_Info、mDNS）；5 ESP32-C3 的 USB 口；6 USB/IP 虚拟设备；7 USB 主机的注意事项。
 
@@ -512,7 +512,7 @@ ESP32-C3 的 USB 口是 USB Serial/JTAG，电脑上是一个 CDC 串口，DAP �
 
 ## 6. USB/IP 虚拟设备
 
-探针在 TCP 3240 端口提供 USB/IP（协议见 Linux 内核文档 `usb/usbip_protocol.rst`，字段大端）。实现在 XRDAP-ESP 的 `firmware/common/net/usbip_device.hpp`，上位机 xrdap 库的 `usbip` 模块是同一个设备模型。
+探针本身不带 USB 设备模型，只说 DAP（USB、串口、TCP）。电脑上运行 `xrdap share usbip`（上位机 xrdap 库的 `usbip` 模块）后，在 TCP 3240 端口提供 USB/IP（协议见 Linux 内核文档 `usb/usbip_protocol.rst`，字段大端），把任何经串口、TCP 或 USB 连着的探针变成一个 USB CMSIS-DAP v2 探针。设备模型如下。
 
 | 操作 | 处理 |
 |---|---|
@@ -532,7 +532,7 @@ ESP32-C3 的 USB 口是 USB Serial/JTAG，电脑上是一个 CDC 串口，DAP �
 | 端点 | Bulk OUT 0x01、Bulk IN 0x81，512 字节 |
 | BOS | MS OS 2.0 平台能力，厂商请求码 0x20；描述符集 162 字节：兼容 ID `WINUSB`，`DeviceInterfaceGUIDs` = `{CDB3B5AD-293B-4663-AA36-1AAE46463776}` |
 
-描述符字节（ESP 固件和 XRDAP-Host 的 `usbip` 模块都以这里为准）：
+描述符字节（XRDAP-Host 的 `usbip` 模块以这里为准）：
 
 ```
 设备描述符（18 字节）
