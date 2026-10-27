@@ -15,19 +15,6 @@ void TickAccount::Begin()
   next_ = 0U;
 }
 
-bool TickAccount::Due(uint32_t count) const
-{
-  return TickDue(count, next_) && !(has_last_ && count == last_);
-}
-
-void TickAccount::Defer(uint32_t count)
-{
-  if (TickDue(count, next_))
-  {
-    next_ = count + 1U;
-  }
-}
-
 TickAccount::Step TickAccount::OnWake(uint32_t count)
 {
   // 计数没走到下一个要采的节拍：停止或开始时的唤醒，或多余的一次唤醒。
@@ -75,14 +62,12 @@ constexpr uint32_t kMask = kRingBytes - 1U;
 
 void FrameRing::Reset()
 {
-  lock_.Lock();
   head_ = 0U;
   tail_ = 0U;
   used_ = 0U;
   payload_ = 0U;
   dropped_ = 0U;
   skipped_ = 0U;
-  lock_.Unlock();
 }
 
 uint16_t FrameRing::FrameLen(uint32_t pos) const
@@ -106,13 +91,11 @@ void FrameRing::CopyOut(uint32_t at, uint8_t* dst, uint32_t len) const
 
 void FrameRing::Push(const uint8_t* frame, uint16_t len, bool stop_on_full)
 {
-  lock_.Lock();
   while (used_ + len + 2U > kRingBytes)
   {
     if (stop_on_full || used_ == 0U)
     {
       ++dropped_;
-      lock_.Unlock();
       return;
     }
     const uint16_t old = FrameLen(tail_);
@@ -127,13 +110,11 @@ void FrameRing::Push(const uint8_t* frame, uint16_t len, bool stop_on_full)
   head_ = (head_ + 2U + len) & kMask;
   used_ += 2U + len;
   payload_ += len;
-  lock_.Unlock();
 }
 
 FrameRing::Taken FrameRing::Take(uint8_t* dst, uint32_t limit)
 {
   Taken t;
-  lock_.Lock();
   uint32_t pos = tail_;
   while (used_ != 0U)
   {
@@ -153,15 +134,12 @@ FrameRing::Taken FrameRing::Take(uint8_t* dst, uint32_t limit)
   t.remaining = payload_;
   t.dropped = dropped_;
   t.skipped = skipped_;
-  lock_.Unlock();
   return t;
 }
 
 void FrameRing::AddSkipped(uint32_t n)
 {
-  lock_.Lock();
   skipped_ += n;
-  lock_.Unlock();
 }
 
 }  // namespace XrDap::Vendor

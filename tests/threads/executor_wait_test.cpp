@@ -21,6 +21,7 @@
 #include "xrdap/session/executor.hpp"
 #include "xrdap/session/transport.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
+#include "model_swd.hpp"
 
 namespace
 {
@@ -39,25 +40,6 @@ int g_failures = 0;
       ++g_failures;                                                 \
     }                                                               \
   } while (0)
-
-// 不接目标的 SWD：这些测试只发 DAP_Info 和 DAP_Connect / SWD with no target: these tests
-// send only DAP_Info and DAP_Connect.
-class NoSwd : public LibXR::Debug::Swd
-{
- public:
-  ErrorCode SetClockHz(uint32_t) override { return ErrorCode::OK; }
-  void Close() override {}
-  ErrorCode LineReset() override { return ErrorCode::OK; }
-  ErrorCode EnterSwd() override { return ErrorCode::OK; }
-  ErrorCode Transfer(const LibXR::Debug::SwdProtocol::Request&,
-                     LibXR::Debug::SwdProtocol::Response&) override
-  {
-    return ErrorCode::FAILED;
-  }
-  void IdleClocks(uint32_t) override {}
-  ErrorCode SeqWriteBits(uint32_t, const uint8_t*) override { return ErrorCode::OK; }
-  ErrorCode SeqReadBits(uint32_t, uint8_t*) override { return ErrorCode::OK; }
-};
 
 // libxr DAP 类的替身：USB 命令经 Feed 到达；WaitForWork 和 Step 像 libxr 一样在没有命令时
 // 阻塞到超时。Step 执行一条命令要 usb_cost_ms / Stand-in for the libxr DAP class: USB
@@ -110,6 +92,11 @@ class FakeDap
     {
       return ErrorCode::TIMEOUT;
     }
+    if (usb_cmds_.load() == 0U)
+    {
+      return ErrorCode::OK;  // 多出的唤醒，没有命令 / A spare wake-up, no command.
+    }
+    usb_cmds_.fetch_sub(1U);
     const uint8_t req[2] = {usb_cmd_.load(), 0x01};
     uint8_t resp[64];
     uint16_t out = 0U;
@@ -128,8 +115,11 @@ class FakeDap
   void Feed(uint8_t cmd)
   {
     usb_cmd_ = cmd;
+    usb_cmds_.fetch_add(1U);
     usb_.Post();
   }
+
+  void WakeStep(bool) { usb_.Post(); }
 
   std::atomic<uint32_t> usb_done_{0U};
   uint32_t usb_cost_ms_ = 0U;
@@ -166,11 +156,12 @@ class FakeDap
   void* gate_ctx_ = nullptr;
   LibXR::Semaphore usb_{0};
   std::atomic<uint8_t> usb_cmd_{Byte(DapCmd::INFO)};
+  std::atomic<uint32_t> usb_cmds_{0U};
 };
 
 struct Probe
 {
-  NoSwd swd;
+  ModelSwd swd;
   XrDap::DapVendor vendor{swd};
   XrDap::DapActivity activity;
   FakeDap dap;
@@ -188,6 +179,17 @@ struct Answer
 
 Answer CommandOn(Probe& p, XrDap::Transport t, uint8_t cmd)
 {
+  if (t == XrDap::Transport::USB)
+  {
+    // USB 的命令经 libxr 的 DAP 类到达 / USB commands arrive through the libxr DAP class.
+    const uint32_t before = p.dap.usb_done_.load();
+    p.dap.Feed(cmd);
+    while (p.dap.usb_done_.load() == before)
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return {0.0, cmd, 0x00};
+  }
   const uint8_t req[2] = {cmd, 0x01};
   uint8_t resp[64] = {};
   uint16_t out = 0U;
@@ -202,8 +204,14 @@ Answer TcpCommand(Probe& p, uint8_t cmd)
   return CommandOn(p, XrDap::Transport::TCP, cmd);
 }
 
-// USB 线程照 ESP 的 DAP 线程那样循环 StepUsb(wait_ms) / The USB thread loops
-// StepUsb(wait_ms) like ESP's DAP thread.
+struct NullTimer : XrDap::Vendor::TickTimer
+{
+  void Start(uint32_t) override {}
+  void Stop() override {}
+};
+
+// 执行上下文的线程照 ESP 的 DAP 线程那样循环 Run(timer, wait_ms) / The execution context's
+// thread loops Run(timer, wait_ms) like ESP's DAP thread.
 class UsbThread
 {
  public:
@@ -211,9 +219,10 @@ class UsbThread
       : thread_(
             [this, &p, wait_ms]()
             {
+              NullTimer timer;
               while (!stop_.load())
               {
-                (void)p.exec.StepUsb(wait_ms);
+                p.exec.Run(timer, wait_ms);
               }
             })
   {
@@ -231,7 +240,7 @@ class UsbThread
 
 void TcpAnsweredWhileUsbWaits()
 {
-  // USB 线程每次最多等 500 ms 而一直没有命令：TCP 的 DAP_Info 仍在几毫秒内得到回应 / The
+  // 执行线程每次最多等 500 ms 而一直没有命令：TCP 的 DAP_Info 仍在几毫秒内得到回应 / The
   // USB thread waits up to 500 ms each time and no command comes: TCP's DAP_Info is still
   // answered within a few milliseconds.
   Probe p;
@@ -249,12 +258,75 @@ void TcpAnsweredWhileUsbWaits()
   EXPECT(worst < 50.0);
 }
 
+void SamplingSharesTheContextWithCommands()
+{
+  // 采样（节拍中断每 2 ms 一次，由 OnTickIsr 叫醒）和 TCP、USB 的命令在同一个执行上下文里
+  // 一件一件做：命令一直得到回应，采样一直有帧产出，同一时刻只有一条命令在 DAP 类里 / Sampling
+  // (the tick interrupt every 2 ms, waking through OnTickIsr) and the commands of TCP and USB run
+  // one after the other in the same execution context: commands keep being answered, sampling
+  // keeps producing frames, and only one command is in the DAP class at a time.
+  Probe p;
+  p.dap.usb_cost_ms_ = 1U;
+  UsbThread usb(p, 50U);
+  (void)CommandOn(p, XrDap::Transport::TCP, Byte(DapCmd::CONNECT));
+  // SUB_START：周期 2000 us，一个条目（AP 0，u32，0x08000000）/ SUB_START: period 2000 us,
+  // one item (AP 0, u32 at 0x08000000).
+  const uint8_t start[] = {0x83U, 0xD0U, 0x07U, 0U, 0U, 0U, 1U, 0U, 0, 1, 0, 4, 0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0};
+  uint8_t resp[128] = {};
+  uint16_t out = 0U;
+  p.exec.Execute(XrDap::Transport::TCP, start, sizeof(start), resp, sizeof(resp), out);
+  EXPECT(resp[1] == 0x00U);
+  EXPECT(p.vendor.Sampling());
+
+  std::atomic<bool> stop{false};
+  std::thread ticks(
+      [&]()
+      {
+        while (!stop.load())
+        {
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+          p.vendor.OnTickIsr();
+        }
+      });
+  std::thread feeder(
+      [&]()
+      {
+        while (!stop.load())
+        {
+          p.dap.Feed(Byte(DapCmd::INFO));
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+      });
+  double worst = 0.0;
+  for (int i = 0; i < 100; ++i)
+  {
+    const Answer a = TcpCommand(p, Byte(DapCmd::INFO));
+    EXPECT(a.cmd == Byte(DapCmd::INFO));
+    worst = a.ms > worst ? a.ms : worst;
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
+  }
+  stop.store(true);
+  ticks.join();
+  feeder.join();
+  EXPECT(worst < 50.0);
+  EXPECT(p.dap.max_in_flight_.load() == 1);
+  // SUB_READ：采样在跑，帧已经产出 / SUB_READ: sampling runs and frames were produced.
+  const uint8_t read[] = {0x85U, 0xFFU, 0x00U};
+  p.exec.Execute(XrDap::Transport::TCP, read, sizeof(read), resp, sizeof(resp), out);
+  EXPECT(resp[1] == 0x00U);
+  const uint16_t frames = static_cast<uint16_t>(resp[22] | (resp[23] << 8));
+  std::printf("  SamplingSharesTheContextWithCommands: worst %.2f ms, %u frames\n", worst,
+              frames);
+  EXPECT(frames >= 5U);  // 回复只放得下 6 帧 / the reply holds 6 frames at most
+}
+
 void ConnectionFollowsTheLink()
 {
   // DAP_Connect 记下它来自哪条链路；别的链路丢了不影响，这条丢了或 DAP_Disconnect 才作废 /
   // DAP_Connect notes the link it came from; another link being lost changes nothing, this
   // one being lost or DAP_Disconnect makes it lapse.
   Probe p;
+  UsbThread usb(p, 5U);
   EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::NONE);
   (void)CommandOn(p, XrDap::Transport::TCP, Byte(DapCmd::INFO));
   EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::NONE);  // 只查信息不算连接
@@ -277,6 +349,7 @@ void UsbResetEndsAUsbConnectionOnly()
   // 连接在 USB 上时总线复位使它作废；连接在别的链路上时 USB 复位不影响 / A bus reset makes
   // a connection on USB lapse; with the connection on another link it changes nothing.
   Probe p;
+  UsbThread usb(p, 5U);
   static std::atomic<uint32_t> resets{0U};
   p.vendor.SetUsbResetSource(+[](void*) -> uint32_t { return resets.load(); }, nullptr);
   (void)CommandOn(p, XrDap::Transport::TCP, Byte(DapCmd::CONNECT));
@@ -310,9 +383,10 @@ void LinksNeverRunTwoCommandsAtOnce()
   std::thread usb(
       [&]()
       {
+        NullTimer timer;
         while (!stop.load())
         {
-          (void)p.exec.StepUsb(5U);
+          p.exec.Run(timer, 5U);
         }
       });
   std::thread links[3];
@@ -349,6 +423,7 @@ void UsbRebindLeavesAnotherLinksSwdAlone()
   // there is none (opening and closing USB once on the CH32 used to make every DP read of
   // the radio connection answer ACK 7).
   Probe p;
+  UsbThread usb(p, 5U);
   (void)CommandOn(p, XrDap::Transport::RADIO, Byte(DapCmd::CONNECT));
   EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::RADIO);
   p.dap.Rebind();
@@ -379,6 +454,7 @@ int main()
 {
   LibXR::PlatformInit();
   TcpAnsweredWhileUsbWaits();
+  SamplingSharesTheContextWithCommands();
   UsbRebindLeavesAnotherLinksSwdAlone();
   ConnectionFollowsTheLink();
   UsbResetEndsAUsbConnectionOnly();

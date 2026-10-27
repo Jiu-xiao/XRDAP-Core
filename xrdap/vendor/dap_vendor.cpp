@@ -26,7 +26,7 @@ uint64_t NowUs() { return static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds
 uint8_t ToU8(Cmd c) { return static_cast<uint8_t>(c); }
 }  // namespace
 
-void DapVendorBase::SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler,
+void DapVendor::SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler,
                                     void* ctx, ExtraLength length)
 {
   extra_length_ = length;
@@ -36,31 +36,30 @@ void DapVendorBase::SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler 
   extra_ctx_ = ctx;
 }
 
-// 发起采样的会话结束时返回 false，采样随即停止。采样任务或主循环调用。
+// 发起采样的会话结束时返回 false，采样随即停止。执行上下文调用。
 // Returns false once the session that started sampling has ended, which stops sampling.
-// Called by the sampling task or the main loop.
-template <class Policy>
-bool DapVendorT<Policy>::KeepSampling(void* ctx, uint32_t epoch)
+// Called in the execution context.
+bool DapVendor::KeepSampling(void* ctx, uint32_t epoch)
 {
-  return static_cast<DapVendorT*>(ctx)->LinkAlive(epoch);
+  return static_cast<DapVendor*>(ctx)->LinkAlive(epoch);
 }
 
 // 扩展命令要求本会话里已经 DAP_Connect。 / Extension commands need a DAP_Connect in this
 // session.
-bool DapVendorBase::Connected()
+bool DapVendor::Connected()
 {
   CheckUsbReset();
   return connected_link_.load() != static_cast<uint32_t>(Transport::NONE) &&
          connected_epoch_ == epoch_.load();
 }
 
-bool DapVendorBase::LinkAlive(uint32_t epoch)
+bool DapVendor::LinkAlive(uint32_t epoch)
 {
   CheckUsbReset();
   return epoch == epoch_.load();
 }
 
-void DapVendorBase::CheckUsbReset()
+void DapVendor::CheckUsbReset()
 {
   if (usb_reset_fn_ != nullptr &&
       connected_link_.load() == static_cast<uint32_t>(Transport::USB) &&
@@ -70,14 +69,13 @@ void DapVendorBase::CheckUsbReset()
   }
 }
 
-void DapVendorBase::Drop()
+void DapVendor::Drop()
 {
   connected_link_.store(static_cast<uint32_t>(Transport::NONE));
   epoch_.fetch_add(1U);
 }
 
-template <class Policy>
-DapVendorBase::Result DapVendorT<Policy>::OnCommand(const uint8_t* req, uint16_t len,
+DapVendor::Result DapVendor::OnCommand(const uint8_t* req, uint16_t len,
                                                     uint8_t* resp, uint16_t cap,
                                                     uint16_t& out)
 {
@@ -86,14 +84,6 @@ DapVendorBase::Result DapVendorT<Policy>::OnCommand(const uint8_t* req, uint16_t
     return Result::PASS;
   }
   const uint8_t cmd = req[0];
-
-  // SUB_READ, both INFO commands and HOST_STATUS only consume metadata/ring data. They
-  // should not repeatedly park the SWD sampler while a host drains a high-rate stream.
-  if (cmd == ToU8(Cmd::SUB_READ) || cmd == ToU8(Cmd::INFO) || cmd == Byte(DapCmd::INFO) ||
-      cmd == Byte(DapCmd::HOST_STATUS))
-  {
-    sampler_.CommandReadOnly();
-  }
 
   // 开始采样的那条链路又发来 DAP_Connect：它的上位机回来了（旧的没发 DAP_Disconnect 就没了，
   // 例如被强杀），结束旧的连接和采样，重新连接。别的链路发来的 DAP_Connect 照旧被拒绝。
@@ -156,7 +146,7 @@ DapVendorBase::Result DapVendorT<Policy>::OnCommand(const uint8_t* req, uint16_t
   return Result::PASS;
 }
 
-bool DapVendorBase::RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len) const
+bool DapVendor::RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len) const
 {
   len = 0U;
   if (req == nullptr || avail < 1U)
@@ -171,14 +161,13 @@ bool DapVendorBase::RequestLength(const uint8_t* req, uint16_t avail, uint16_t& 
   return cmd >= kFirstCmd && cmd <= kLastCmd && Vendor::RequestLength(req, avail, len);
 }
 
-bool DapVendorBase::IsVendor(uint8_t cmd) const
+bool DapVendor::IsVendor(uint8_t cmd) const
 {
   return (cmd >= kFirstCmd && cmd <= kLastCmd) ||
          (extra_handler_ != nullptr && cmd == extra_cmd_);
 }
 
-template <class Policy>
-bool DapVendorT<Policy>::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len,
+bool DapVendor::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len,
                                       uint8_t* resp, uint16_t cap, uint16_t& out)
 {
   // 回复空间一处检查：附加命令只保证至少 2 字节，自己的回复长度由它自己检查。
@@ -214,7 +203,7 @@ bool DapVendorT<Policy>::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t 
   return false;
 }
 
-bool DapVendorBase::CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out)
+bool DapVendor::CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out)
 {
   resp[0] = ToU8(Cmd::INFO);
   if (len != 1U)
@@ -232,7 +221,7 @@ bool DapVendorBase::CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out)
   return true;
 }
 
-bool DapVendorBase::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp,
+bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp,
                             uint16_t& out, bool sampling)
 {
   resp[0] = ToU8(Cmd::READ);
@@ -289,7 +278,7 @@ bool DapVendorBase::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp,
   return true;
 }
 
-bool DapVendorBase::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
+bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
 {
   resp[0] = ToU8(Cmd::WRITE);
   if (len < 2U || req[1] == 0U)
@@ -345,8 +334,7 @@ bool DapVendorBase::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, ui
   return true;
 }
 
-template <class Policy>
-bool DapVendorT<Policy>::CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp,
+bool DapVendor::CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp,
                                      uint16_t& out)
 {
   resp[0] = ToU8(Cmd::SUB_START);
@@ -371,8 +359,7 @@ bool DapVendorT<Policy>::CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* 
                out);
 }
 
-template <class Policy>
-bool DapVendorT<Policy>::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp,
+bool DapVendor::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp,
                                     uint16_t& out)
 {
   resp[0] = ToU8(Cmd::SUB_CTRL);
@@ -392,8 +379,7 @@ bool DapVendorT<Policy>::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* r
   return Reply(resp, kStatusArg, out);
 }
 
-template <class Policy>
-bool DapVendorT<Policy>::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp,
+bool DapVendor::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp,
                                     uint16_t cap, uint16_t& out)
 {
   resp[0] = ToU8(Cmd::SUB_READ);
@@ -419,6 +405,5 @@ bool DapVendorT<Policy>::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* r
 }
 
 // 只为平台选定的策略生成代码 / Code is generated only for the policy the platform chose.
-template class DapVendorT<Port::SamplerPolicy>;
 
 }  // namespace XrDap

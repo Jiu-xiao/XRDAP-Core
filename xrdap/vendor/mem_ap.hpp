@@ -14,7 +14,6 @@
 #include <cstdint>
 
 #include "debug/swd.hpp"
-#include "mutex.hpp"
 #include "xrdap/vendor/protocol.hpp"
 
 namespace XrDap::Vendor
@@ -43,18 +42,14 @@ class MemAp
     bool written = false;
   };
 
-  /// 持有 SWD 链路的作用域锁 / Scoped lock on the SWD link.
+  /// 一次 SWD 访问的作用域：结束时让 SELECT 缓存失效。SWD 只在执行上下文里访问，所以不加锁 /
+  /// Scope of one SWD access: invalidates the SELECT cache at the end. SWD is accessed in the
+  /// execution context only, so there is no lock.
   class Lock
   {
    public:
-    /// 取得链路，等到别的持有者释放为止 / Take the link, waiting for any other holder.
-    explicit Lock(MemAp& mem) : mem_(mem) { mem_.mutex_.Lock(); }
-    /// 释放链路并让 SELECT 缓存失效 / Release the link and invalidate the SELECT cache.
-    ~Lock()
-    {
-      mem_.swd_.InvalidateSelectCache();
-      mem_.mutex_.Unlock();
-    }
+    explicit Lock(MemAp& mem) : mem_(mem) {}
+    ~Lock() { mem_.swd_.InvalidateSelectCache(); }
     Lock(const Lock&) = delete;
     Lock& operator=(const Lock&) = delete;
 
@@ -151,7 +146,6 @@ class MemAp
   uint8_t ReadValue(ApState& ap, uint8_t size, uint32_t addr, uint8_t* out);
 
   LibXR::Debug::Swd& swd_;
-  LibXR::Mutex mutex_;
   ApState ap_[kMaxAps];
   uint8_t ap_count_ = 0U;
   /// A transaction failed since the last ResetCache; blocks CSW reuse. Under Lock.

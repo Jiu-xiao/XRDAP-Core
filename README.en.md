@@ -18,7 +18,7 @@ Headers are included as `xrdap/<module>/<file>.hpp`:
 
 | Module | Contents |
 |---|---|
-| `session/` | `Executor`: every call into the libxr DAP instance goes through it, one mutex keeps it to one command at a time; `Transport` is only a label of where a command came from |
+| `session/` | `Executor`: every call into the libxr DAP instance goes through it, its `Run()` loop does USB commands, requests posted by other links and sampling one after the other, without locks; `Transport` is only a label of where a command came from |
 | `vendor/` | `DapVendor` (commands 0x80 to 0x85, plus one extra command a platform attaches, such as XRDAP-ESP's 0x86 Wi-Fi configuration), `MemAp` (MEM-AP access along pointer chains over SWD), `Sampler`, `TickAccount`, `FrameRing` (sampling on the probe), request checks and reply space |
 | `serial/` | `Framer` (serial frames: the header and CRCs are libxr Topic's packing format, only the payload and the streaming resync live here), `SerialLink` (the serial worker thread) |
 | `activity/` | `DapActivity`: DAP activity and the host state reported by DAP_HostStatus |
@@ -26,19 +26,19 @@ Headers are included as `xrdap/<module>/<file>.hpp`:
 | `probe/` | `SetProbeInfo`, `FormatSerial` (DAP_Info strings and the serial rule), `family.hpp` (VID:PID and each board's bcdDevice) |
 | `protocol/` | `dap_cmd.hpp`: aliases for libxr's CMSIS-DAP command ids and status values, defined nowhere else |
 
-This repository touches no peripherals. Time, mutexes and semaphores come from libxr's `Timebase`, `Mutex` and `Semaphore`; what libxr has no common abstraction for is supplied by the platform:
+This repository touches no peripherals. Time and semaphores come from libxr's `Timebase` and `Semaphore`; what libxr has no common abstraction for is supplied by the platform:
 
 | Platform supplies | Notes |
 |---|---|
-| `xrdap_port.hpp` | the sample ring size `Port::kRingBytes` and its spinlock `Port::SpinLock`; the way sampling runs, `Port::SamplerPolicy` (`TaskSampling` or `LoopSampling`, chosen at compile time) |
-| tick timer | implements `Vendor::TickTimer`; its interrupt calls `DapVendor::OnTickIsr()`; under `TaskSampling` that reads libxr's `Timebase`, so the time base must be readable from an interrupt; under `LoopSampling` the interrupt only counts ticks and reads no time base |
-| threads | the sampling task, the USB DAP thread, the serial thread (ESP pins them to the core that drives SWD) |
+| `xrdap_port.hpp` | the sample ring size `Port::kRingBytes` |
+| tick timer | implements `Vendor::TickTimer`; its interrupt calls `DapVendor::OnTickIsr()`, which only counts ticks and wakes the execution context when one is due; it reads no time base |
+| threads | the execution context (the main loop of a single-loop probe; on ESP a task pinned to the core that drives SWD) and the link tasks for serial and TCP |
 | session ends | USB reset count, TCP disconnect, radio session id and ping |
 | lights | driver, pins and the query whether USB is configured |
 
 ## Integration
 
-libxr 1c06b874 (`feat/xrdap-r2-swd-loop`) or later is required: `Executor` hands the vendor command length to libxr through its `SetCommandHook(hook, ctx, length)`, which lets vendor commands sit inside `DAP_ExecuteCommands`, `StepUsb` waits for USB commands in its `WaitForWork` without holding a turn, and its `SetSessionResetGate` lets a USB attach or detach reset SWD only when USB owns the probe or nobody does. CI builds and tests against the libxr commit pinned in `.github/workflows/ci.yml` (`LIBXR_COMMIT`, no older than the version above); CI tests on a PC only and does not cross-compile the chip firmwares, which their own repositories do.
+A libxr with `WakeStep` (candidate branch `release/0.6-candidate`) is required: `Executor` hands the vendor command length to libxr through its `SetCommandHook(hook, ctx, length)`, which lets vendor commands sit inside `DAP_ExecuteCommands`, `Run` waits in its `WaitForWork` and `WakeStep` for a USB command, a post from another link and the tick interrupt in one place, and its `SetSessionResetGate` lets a USB attach or detach reset SWD only when USB owns the probe or nobody does. CI builds and tests against the libxr commit pinned in `.github/workflows/ci.yml` (`LIBXR_COMMIT`, no older than the version above); CI tests on a PC only and does not cross-compile the chip firmwares, which their own repositories do.
 
 A firmware project includes `xrdap_core.cmake`, adds the sources to its own target and makes the libxr headers and the platform's `xrdap_port.hpp` visible to them:
 
@@ -50,70 +50,61 @@ target_include_directories(app.elf PRIVATE ${XRDAP_CORE_INCLUDE_DIRS} port)
 
 An ESP-IDF project passes `XRDAP_CORE_SOURCES` and `XRDAP_CORE_INCLUDE_DIRS` to `idf_component_register`.
 
-`xrdap_port.hpp` gives the size of the sample ring (a power of two, reported by INFO), its lock, and the way sampling runs: `TaskSampling` for a probe with an RTOS whose sampling runs in its own task, `LoopSampling` for a probe without an RTOS that calls `Poll()` in its main loop. Once chosen, `DapVendor` is `DapVendorT<Port::SamplerPolicy>`, and the other way's entry (`RunSamplerTask()` under `LoopSampling`, `Poll()` under `TaskSampling`) does not exist, so calling it does not compile; `LoopSampling` has no semaphore and no yielding to commands, and the `CommandBegin()` and `CommandEnd()` that `Executor` calls for every command are empty functions. Sampling and SUB_READ both hold the lock briefly (at most a 1 KB copy), and it must not block: a blocking mutex would put the highest-priority sampling task to sleep while SUB_READ copies, and ticks would be late at short periods. The dual-core ESP32 parts use a portMUX, a single-core RTOS a critical section, a single-loop probe a no-op:
+`xrdap_port.hpp` gives only the size of the sample ring (a power of two, reported by INFO):
 
 ```cpp
-// xrdap_port.hpp (single-core FreeRTOS)
+// xrdap_port.hpp
 #pragma once
 #include <cstdint>
-
-#include "FreeRTOS.h"
-#include "task.h"
-
-namespace XrDap::Vendor
-{
-class TaskSampling;  // sampling runs in its own task; without an RTOS write class LoopSampling;
-}
 
 namespace XrDap::Port
 {
 inline constexpr uint32_t kRingBytes = 4096;
-using SamplerPolicy = Vendor::TaskSampling;
-
-class SpinLock
-{
- public:
-  void Lock() { taskENTER_CRITICAL(); }
-  void Unlock() { taskEXIT_CRITICAL(); }
-};
 }  // namespace XrDap::Port
 ```
 
 ## Usage
 
-### Executor
+### Execution context
 
-Every DAP command enters the libxr DAP instance through `Executor`: USB with `StepUsb()`, the other links with `Execute()`. The executor keeps it to one command at a time with a mutex and notes which link each command came from. That the probe is used over one link at a time is up to the user, so Core does not arbitrate: there is no session owner, no queue and no busy reply; when two links send commands at once, the one that gets the lock second waits for the first to finish. `DAP_Connect` notes the link it came from; `DAP_Disconnect`, that link being lost, or (for a connection on USB) a bus reset makes the connection and sampling lapse, and the extension commands need a new `DAP_Connect`:
+The probe has one execution context: every call into the libxr DAP instance (USB's `Step`, `ExecuteExternal` for commands posted by other links) and sampling are done one after the other in the loop `Executor::Run()`, so SWD, the DAP class and the vendor extension are accessed by one thread only, without locks. That the probe is used over one link at a time is up to the user, so Core does not arbitrate: there is no session owner, no queue and no busy reply. `DAP_Connect` notes the link it came from; `DAP_Disconnect`, that link being lost, or (for a connection on USB) a bus reset makes the connection and sampling lapse, and the extension commands need a new `DAP_Connect`.
+
+One round:
+
+1. with a USB command, `Step(0)` runs one; otherwise a request another link posted to the mailbox runs;
+2. when a sampling tick is due, sample **one** frame, then look for commands again;
+3. when nothing was done, wait in `WaitForWork`: a USB command, a post from another link and the tick interrupt (`WakeStep`) all wake it.
+
+So a command loses at most one frame to sampling, ticks that cannot be sampled are counted as skipped, and the probe always answers commands:
 
 ```cpp
 #include "xrdap/session/executor.hpp"
 
 static XrDap::DapVendor vendor(swd);
 static XrDap::DapActivity activity;
-static XrDap::Executor<Dap> exec(dap, vendor, activity);  // installs the hook
+static XrDap::Executor<Dap> exec(dap, vendor, activity);  // installs the command hook and the tick wake
 
-vendor.SetUsbResetSource(&BusResetCount, &usb);  // a changed count lapses a connection on USB
+vendor.SetUsbResetSource(&BusResetCount, &usb);  // a changed reset count ends a connection on USB
 ```
 
-`BusResetCount` stands for the platform function that returns the USB bus reset count. Each link tells the executor when it is lost:
+`BusResetCount` stands for the platform's function that reads the USB bus reset count. The tasks of the other links (serial, TCP, radio) only post a request and wait for the reply, and each link tells the executor when it is lost:
 
 ```cpp
-// TCP server: every request
+// TCP server: each request (in the link's own task, not the execution context)
 exec.Execute(XrDap::Transport::TCP, req, len, resp, sizeof(resp), out);
 // client disconnected
 exec.LinkLost(XrDap::Transport::TCP);
 
-// Radio remote: run the commands the peer sends; a changed or zero session id means the
-// link is lost
+// Radio remote: run the command the peer sent; the link is lost when the session id changes or is 0
 exec.Execute(XrDap::Transport::RADIO, req, len, resp, sizeof(resp), out);
 exec.LinkLost(XrDap::Transport::RADIO);
 ```
 
-The serial link (`SerialLink`) notes the time of its last request and calls `LinkLost(SERIAL)` when none came within `kLeaseMs` (5 s). When the connection is not on that link, `LinkLost` does nothing.
+Each link has one request in flight at a time. The serial link (`SerialLink`) notes the time of the last request itself and calls `LinkLost(SERIAL)` when none came within `kLeaseMs` (5 s). `LinkLost` does nothing when the connection is not on that link.
 
 ### Single-loop probe
 
-A probe without an RTOS (`Port::SamplerPolicy` is `LoopSampling`) alternates USB commands and sampling in its main loop. The tick timer only counts ticks in its interrupt, and `Poll()` samples a tick once it sees a new one:
+On a probe without an RTOS the main loop is the execution context. The tick timer interrupt counts ticks (`OnTickIsr()`), and `Run()` samples one frame when a tick is due:
 
 ```cpp
 #include "xrdap/session/executor.hpp"
@@ -134,37 +125,31 @@ extern "C" void TIM2_IRQHandler()
 
 for (;;)
 {
-  vendor.Poll(tick);
-  (void)exec.StepUsb(vendor.Sampling() ? 0 : 1);  // no waiting in Step while sampling
+  exec.Run(tick, 1);
 }
 ```
 
-`HwTimerStart`, `HwTimerStop` and `HwTimerClear` stand for the platform's own timer code: count at 1 µs and interrupt every `period_us`.
+`HwTimerStart`, `HwTimerStop` and `HwTimerClear` stand for the platform's own timer code: it counts in 1 µs units and interrupts every `period_us`.
 
 ### Probe with an RTOS
 
-The sampling task of a probe with an RTOS (`Port::SamplerPolicy` is `TaskSampling`) blocks on a semaphore; the tick interrupt, a start, a stop and the end of a yield all wake it. The semaphore exists from the construction of `DapVendor`, so a sampling task that enters `RunSamplerTask()` later than the first `SUB_START` or the first tick interrupt does not lose those wakes. It should have the highest priority on the core that drives SWD. The USB DAP thread calls `StepUsb()` in a loop:
+The execution context is a task, pinned to the core that drives SWD; the serial and TCP link tasks only call `Execute()`. The tick interrupt wakes it through `WakeStep`, so it does not poll:
 
 ```cpp
-static LibXR::Thread sampler;
-sampler.Create<XrDap::DapVendor*>(
-    &vendor, [](XrDap::DapVendor* v) { v->RunSamplerTask(tick); }, "dap_sampler", 3072,
-    LibXR::Thread::Priority::REALTIME);
-
-static LibXR::Thread usb_dap;
-usb_dap.Create<XrDap::Executor<Dap>*>(
+static LibXR::Thread dap_thread;
+dap_thread.Create<XrDap::Executor<Dap>*>(
     &exec,
     [](XrDap::Executor<Dap>* e)
     {
       for (;;)
       {
-        (void)e->StepUsb(1);
+        e->Run(tick, UINT32_MAX);
       }
     },
-    "dap_usb", 4096, LibXR::Thread::Priority::HIGH);
+    "dap", 4096, LibXR::Thread::Priority::HIGH);
 ```
 
-`StepUsb(wait_ms)` first waits for a USB command in libxr's `WaitForWork` without holding the lock, and takes the lock to run it once it is there. The lock is held only while one command runs and does not promise first come first served. This needs libxr's `WaitForWork`.
+`Run(timer, wait_ms)` waits only when it did nothing, for `wait_ms` at most; the interrupt wakes once per tick that is due to be sampled, so a long frame does not pile up wakes. This needs libxr's `WaitForWork` and `WakeStep`.
 
 ### Serial link
 

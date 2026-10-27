@@ -10,6 +10,7 @@
 #include "xrdap/vendor/dap_vendor.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/sampler.hpp"
+#include "model_swd.hpp"
 
 using namespace XrDap::Vendor;
 using LibXR::ErrorCode;
@@ -27,100 +28,6 @@ namespace P = LibXR::Debug::SwdProtocol;
 
 namespace
 {
-class ModelSwd final : public LibXR::Debug::Swd
-{
- public:
-  bool desynced = false;
-  bool missing = false;
-  unsigned resets = 0;
-  unsigned enters = 0;
-  unsigned memory_reads = 0;
-  unsigned csw_reads = 0;
-  uint32_t value_bias = 0U;
-  uint32_t select = 0;
-  uint32_t posted = 0;
-  uint32_t csw[2] = {0x23000002U, 0x23000002U};
-  uint32_t tar[2] = {};
-  unsigned tar_writes = 0;
-  unsigned drw_attempts = 0;
-  unsigned fail_drw = 0;
-  unsigned parity_drw = 0;
-  bool parity_rdbuff = false;
-  std::vector<uint32_t> addresses;
-
-  ErrorCode SetClockHz(uint32_t) override { return ErrorCode::OK; }
-  void Close() override {}
-  ErrorCode EnterSwd() override
-  {
-    ++enters;
-    return LineReset();
-  }
-  ErrorCode LineReset() override
-  {
-    ++resets;
-    desynced = false;
-    select = 0;
-    InvalidateSelectCache();
-    return ErrorCode::OK;
-  }
-  void IdleClocks(uint32_t) override {}
-  ErrorCode SeqWriteBits(uint32_t, const uint8_t*) override { return ErrorCode::OK; }
-  ErrorCode SeqReadBits(uint32_t, uint8_t*) override { return ErrorCode::OK; }
-  ErrorCode Transfer(const P::Request& req, P::Response& resp) override
-  {
-    resp = {};
-    resp.ack = (desynced || missing) ? P::Ack::NO_ACK : P::Ack::OK;
-    if (resp.ack != P::Ack::OK) return ErrorCode::OK;
-    if (req.port == P::Port::DP)
-    {
-      if (req.rnw)
-      {
-        resp.rdata = req.addr2b == 0 ? 0x2BA01477U : posted;
-        if (req.addr2b == 3 && parity_rdbuff) resp.parity_ok = false;
-      }
-      else if (req.addr2b == 2)
-        select = req.wdata;
-      return ErrorCode::OK;
-    }
-    const unsigned ap = select >> 24;
-    CHECK_RECOVERY(ap < 2);
-    CHECK_RECOVERY((select & 0xF0U) == 0U);
-    if (req.rnw)
-    {
-      if (req.addr2b == 3 && ++drw_attempts == fail_drw)
-      {
-        resp.ack = P::Ack::FAULT;
-        return ErrorCode::OK;
-      }
-      resp.rdata = posted;
-      if (req.addr2b == 0)
-      {
-        ++csw_reads;
-        posted = csw[ap];
-      }
-      else if (req.addr2b == 3)
-      {
-        ++memory_reads;
-        addresses.push_back(tar[ap]);
-        posted = (tar[ap] ^ (0x12340000U + ap)) + value_bias;
-        if ((csw[ap] & 0x30U) == 0x10U)
-          tar[ap] = (tar[ap] & ~1023U) | ((tar[ap] + 4U) & 1023U);
-        if (drw_attempts == parity_drw) resp.parity_ok = false;
-      }
-    }
-    else if (req.addr2b == 0)
-      csw[ap] = req.wdata;
-    else if (req.addr2b == 1)
-    {
-      ++tar_writes;
-      tar[ap] = req.wdata;
-    }
-    else
-      CHECK_RECOVERY(false);  // These tests never write target memory.
-    return ErrorCode::OK;
-  }
-};
-
 struct Timer : TickTimer
 {
   void Start(uint32_t) override {}
@@ -156,7 +63,7 @@ void SamplerRecovery()
 {
   ModelSwd swd;
   MemAp mem(swd);
-  LoopSampler sampler(mem, +[](void*, uint32_t) { return true; }, nullptr);
+  Sampler sampler(mem, +[](void*, uint32_t) { return true; }, nullptr);
   Timer timer;
   // AP=0, id=1, u32 at 0x08000000, no dereference, div=1, phase=0.
   const uint8_t entry[] = {0, 1, 0, 4, 0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0};
@@ -169,17 +76,17 @@ void SamplerRecovery()
     CHECK_RECOVERY(got.frames == 1 && got.bytes == 15);
     CHECK_RECOVERY(got.skipped == 0 && got.dropped == 0);
   };
-  sampler.Poll(timer);
+  sampler.Sample(timer);
   take();
   CHECK_RECOVERY(Get32(frame) == 0 && frame[10] == 0);
   swd.desynced = true;
   sampler.OnTickIsr();
-  sampler.Poll(timer);
+  sampler.Sample(timer);
   take();
   CHECK_RECOVERY(Get32(frame) == 1 && frame[10] == 1);  // Keep evidence of the error.
   CHECK_RECOVERY(swd.resets == 0);
   sampler.OnTickIsr();
-  sampler.Poll(timer);
+  sampler.Sample(timer);
   take();
   CHECK_RECOVERY(Get32(frame) == 2 && frame[10] == 0);
   CHECK_RECOVERY(Get32(frame + 11) == (0x08000000U ^ 0x12340000U));
@@ -191,7 +98,7 @@ void SamplerRecovery()
   for (int i = 0; i < 5; ++i)
   {
     sampler.OnTickIsr();
-    sampler.Poll(timer);
+    sampler.Sample(timer);
     take();
     CHECK_RECOVERY(frame[10] == 1);
   }
@@ -285,7 +192,7 @@ void SamplerMergedTicksAndBatches()
   {
     ModelSwd swd;
     MemAp mem(swd);
-    LoopSampler sampler(mem, +[](void*, uint32_t) { return true; }, nullptr);
+    Sampler sampler(mem, +[](void*, uint32_t) { return true; }, nullptr);
     Timer timer;
     Item a;
     a.ap = 0U;
@@ -303,7 +210,7 @@ void SamplerMergedTicksAndBatches()
     // Inject failure after CSW reads during start, at the next two-word frame.
     if (kind == 6U) swd.fail_drw = swd.drw_attempts + 2U;
     if (kind == 7U) swd.parity_rdbuff = true;
-    sampler.Poll(timer);
+    sampler.Sample(timer);
     uint8_t frame[64] = {};
     auto got = sampler.TakeFrames(frame, sizeof(frame));
     CHECK_RECOVERY(got.frames == 1U && Get32(frame) == 0U);
@@ -326,16 +233,13 @@ void SamplerMergedTicksAndBatches()
       CHECK_RECOVERY(Get32(frame + 15U) == (b.base ^ (0x12340000U + b.ap)));
     }
     swd.parity_rdbuff = false;
-    sampler.CommandBegin();
-    sampler.CommandReadOnly();
     sampler.OnTickIsr(4U);  // Ticks 1..3 were missed; only frame 4 is produced.
-    sampler.Poll(timer);
-    sampler.CommandEnd();
+    sampler.Sample(timer);
     got = sampler.TakeFrames(frame, sizeof(frame));
     CHECK_RECOVERY(got.frames == 1U && Get32(frame) == 4U);
     CHECK_RECOVERY(got.skipped == 3U && got.dropped == 0U);
     sampler.OnTickIsr(0U);
-    sampler.Poll(timer);
+    sampler.Sample(timer);
     CHECK_RECOVERY(sampler.TakeFrames(frame, sizeof(frame)).frames == 0U);
     sampler.Stop();
   }
@@ -350,10 +254,8 @@ void StandardInfoDoesNotParkSampler()
   uint8_t response[128] = {};
   uint16_t length = 0U;
   const uint8_t connect[] = {0x02U, 0x01U};
-  vendor.CommandBegin();
   CHECK_RECOVERY(vendor.OnCommand(connect, sizeof(connect), response, sizeof(response),
                                   length) == XrDap::DapVendor::Result::PASS);
-  vendor.CommandEnd();
   Item item;
   item.ap = 0U;
   item.base = 0x08000000U;
@@ -361,27 +263,21 @@ void StandardInfoDoesNotParkSampler()
   const auto entries = Entries({item});
   std::vector<uint8_t> start = {0x83U, 0xA0U, 0x86U, 0x01U, 0U, 0U, 1U, 0U};
   start.insert(start.end(), entries.begin(), entries.end());
-  vendor.CommandBegin();
   CHECK_RECOVERY(vendor.OnCommand(start.data(), start.size(), response, sizeof(response),
                                   length) == XrDap::DapVendor::Result::HANDLED);
   CHECK_RECOVERY(response[1] == kStatusOk);
-  vendor.CommandEnd();
-  vendor.Poll(timer);
+  vendor.Sample(timer);
   const uint8_t info[] = {0x00U, 0x01U};
-  vendor.CommandBegin();
   CHECK_RECOVERY(vendor.OnCommand(info, sizeof(info), response, sizeof(response),
                                   length) == XrDap::DapVendor::Result::PASS);
   vendor.OnTickIsr();
-  vendor.Poll(timer);
+  vendor.Sample(timer);
   vendor.OnTickIsr();
-  vendor.Poll(timer);  // Still sampling with the read-only command turn open.
-  vendor.CommandEnd();
+  vendor.Sample(timer);  // Still sampling after a standard command.
   // Tick 0 plus the two ticks above: three frames, none skipped, none dropped.
   const uint8_t read[] = {0x85U, 0xFFU, 0x00U};
-  vendor.CommandBegin();
   CHECK_RECOVERY(vendor.OnCommand(read, sizeof(read), response, sizeof(response),
                                   length) == XrDap::DapVendor::Result::HANDLED);
-  vendor.CommandEnd();
   CHECK_RECOVERY(response[1] == kStatusOk);
   CHECK_RECOVERY(Get32(response + 14) == 0U);  // dropped
   CHECK_RECOVERY(Get32(response + 18) == 0U);  // skipped
@@ -390,10 +286,8 @@ void StandardInfoDoesNotParkSampler()
   CHECK_RECOVERY(Get32(response + kSubReadHeaderLen + 15U) == 1U);
   CHECK_RECOVERY(Get32(response + kSubReadHeaderLen + 30U) == 2U);
   const uint8_t stop[] = {0x84U, 0U};
-  vendor.CommandBegin();
   CHECK_RECOVERY(vendor.OnCommand(stop, sizeof(stop), response, sizeof(response),
                                   length) == XrDap::DapVendor::Result::HANDLED);
-  vendor.CommandEnd();
 }
 
 void ReuseCswKeepsDataFreshAndInvalidatesOnFailure()
@@ -464,10 +358,8 @@ void OnlyActiveSamplingReusesCommandCsw()
   uint16_t length = 0U;
   auto command = [&](const std::vector<uint8_t>& request)
   {
-    vendor.CommandBegin();
     const auto handled = vendor.OnCommand(request.data(), request.size(), response,
                                           sizeof(response), length);
-    vendor.CommandEnd();
     return handled;
   };
   CHECK_RECOVERY(command({0x02U, 0x01U}) == XrDap::DapVendor::Result::PASS);
@@ -491,11 +383,11 @@ void OnlyActiveSamplingReusesCommandCsw()
   start.insert(start.end(), encoded.begin(), encoded.end());
   CHECK_RECOVERY(command(start) == XrDap::DapVendor::Result::HANDLED);
   CHECK_RECOVERY(response[1] == kStatusOk && swd.csw_reads == 3U);
-  vendor.Poll(timer);
+  vendor.Sample(timer);
   CHECK_RECOVERY(read_value() == original && swd.csw_reads == 3U);
   swd.value_bias = 19U;
   vendor.OnTickIsr();
-  vendor.Poll(timer);
+  vendor.Sample(timer);
   CHECK_RECOVERY(read_value() == original + 19U && swd.csw_reads == 3U);
 
   CHECK_RECOVERY(command({0x84U, 0U}) == XrDap::DapVendor::Result::HANDLED);
@@ -521,10 +413,8 @@ void ConnectFromTheSamplingLinkRestartsIt()
   auto command = [&](XrDap::Transport link, const std::vector<uint8_t>& request)
   {
     vendor.SetCurrentLink(link);
-    vendor.CommandBegin();
     const auto handled = vendor.OnCommand(request.data(), request.size(), response,
                                           sizeof(response), length);
-    vendor.CommandEnd();
     return handled;
   };
   CHECK_RECOVERY(command(XrDap::Transport::USB, {0x02U, 0x01U}) ==

@@ -31,6 +31,7 @@ struct FakeDap
   using SessionResetGate = bool (*)(void*);
   void SetSessionResetGate(SessionResetGate, void*) {}
   LibXR::ErrorCode WaitForWork(uint32_t) { return LibXR::ErrorCode::OK; }
+  void WakeStep(bool) {}
   LibXR::ErrorCode Step(uint32_t) { return LibXR::ErrorCode::OK; }
   LibXR::ErrorCode ExecuteExternal(const uint8_t*, uint16_t, uint8_t*, uint16_t,
                                    uint16_t& out)

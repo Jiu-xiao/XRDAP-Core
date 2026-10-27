@@ -18,7 +18,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 
 | 模块 | 内容 |
 |---|---|
-| `session/` | `Executor`：所有进入 libxr DAP 实例的调用都经过它，一把互斥量保证一次只执行一条命令；`Transport` 只是命令来源的标签 |
+| `session/` | `Executor`：所有进入 libxr DAP 实例的调用都经过它，`Run()` 循环把 USB 命令、别的链路投来的请求和采样一件一件做，没有锁；`Transport` 只是命令来源的标签 |
 | `vendor/` | `DapVendor`（命令 0x80 到 0x85，以及平台挂上的一条附加命令，例如 XRDAP-ESP 的 0x86 Wi-Fi 配置）、`MemAp`（经 SWD 沿指针链访问 MEM-AP）、`Sampler`、`TickAccount`、`FrameRing`（探针端采样）、请求检查和回复空间 |
 | `serial/` | `Framer`（串口帧：帧头和 CRC 用 libxr Topic 的打包格式，这里只做 payload 和流式重同步）、`SerialLink`（串口收发线程） |
 | `activity/` | `DapActivity`：DAP 活动和 DAP_HostStatus 报告的上位机状态 |
@@ -26,19 +26,19 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 | `probe/` | `SetProbeInfo`、`FormatSerial`（DAP_Info 字符串和序列号规则）、`family.hpp`（VID:PID 和各板的 bcdDevice） |
 | `protocol/` | `dap_cmd.hpp`：取 libxr 的 CMSIS-DAP 命令号和状态值的别名，不再重复定义 |
 
-本仓库不碰外设。时间、互斥量和信号量用 libxr 的 `Timebase`、`Mutex`、`Semaphore`；libxr 没有统一抽象的部分由平台提供：
+本仓库不碰外设。时间和信号量用 libxr 的 `Timebase`、`Semaphore`；libxr 没有统一抽象的部分由平台提供：
 
 | 平台提供 | 说明 |
 |---|---|
-| `xrdap_port.hpp` | 采样帧缓冲大小 `Port::kRingBytes` 和它的自旋锁 `Port::SpinLock`；采样的运行方式 `Port::SamplerPolicy`（`TaskSampling` 或 `LoopSampling`，编译期二选一） |
-| 节拍定时器 | 实现 `Vendor::TickTimer`，中断里调用 `DapVendor::OnTickIsr()`；`TaskSampling` 下它会读 libxr 的 `Timebase`，时基须能在中断里读；`LoopSampling` 下中断只数节拍，不读时基 |
-| 线程 | 采样任务、USB 的 DAP 线程、串口线程（ESP 要固定到 SWD 所在的核） |
+| `xrdap_port.hpp` | 采样帧缓冲大小 `Port::kRingBytes` |
+| 节拍定时器 | 实现 `Vendor::TickTimer`，中断里调用 `DapVendor::OnTickIsr()`；中断只数节拍并在该采时叫醒执行上下文，不读时基 |
+| 线程 | 执行上下文（单循环的探针就是主循环；ESP 是钉在 SWD 所在核上的一个任务）、串口和 TCP 的链路任务 |
 | 会话的结束 | USB 复位计数、TCP 断开、无线会话号和 ping |
 | 灯 | 驱动、引脚和 USB 是否已配置的查询 |
 
 ## 接入
 
-需要 libxr 1c06b874（`feat/xrdap-r2-swd-loop`）或之后：`Executor` 用它的 `SetCommandHook(hook, ctx, length)` 把厂商命令的长度交给 libxr，`DAP_ExecuteCommands` 里才能放厂商命令；`StepUsb` 用它的 `WaitForWork` 在不占执行轮次时等 USB 命令；它的 `SetSessionResetGate` 让 USB 的连接和断开只在 USB 拥有探针或没有主人时复位 SWD。CI 用 `.github/workflows/ci.yml` 里固定的 libxr 提交（`LIBXR_COMMIT`，不早于上面的版本）编译和测试；CI 只在电脑上测试，不交叉编译各芯片的固件，那由各固件仓库负责。
+需要带 `WakeStep` 的 libxr（候选分支 `release/0.6-candidate`）：`Executor` 用它的 `SetCommandHook(hook, ctx, length)` 把厂商命令的长度交给 libxr，`DAP_ExecuteCommands` 里才能放厂商命令；`Run` 用它的 `WaitForWork` 和 `WakeStep` 在同一个地方等 USB 命令、别的链路的投递和节拍中断；它的 `SetSessionResetGate` 让 USB 的连接和断开只在 USB 拥有探针或没有主人时复位 SWD。CI 用 `.github/workflows/ci.yml` 里固定的 libxr 提交（`LIBXR_COMMIT`，不早于上面的版本）编译和测试；CI 只在电脑上测试，不交叉编译各芯片的固件，那由各固件仓库负责。
 
 固件工程 include `xrdap_core.cmake`，把源文件加进自己的目标，并保证这些源文件能找到 libxr 的头文件和平台的 `xrdap_port.hpp`：
 
@@ -50,55 +50,47 @@ target_include_directories(app.elf PRIVATE ${XRDAP_CORE_INCLUDE_DIRS} port)
 
 ESP-IDF 工程把 `XRDAP_CORE_SOURCES`、`XRDAP_CORE_INCLUDE_DIRS` 交给 `idf_component_register`。
 
-`xrdap_port.hpp` 给出采样帧缓冲的大小（2 的幂，INFO 会报告）、它的锁，以及采样的运行方式：有 RTOS、采样在自己的任务里选 `TaskSampling`，没有 RTOS、主循环里 `Poll()` 的选 `LoopSampling`。选定后 `DapVendor` 就是 `DapVendorT<Port::SamplerPolicy>`，另一种方式的入口（`LoopSampling` 下的 `RunSamplerTask()`、`TaskSampling` 下的 `Poll()`）不存在，调用它们编译不过；`LoopSampling` 下没有信号量和采样给命令让路，`Executor` 每条命令调用的 `CommandBegin()`、`CommandEnd()` 是空函数。采样和 SUB_READ 都会短暂持有这把锁（最多拷贝 1 KB），它不能阻塞：会阻塞的互斥量让优先级最高的采样任务在 SUB_READ 拷贝时睡下，短周期下节拍会迟到。双核的 ESP32 用 portMUX，单核 RTOS 用临界区，单循环的探针用空操作：
+`xrdap_port.hpp` 只给出采样帧缓冲的大小（2 的幂，INFO 会报告）：
 
 ```cpp
-// xrdap_port.hpp（单核 FreeRTOS）
+// xrdap_port.hpp
 #pragma once
 #include <cstdint>
-
-#include "FreeRTOS.h"
-#include "task.h"
-
-namespace XrDap::Vendor
-{
-class TaskSampling;  // 采样在自己的任务里；没有 RTOS 的写 class LoopSampling;
-}
 
 namespace XrDap::Port
 {
 inline constexpr uint32_t kRingBytes = 4096;
-using SamplerPolicy = Vendor::TaskSampling;
-
-class SpinLock
-{
- public:
-  void Lock() { taskENTER_CRITICAL(); }
-  void Unlock() { taskEXIT_CRITICAL(); }
-};
 }  // namespace XrDap::Port
 ```
 
 ## 用法
 
-### 执行器
+### 执行上下文
 
-所有 DAP 命令都经 `Executor` 进入 libxr 的 DAP 实例：USB 用 `StepUsb()`，别的链路用 `Execute()`。执行器用一把互斥量保证一次只执行一条命令，并记下命令从哪条链路来。探针一次只使用一条链路由使用者保证，Core 不仲裁：没有会话主人、没有排队、不回“忙”；两条链路同时发命令时，后拿到锁的等前一条执行完。`DAP_Connect` 记下它来自哪条链路，`DAP_Disconnect`、这条链路丢了、或连接在 USB 上时总线复位，连接和采样就作废，扩展命令要求重新 `DAP_Connect`：
+探针上只有一个执行上下文：所有进入 libxr DAP 实例的调用（USB 的 `Step`、别的链路投来的 `ExecuteExternal`）和采样都在 `Executor::Run()` 这个循环里一件一件做，SWD、DAP 类和厂商扩展因此只在一个线程里访问，没有锁。探针一次只使用一条链路由使用者保证，Core 不仲裁：没有会话主人、没有排队、不回“忙”。`DAP_Connect` 记下它来自哪条链路，`DAP_Disconnect`、这条链路丢了、或连接在 USB 上时总线复位，连接和采样就作废，扩展命令要求重新 `DAP_Connect`。
+
+一轮的顺序：
+
+1. 有 USB 命令就 `Step(0)` 执行一条，否则邮箱里有别的链路投来的请求就执行一条；
+2. 采样的节拍到了就采**一帧**，采完回头看有没有命令；
+3. 什么都没做就在 `WaitForWork` 里等：USB 命令、别的链路的投递、节拍中断（`WakeStep`）都会叫醒。
+
+命令因此最多被采样占一帧，采不过来的节拍计为跳拍，探针始终回应命令：
 
 ```cpp
 #include "xrdap/session/executor.hpp"
 
 static XrDap::DapVendor vendor(swd);
 static XrDap::DapActivity activity;
-static XrDap::Executor<Dap> exec(dap, vendor, activity);  // 装好命令钩子
+static XrDap::Executor<Dap> exec(dap, vendor, activity);  // 装好命令钩子和节拍唤醒
 
 vendor.SetUsbResetSource(&BusResetCount, &usb);  // 复位计数变了，连接在 USB 上时连接作废
 ```
 
-`BusResetCount` 代表平台读取 USB 总线复位次数的函数。各链路在自己丢失时告诉执行器：
+`BusResetCount` 代表平台读取 USB 总线复位次数的函数。别的链路（串口、TCP、无线）的任务只投递请求并等应答，各链路在自己丢失时告诉执行器：
 
 ```cpp
-// TCP 服务：每个请求
+// TCP 服务：每个请求（在链路自己的任务里，不是执行上下文）
 exec.Execute(XrDap::Transport::TCP, req, len, resp, sizeof(resp), out);
 // 客户端断开
 exec.LinkLost(XrDap::Transport::TCP);
@@ -108,11 +100,11 @@ exec.Execute(XrDap::Transport::RADIO, req, len, resp, sizeof(resp), out);
 exec.LinkLost(XrDap::Transport::RADIO);
 ```
 
-串口链路（`SerialLink`）自己记最后一个请求的时间，`kLeaseMs`（5 s）内没有请求就调 `LinkLost(SERIAL)`。连接不在这条链路上时，`LinkLost` 什么也不做。
+每条链路同时只有一条请求在途。串口链路（`SerialLink`）自己记最后一个请求的时间，`kLeaseMs`（5 s）内没有请求就调 `LinkLost(SERIAL)`。连接不在这条链路上时，`LinkLost` 什么也不做。
 
 ### 单循环探针
 
-没有 RTOS 的探针（`Port::SamplerPolicy` 为 `LoopSampling`）在主循环里交替执行 USB 命令和采样。节拍定时器只在中断里数节拍，`Poll()` 看到新节拍就采一拍：
+没有 RTOS 的探针，主循环就是执行上下文。节拍定时器的中断数节拍（`OnTickIsr()`），`Run()` 看到该采的节拍就采一帧：
 
 ```cpp
 #include "xrdap/session/executor.hpp"
@@ -133,8 +125,7 @@ extern "C" void TIM2_IRQHandler()
 
 for (;;)
 {
-  vendor.Poll(tick);
-  (void)exec.StepUsb(vendor.Sampling() ? 0 : 1);  // 采样时不在 Step 里等命令
+  exec.Run(tick, 1);
 }
 ```
 
@@ -142,28 +133,23 @@ for (;;)
 
 ### 有 RTOS 的探针
 
-有 RTOS 的探针（`Port::SamplerPolicy` 为 `TaskSampling`）的采样任务在信号量上阻塞，节拍中断、开始、停止和让路结束都会唤醒它；信号量在 `DapVendor` 构造时就存在，采样任务比第一条 `SUB_START` 或第一个节拍中断晚进入 `RunSamplerTask()` 也不会丢这些唤醒。它应为 SWD 所在核上优先级最高的任务。USB 的 DAP 线程循环调用 `StepUsb()`：
+执行上下文是一个任务，应钉在 SWD 所在的核上；串口、TCP 的链路任务只调 `Execute()`。节拍中断通过 `WakeStep` 叫醒它，所以它不必轮询：
 
 ```cpp
-static LibXR::Thread sampler;
-sampler.Create<XrDap::DapVendor*>(
-    &vendor, [](XrDap::DapVendor* v) { v->RunSamplerTask(tick); }, "dap_sampler", 3072,
-    LibXR::Thread::Priority::REALTIME);
-
-static LibXR::Thread usb_dap;
-usb_dap.Create<XrDap::Executor<Dap>*>(
+static LibXR::Thread dap_thread;
+dap_thread.Create<XrDap::Executor<Dap>*>(
     &exec,
     [](XrDap::Executor<Dap>* e)
     {
       for (;;)
       {
-        (void)e->StepUsb(1);
+        e->Run(tick, UINT32_MAX);
       }
     },
-    "dap_usb", 4096, LibXR::Thread::Priority::HIGH);
+    "dap", 4096, LibXR::Thread::Priority::HIGH);
 ```
 
-`StepUsb(wait_ms)` 先在 libxr 的 `WaitForWork` 里等 USB 命令，等待时不持有锁；有了命令才拿锁执行。锁只在执行一条命令时持有，不保证先来先到。需要 libxr 提供 `WaitForWork`。
+`Run(timer, wait_ms)` 在什么都没做时才等，最长 `wait_ms`；中断每次只在节拍到了要采的那一拍时叫醒一次，一帧很长时不会攒下唤醒。需要 libxr 提供 `WaitForWork` 和 `WakeStep`。
 
 ### 串口链路
 

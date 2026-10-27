@@ -1,35 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// XR 厂商扩展命令（0x80 到 0x85，协议版本
-// 2）：多地址读写、指针链解引用、探针端周期采样。还可挂一条
-// 附加命令（SetExtraCommand，由平台挂上，例如 XRDAP-ESP 的 Wi-Fi 配置）。由 Executor 在 libxr
-// DAP 执行上下文里调用。连接在哪条链路上、链路丢了怎么办见 OnLinkLost。协议见
-// docs/protocol.md 第 3 节。
-//
-// 采样有两种运行方式，平台在 xrdap_port.hpp 里用 Port::SamplerPolicy 二选一，编译期决定：
-// 单循环的探针（LoopSampling）在主循环里调用 Poll()；有 RTOS 的探针（TaskSampling）建一个
-// 任务运行 RunSamplerTask()。调用另一种方式的入口是编译错误。两种方式都要平台的节拍定时器，
-// 它的中断调用 OnTickIsr()。采样和 DAP_Connect 状态都记在会话编号上，会话结束即停。
+// XR 厂商扩展命令（0x80 到 0x85，协议版本 2）：多地址读写、指针链解引用、探针端周期采样。
+// 还可挂一条附加命令（SetExtraCommand，由平台挂上，例如 XRDAP-ESP 的 Wi-Fi 配置）。由
+// Executor 在执行上下文里调用，采样也在那里一帧一帧地做（Sample）。DAP_Connect 记下它来自
+// 哪条链路；连接在哪条链路上、链路丢了怎么办见 OnLinkLost。协议见 docs/protocol.md 第 3 节。
 //
 // XR vendor extension commands (0x80 to 0x85, protocol version 2): multi-address
-// read/write, pointer-chain
-// dereference and probe-side periodic sampling. One extra command can be attached
-// (SetExtraCommand, attached by the platform, e.g. XRDAP-ESP's Wi-Fi configuration). Executor calls it in the
-// libxr DAP execution context. Which link the connection is on and what happens when the
-// link is lost: see OnLinkLost. See docs/protocol.md section 3.
-//
-// Sampling runs one of two ways, chosen by the platform at compile time with
-// Port::SamplerPolicy in xrdap_port.hpp: a single-loop probe (LoopSampling) calls Poll()
-// in its main loop; a probe with an RTOS (TaskSampling) creates a task that runs
-// RunSamplerTask(). Calling the other way's entry is a compile error. Both need the
-// platform's tick timer, whose interrupt calls OnTickIsr().
-// Sampling and the DAP_Connect state are tied to the session number and lapse when the
-// session ends.
+// read/write, pointer-chain dereference and probe-side periodic sampling. One extra command
+// can be attached (SetExtraCommand, attached by the platform, e.g. XRDAP-ESP's Wi-Fi
+// configuration). Executor calls it in the execution context, where sampling is also done
+// one frame at a time (Sample). DAP_Connect notes the link it came from; which link the
+// connection is on and what happens when the link is lost: see OnLinkLost. See
+// docs/protocol.md section 3.
 
 #include <atomic>
 #include <cstdint>
-#include <type_traits>
 
 #include "debug/swd.hpp"
 #include "xrdap/session/transport.hpp"
@@ -37,15 +23,12 @@
 #include "xrdap/vendor/sampler.hpp"
 #include "xrdap/vendor/sampling.hpp"
 #include "xrdap/vendor/protocol.hpp"
-#include "xrdap_port.hpp"
 
 namespace XrDap
 {
 
-/// 与采样运行方式无关的命令处理：READ、WRITE、INFO、附加命令和长度检查 / Command
-/// handling that does not depend on how sampling runs: READ, WRITE, INFO, the extra command
-/// and the length check.
-class DapVendorBase
+/// XR 厂商扩展命令处理器 / XR vendor extension command handler.
+class DapVendor
 {
  public:
   /// 一条命令的处理结果 / Outcome of one command.
@@ -128,9 +111,13 @@ class DapVendorBase
   ///       context (interrupts included).
   bool RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len) const;
 
- protected:
-  explicit DapVendorBase(LibXR::Debug::Swd& swd) : mem_(swd) {}
-  ~DapVendorBase() = default;
+ public:
+  /// @param swd SWD 实现，生命周期需长于本对象 / SWD implementation; must outlive this
+  ///        object.
+  explicit DapVendor(LibXR::Debug::Swd& swd)
+      : mem_(swd), sampler_(mem_, &DapVendor::KeepSampling, this)
+  {
+  }
 
   bool Connected();
   /// 采样发起时的链路代数是否还有效 / Whether the link epoch sampling started in is
@@ -175,73 +162,31 @@ class DapVendorBase
   ExtraHandler extra_handler_ = nullptr;
   ExtraLength extra_length_ = nullptr;
   void* extra_ctx_ = nullptr;
-};
 
-/// @brief XR 厂商扩展命令处理器；Policy 是采样的运行策略（TaskSampling 或 LoopSampling）/
-///        XR vendor extension command handler; Policy is the sampling policy
-///        (TaskSampling or LoopSampling).
-/// @note 平台用 DapVendor（即 DapVendorT<Port::SamplerPolicy>）/ Platforms use DapVendor,
-///       which is DapVendorT<Port::SamplerPolicy>.
-template <class Policy>
-class DapVendorT : public DapVendorBase
-{
  public:
-  /// @param swd SWD 实现，生命周期需长于本对象 / SWD implementation; must outlive this
-  ///        object.
-  explicit DapVendorT(LibXR::Debug::Swd& swd)
-      : DapVendorBase(swd), sampler_(mem_, &DapVendorT::KeepSampling, this)
-  {
-  }
-
   /// @brief 处理一条命令 / Handle one command.
   /// @note 只在 libxr DAP 执行上下文里调用（Executor 的钩子）/ Call only in the libxr DAP
   ///       execution context (Executor's hook).
   Result OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                    uint16_t& out);
 
-  /// @brief 单循环：主循环在两条 DAP 命令之间调用，新节拍到了就采一拍 / Single loop:
-  ///        call between DAP commands in the main loop; samples a tick once a new one
-  ///        came.
-  /// @note 与 DAP 执行在同一个线程；任务策略下没有这个函数 / Same thread as the DAP
-  ///       execution; not available under the task policy.
-  template <class P = Policy, std::enable_if_t<!P::kRunsInTask, int> = 0>
-  void Poll(Vendor::TickTimer& timer)
-  {
-    sampler_.Poll(timer);
-  }
+  /// @brief 执行上下文每一轮调用：到了要采的节拍就采一帧 / Called once per round of the
+  ///        execution context: samples one frame when a tick is due.
+  /// @return true 时下一个要采的节拍已经到了 / True when the next tick is already due.
+  bool Sample(Vendor::TickTimer& timer) { return sampler_.Sample(timer); }
 
-  /// @brief 是否正在采样，单循环主循环据此不在等命令时阻塞 / Whether sampling runs, so a
-  ///        single main loop does not block waiting for commands.
-  /// @note 任务策略：任何上下文；单循环策略：只在主循环里 / Task policy: any context;
-  ///       single-loop policy: the main loop only.
+  /// 是否有节拍到期要采 / Whether a tick is due.
+  bool SampleDue() const { return sampler_.Due(); }
+
+  /// @brief 是否正在采样 / Whether sampling runs.
+  /// @note 任何上下文 / Any context.
   bool Sampling() const { return sampler_.Active(); }
 
-  /// @brief 任务：采样任务的函数体，不返回 / Task: body of the sampling task; never
-  ///        returns.
-  /// @note 平台建的采样任务里调用；任务应为 SWD 所在核上优先级最高的任务；单循环策略下没有
-  ///       这个函数 / Call from the platform's sampling task, which should have the highest
-  ///       priority on the core that drives SWD; not available under the single-loop
-  ///       policy.
-  template <class P = Policy, std::enable_if_t<P::kRunsInTask, int> = 0>
-  [[noreturn]] void RunSamplerTask(Vendor::TickTimer& timer)
-  {
-    sampler_.RunTask(timer);
-  }
-
-  /// @brief 一条命令开始等执行（单循环策略下是空函数）/ A command starts waiting to run
-  ///        (an empty function under the single-loop policy).
-  /// @note 执行器在命令排队等执行轮次之前调用 / Called by the executor before the command
-  ///       queues for an execution turn.
-  void CommandBegin() { sampler_.CommandBegin(); }
-
-  /// Mark the current frame fetch/status command as non-blocking for sampling.
-  void CommandReadOnly() { sampler_.CommandReadOnly(); }
-
-  /// @brief 一条命令执行完（单循环策略下是空函数）/ A command has run (an empty function
-  ///        under the single-loop policy).
-  /// @note 执行器在交出执行轮次之后调用 / Called by the executor after it hands over the
-  ///       execution turn.
-  void CommandEnd() { sampler_.CommandEnd(); }
+  /// @brief 设置叫醒执行上下文的函数，节拍到了时由节拍中断调用；不设置时中断只计数 /
+  ///        Set the function that wakes the execution context, called by the tick
+  ///        interrupt when a tick is due; without it the interrupt only counts.
+  /// @note 初始化时调用 / Call at initialisation.
+  void SetWake(Vendor::WakeFn fn, void* ctx) { sampler_.SetWake(fn, ctx); }
 
   /// @brief 节拍定时器中断调用 / Called by the tick timer interrupt.
   /// @note 中断上下文 / Interrupt context.
@@ -268,11 +213,7 @@ class DapVendorT : public DapVendorBase
   bool CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                   uint16_t& out);
 
-  Vendor::SamplerT<Policy> sampler_;
+  Vendor::Sampler sampler_;
 };
-
-/// 平台选定的采样策略下的命令处理器 / The command handler under the platform's chosen
-/// sampling policy.
-using DapVendor = DapVendorT<Port::SamplerPolicy>;
 
 }  // namespace XrDap
