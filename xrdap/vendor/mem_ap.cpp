@@ -144,7 +144,7 @@ bool MemAp::ReadCsw(uint8_t ap, uint32_t& csw)
     Ack ack = Ack::NO_ACK;
     // 事务先执行、再按它的 ack 判定，见 TxnOk 的注释 / Run the transfer first, judge its
     // ack after; see the comment on TxnOk.
-    const auto STEP = [&ack](LibXR::ErrorCode ec) { return TxnOk(ec, ack); };
+    const auto STEP = [this, &ack](LibXR::ErrorCode ec) { return TxnOk(ec, ack); };
 
     bool ok =
         STEP(swd_.SetSelectCached(select, ack)) && STEP(swd_.ApReadTxn(kApCsw, csw, ack));
