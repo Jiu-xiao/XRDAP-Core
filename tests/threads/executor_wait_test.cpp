@@ -405,6 +405,47 @@ void PlatformCommandIsMeasuredAndClassedByThePlatform()
   std::printf("  PlatformCommandIsMeasuredAndClassedByThePlatform: done\n");
 }
 
+struct SingleProbe
+{
+  NoSwd swd;
+  XrDap::SessionOwner session;
+  XrDap::DapVendor vendor{swd, session};
+  XrDap::DapActivity activity;
+  FakeDap dap;
+  XrDap::Executor<FakeDap, XrDap::Session::SingleTransport> exec{dap, session, vendor,
+                                                                 activity};
+};
+
+void SingleTransportHasNoQueueAndKeepsItsSession()
+{
+  // 只有 USB 一条传输：没有排队的状态；每条命令由 USB 准入，没有会话时开始一个，
+  // DAP_Disconnect 结束它，之后的命令再开始新的一个 / USB is the only transport: no
+  // queueing state; USB admits every command and starts a session when there is none,
+  // DAP_Disconnect ends it, and the next command starts a new one.
+  using Single = XrDap::Executor<FakeDap, XrDap::Session::SingleTransport>;
+  using Multi = XrDap::Executor<FakeDap, XrDap::Session::MultiTransport>;
+  static_assert(!Single::kMultiTransport && Multi::kMultiTransport, "policy flag");
+  static_assert(sizeof(Single) < sizeof(Multi), "no queue, no wake semaphores");
+  SingleProbe p;
+  EXPECT(p.session.Session() == 0U);
+  p.dap.Feed(Byte(DapCmd::CONNECT));
+  EXPECT(p.exec.StepUsb(100U) == ErrorCode::OK);
+  EXPECT(p.session.Owner() == XrDap::Transport::USB);
+  const uint32_t first = p.session.Session();
+  EXPECT(first != 0U);
+  p.dap.Feed(Byte(DapCmd::INFO));
+  EXPECT(p.exec.StepUsb(100U) == ErrorCode::OK);
+  EXPECT(p.session.Session() == first);  // 同一个会话 / the same session
+  p.dap.Feed(Byte(DapCmd::DISCONNECT));
+  EXPECT(p.exec.StepUsb(100U) == ErrorCode::OK);
+  EXPECT(p.session.Owner() == XrDap::Transport::NONE);
+  EXPECT(!p.session.Alive(first, 0U));
+  p.dap.Feed(Byte(DapCmd::CONNECT));
+  EXPECT(p.exec.StepUsb(100U) == ErrorCode::OK);
+  EXPECT(p.session.Session() != 0U && p.session.Session() != first);
+  std::printf("  SingleTransportHasNoQueueAndKeepsItsSession: done\n");
+}
+
 void SerialWriteResultsAreUnambiguous()
 {
   // 串口链路不带完成通知地写：OK 表示已进队列、一定发出，不重试；FULL 和 BUSY 表示没进
@@ -430,6 +471,7 @@ int main()
   ForwardedDisconnectEndsTheSession();
   UsbRebindLeavesAnotherOwnersSwdAlone();
   PlatformCommandIsMeasuredAndClassedByThePlatform();
+  SingleTransportHasNoQueueAndKeepsItsSession();
   SerialWriteResultsAreUnambiguous();
   std::printf("%d failed\n", g_failures);
   return g_failures == 0 ? 0 : 1;

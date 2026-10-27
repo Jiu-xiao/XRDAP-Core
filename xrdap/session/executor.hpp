@@ -31,6 +31,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <type_traits>
 
 #include "libxr_def.hpp"
 #include "semaphore.hpp"
@@ -41,6 +42,7 @@
 #include "xrdap/session/busy_reply.hpp"
 #include "xrdap/session/command_class.hpp"
 #include "xrdap/session/session_owner.hpp"
+#include "xrdap/session/transport_policy.hpp"
 #include "xrdap/session/turn_queue.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
 
@@ -52,10 +54,16 @@ namespace XrDap
 ///         SetCommandHook 和 SetSessionResetGate）/ libxr DAP class (providing
 ///         WaitForWork, Step, ExecuteExternal, SetCommandHook with the length hook and
 ///         SetSessionResetGate).
-template <typename DapT>
+/// @tparam Policy 传输策略（transport_policy.hpp），平台在 xrdap_port.hpp 里选 /
+///         Transport policy (transport_policy.hpp), chosen by the platform in
+///         xrdap_port.hpp.
+template <typename DapT, typename Policy = Port::TransportPolicy>
 class Executor
 {
  public:
+  /// 是否有两条以上传输 / Whether there are two or more transports.
+  static constexpr bool kMultiTransport = Policy::kMulti;
+
   /// @brief 平台转发器：返回 true 表示命令已由平台处理并填好回复 / Platform forwarder:
   ///        returns true once the platform handled the command and filled the reply.
   /// @note 在 DAP 执行上下文里调用，已确认 t 拥有探针 / Called in the DAP execution
@@ -88,6 +96,7 @@ class Executor
   ///       initialisation, before commands run; the table must outlive this object.
   void SetFreeCommands(const FreeCommand* commands, size_t count)
   {
+    static_assert(kMultiTransport, "a single-transport probe has no commands to classify");
     platform_free_ = commands;
     platform_free_count_ = count;
   }
@@ -106,11 +115,18 @@ class Executor
     {
       return LibXR::ErrorCode::TIMEOUT;
     }
-    Turn turn(*this, Transport::USB);
-    current_ = Transport::USB;
-    const LibXR::ErrorCode ec = dap_.Step(0);
-    current_ = Transport::NONE;
-    return ec;
+    if constexpr (kMultiTransport)
+    {
+      Turn turn(*this, Transport::USB);
+      current_ = Transport::USB;
+      const LibXR::ErrorCode ec = dap_.Step(0);
+      current_ = Transport::NONE;
+      return ec;
+    }
+    else
+    {
+      return dap_.Step(0);
+    }
   }
 
   /// @brief 别的传输：排队等到轮次，同步执行一条命令 / Other transports: queue for a
@@ -121,6 +137,7 @@ class Executor
   void Execute(Transport t, const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                uint16_t& out)
   {
+    static_assert(kMultiTransport, "a single-transport probe has only USB");
     Turn turn(*this, t);
     current_ = t;
     out = 0U;
@@ -132,7 +149,11 @@ class Executor
   ///        它的会话 / Transport t went away (TCP client closed, serial link stopped,
   ///        radio session id changed): end its session if t is the owner.
   /// @note 任何任务，不能在中断里 / Any task, not from an interrupt.
-  void EndSession(Transport t) { session_.End(t); }
+  void EndSession(Transport t)
+  {
+    static_assert(kMultiTransport, "a single-transport probe has only USB");
+    session_.End(t);
+  }
 
   struct CommandStatistics
   {
@@ -151,6 +172,7 @@ class Executor
   /// @note 任何任务，不能在中断里 / Any task, not from an interrupt.
   void TouchSession(Transport t)
   {
+    static_assert(kMultiTransport, "a single-transport probe has only USB");
     session_.Touch(t, static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds()));
   }
 
@@ -165,11 +187,11 @@ class Executor
       // 从排队起就算在等：采样最多再读一帧就让路 / Waiting counts from queueing on:
       // sampling reads at most one more frame, then yields.
       e_.vendor_.CommandBegin();
-      TurnQueue::Arrival a = e_.turns_.Arrive(t);
+      TurnQueue::Arrival a = e_.queue_.turns.Arrive(t);
       while (a == TurnQueue::Arrival::FULL)
       {
         LibXR::Thread::Sleep(1);
-        a = e_.turns_.Arrive(t);
+        a = e_.queue_.turns.Arrive(t);
       }
       if (a == TurnQueue::Arrival::QUEUED)
       {
@@ -178,7 +200,7 @@ class Executor
     }
     ~Turn()
     {
-      const Transport next = e_.turns_.Leave();
+      const Transport next = e_.queue_.turns.Leave();
       if (next != Transport::NONE)
       {
         e_.Wake(next).Post();
@@ -192,7 +214,7 @@ class Executor
     Executor& e_;
   };
 
-  LibXR::Semaphore& Wake(Transport t) { return wake_[static_cast<uint8_t>(t)]; }
+  LibXR::Semaphore& Wake(Transport t) { return queue_.wake[static_cast<uint8_t>(t)]; }
 
   static bool Hook(void* ctx, const uint8_t* req, uint16_t len, uint8_t* resp,
                    uint16_t cap, uint16_t& out)
@@ -230,26 +252,35 @@ class Executor
     {
       return false;
     }
-    const Transport t = current_;
-    const uint8_t cmd = req[0];
+    const Transport t = kMultiTransport ? current_ : Transport::USB;
     const auto now = static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds());
-    if (ClassifyCommand(req, len, platform_free_, platform_free_count_) ==
-        CommandClass::OWNER)
+    if constexpr (kMultiTransport)
     {
-      if (!session_.Admit(t, now))
+      const uint8_t cmd = req[0];
+      if (ClassifyCommand(req, len, platform_free_, platform_free_count_) ==
+          CommandClass::OWNER)
       {
-        busy_replies_.fetch_add(1U);
-        WriteBusyReply(cmd, resp, cap, out);
-        return true;
+        if (!session_.Admit(t, now))
+        {
+          busy_replies_.fetch_add(1U);
+          WriteBusyReply(cmd, resp, cap, out);
+          return true;
+        }
+        if (t == Transport::USB)
+        {
+          last_usb_owner_command_.store(cmd);
+        }
+        else if (t == Transport::TCP)
+        {
+          last_tcp_owner_command_.store(cmd);
+        }
       }
-      if (t == Transport::USB)
-      {
-        last_usb_owner_command_.store(cmd);
-      }
-      else if (t == Transport::TCP)
-      {
-        last_tcp_owner_command_.store(cmd);
-      }
+    }
+    else
+    {
+      // 只有 USB：每条命令都由它准入，没有会话时开始一个 / USB only: it admits every
+      // command, starting a session when there is none.
+      (void)session_.Admit(t, now);
     }
     if (forwarder_ != nullptr && forwarder_(forwarder_ctx_, t, req, len, resp, cap, out))
     {
@@ -293,10 +324,18 @@ class Executor
 
   const FreeCommand* platform_free_ = nullptr;
   size_t platform_free_count_ = 0U;
-  TurnQueue turns_;
-  /// 每条传输一个，交接轮次时唤醒排队的任务 / One per transport; wakes the queued task
-  /// on a hand-over.
-  LibXR::Semaphore wake_[static_cast<uint8_t>(Transport::RADIO) + 1U];
+  /// 排队的状态，只有多传输才有 / Queueing state, present only with several transports.
+  struct QueueState
+  {
+    TurnQueue turns;
+    /// 每条传输一个，交接轮次时唤醒排队的任务 / One per transport; wakes the queued task
+    /// on a hand-over.
+    LibXR::Semaphore wake[static_cast<uint8_t>(Transport::RADIO) + 1U];
+  };
+  struct NoQueueState
+  {
+  };
+  std::conditional_t<kMultiTransport, QueueState, NoQueueState> queue_;
   Transport current_ = Transport::NONE;
   std::atomic<uint32_t> last_usb_owner_command_{0xFFU};
   std::atomic<uint32_t> last_tcp_owner_command_{0xFFU};
