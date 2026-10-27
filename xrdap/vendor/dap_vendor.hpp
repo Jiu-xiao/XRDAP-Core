@@ -35,8 +35,8 @@
 #include "xrdap/session/transport.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/sampler.hpp"
-#include "xrdap/vendor/sampler_policy.hpp"
-#include "xrdap/vendor/vendor_protocol.hpp"
+#include "xrdap/vendor/sampling.hpp"
+#include "xrdap/vendor/protocol.hpp"
 #include "xrdap_port.hpp"
 
 namespace XrDap

@@ -5,9 +5,9 @@
 
 #include "timebase.hpp"
 #include "xrdap/protocol/dap_cmd.hpp"
-#include "xrdap/vendor/reply_space.hpp"
-#include "xrdap/vendor/request_length.hpp"
-#include "xrdap/vendor/sub_start.hpp"
+#include "xrdap/vendor/protocol.hpp"
+#include "xrdap/vendor/protocol.hpp"
+#include "xrdap/vendor/protocol.hpp"
 
 namespace XrDap
 {

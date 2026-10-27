@@ -7,7 +7,7 @@
 // specification ([0x7F, count, commands...], commands back to back with no length
 // field; the reference DAP_ProcessCommand returns the request length for vendor commands
 // too) and the request formats of docs/protocol.md 3.4 and 3.7.
-#include "xrdap/vendor/request_length.hpp"
+#include "xrdap/vendor/protocol.hpp"
 
 #include <vector>
 

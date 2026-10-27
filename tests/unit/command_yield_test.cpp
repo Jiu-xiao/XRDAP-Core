@@ -7,7 +7,7 @@
 // a command waiting sampling reads at most one more frame, later ticks are given up and
 // counted as skipped, the last command to finish wakes sampling, which resumes from the
 // next tick; nothing changes with no command waiting.
-#include "xrdap/vendor/command_yield.hpp"
+#include "xrdap/vendor/sampling.hpp"
 
 #include "check.hpp"
 

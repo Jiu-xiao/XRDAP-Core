@@ -4,7 +4,7 @@
 // 启动顺序用例（Start 和节拍中断早于采样任务进入 RunTask）是这次把运行方式拆成两个策略
 // 类型所修的问题的回归。
 //
-// 判据：docs/protocol.md 3.5、xrdap/vendor/sampler.hpp 和 command_yield.hpp 头部的说明。
+// 判据：docs/protocol.md 3.5、xrdap/vendor/sampler.hpp 和 sampling.hpp 头部的说明。
 // 确定性：不读真实时钟来判对错。节拍由测试线程手动调用 OnTickIsr 注入；等待都带超时，
 // 并且等的是一个明确的状态（帧到了、定时器 Stop 了、采样停车了）；"不应该发生"的事用一小
 // 段静置时间后再查，静置不够只会让坏结果漏过，不会让好结果失败。
@@ -15,7 +15,7 @@
 // (Start and the tick interrupt before the sampling task enters RunTask) are the
 // regression for the problem fixed by splitting the way to run into two policy types.
 //
-// Oracle: docs/protocol.md 3.5 and the headers of sampler.hpp and command_yield.hpp.
+// Oracle: docs/protocol.md 3.5 and the headers of sampler.hpp and sampling.hpp.
 // Determinism: no verdict depends on the real clock. Ticks are injected by calling
 // OnTickIsr from the test thread; every wait has a timeout and waits for a definite state
 // (frame arrived, timer stopped, sampler parked); something that must not happen is

@@ -6,12 +6,12 @@
 // OnTickIsr()，把节拍计数加上实际跨过的周期数；采样醒来后按 TickAccount 决定采哪一拍、
 // 跳过了几拍，时基只用来给帧打时间戳。每一拍在 MemAp::Lock 里完成：确认这次运行还在
 // （代号没变）、读到期的条目、把帧放进缓冲，所以停止后换了配置也不会混进旧的帧。
-// 运行方式由策略类型 Policy 在编译期决定（sampler_policy.hpp），Sampler 只留两种方式共用
+// 运行方式由策略类型 Policy 在编译期决定（sampling.hpp），Sampler 只留两种方式共用
 // 的部分：帧的组装、MEM-AP 访问、重新同步、节拍账目和帧缓冲。
 //   任务（TaskSampling）：平台建一个任务运行 RunTask()，任务在信号量上无超时地阻塞，计数到达
 //     下一个要采的节拍、Start、Stop 和让路结束都唤醒它。任务应为 SWD 所在核上优先级最高的
 //     任务。它不会饿死同一核上的命令处理：任务只为要采的节拍醒来，两帧之间至少空出
-//     max(15 us, 周期/8, 占用/4)（见 tick_account.hpp），所以任何周期下命令处理都至少有
+//     max(15 us, 周期/8, 占用/4)（见 sampling.hpp），所以任何周期下命令处理都至少有
 //     这个核约 1/5 的时间（节拍中断本身除外）。
 //   单循环（LoopSampling，没有 RTOS）：主循环在两条 DAP 命令之间调用 Poll()，计数变了就采
 //     一拍。
@@ -23,14 +23,14 @@
 // MemAp::Lock: it checks the run is still current (same generation), reads the due items
 // and puts the frame into the buffer, so a frame of an old run cannot land after a stop
 // and a new configuration. The way to run is chosen at compile time by the policy type
-// Policy (sampler_policy.hpp); Sampler keeps only what both ways share: frame assembly,
+// Policy (sampling.hpp); Sampler keeps only what both ways share: frame assembly,
 // MEM-AP access, resynchronisation, tick accounting and the frame buffer.
 //   Task (TaskSampling): the platform creates a task that runs RunTask(); it blocks on a
 //     semaphore with no timeout, and the count reaching the next tick to sample, Start,
 //     Stop and the end of a yield wake it. The task should have the highest priority on
 //     the core that drives SWD. It does not starve command handling on that core: the task
 //     wakes only for ticks it samples, and at least max(15 us, period/8, busy/4) is left
-//     free between two frames (see tick_account.hpp), so at any period command handling
+//     free between two frames (see sampling.hpp), so at any period command handling
 //     gets at least about 1/5 of the core (the tick interrupts themselves aside).
 //   Single loop (LoopSampling, no RTOS): the main loop calls Poll() between DAP commands
 //     and samples a tick when the count changed.
@@ -38,11 +38,11 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "xrdap/vendor/frame_ring.hpp"
+#include "xrdap/vendor/sampling.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
-#include "xrdap/vendor/sampler_policy.hpp"
-#include "xrdap/vendor/tick_account.hpp"
-#include "xrdap/vendor/vendor_protocol.hpp"
+#include "xrdap/vendor/sampling.hpp"
+#include "xrdap/vendor/sampling.hpp"
+#include "xrdap/vendor/protocol.hpp"
 
 namespace XrDap::Vendor
 {

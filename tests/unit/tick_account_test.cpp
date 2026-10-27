@@ -6,7 +6,7 @@
 // and B9 (keep-up is judged by skipped ticks, dropped frames and ring fill), and
 // docs/protocol.md 3.5 (late ticks are not made up; a tick that takes too long gives one
 // up).
-#include "xrdap/vendor/tick_account.hpp"
+#include "xrdap/vendor/sampling.hpp"
 
 #include "check.hpp"
 

@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "check.hpp"
-#include "xrdap/vendor/vendor_protocol.hpp"
+#include "xrdap/vendor/protocol.hpp"
 
 using namespace XrDap::Vendor;
 

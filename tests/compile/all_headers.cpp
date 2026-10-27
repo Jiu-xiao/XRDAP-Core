@@ -12,12 +12,12 @@
 #include "xrdap/session/executor.hpp"
 #include "xrdap/session/transport.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
-#include "xrdap/vendor/frame_ring.hpp"
+#include "xrdap/vendor/sampling.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
-#include "xrdap/vendor/request_length.hpp"
+#include "xrdap/vendor/protocol.hpp"
 #include "xrdap/vendor/sampler.hpp"
-#include "xrdap/vendor/sampler_policy.hpp"
-#include "xrdap/vendor/vendor_protocol.hpp"
+#include "xrdap/vendor/sampling.hpp"
+#include "xrdap/vendor/protocol.hpp"
 
 namespace
 {

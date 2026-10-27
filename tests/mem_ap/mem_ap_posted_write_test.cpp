@@ -21,7 +21,7 @@
 #include "../unit/check.hpp"
 #include "debug/swd.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
-#include "xrdap/vendor/vendor_protocol.hpp"
+#include "xrdap/vendor/protocol.hpp"
 
 namespace
 {

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "xrdap/vendor/sampler_timing.hpp"
+#include "xrdap/vendor/sampling.hpp"
 
 #include "check.hpp"
-#include "xrdap/vendor/tick_account.hpp"
+#include "xrdap/vendor/sampling.hpp"
 
 using namespace XrDap::Vendor;
 

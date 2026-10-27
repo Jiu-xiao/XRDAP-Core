@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+// XR 厂商扩展的线上格式和请求检查：命令号、状态码、条目、小端工具，DAP_ExecuteCommands
+// 里厂商命令的长度，回复放不放得下，SUB_START 请求的检查。协议见 docs/protocol.md 第 3 节。
+//
+// Wire format and request checks of the XR vendor extension: command bytes, status codes,
+// items, little-endian helpers, the length of a vendor command inside
+// DAP_ExecuteCommands, whether a reply fits, and the SUB_START request checks. See
+// docs/protocol.md section 3.
+
+// ===== Wire format 线上格式 =====
+
 // XR 厂商扩展的线上格式：命令号、状态码、上限、条目和小端字节序工具。协议见
 // docs/protocol.md 第 3 节。
 //
@@ -228,5 +238,105 @@ struct SubItemList
     }
   }
 };
+
+}  // namespace XrDap::Vendor
+
+// ===== Request length 请求长度 =====
+
+// 厂商命令请求的长度（docs/protocol.md 3.2）。DAP_ExecuteCommands 和 DAP_QueueCommands
+// 把多条命令首尾相接放在一个包里，没有长度字段，CMSIS-DAP 要求每条命令的长度能从它自己
+// 的内容得出。标准命令由 libxr 计算，0x80 到 0x85 由这里计算，平台挂的附加命令自己算，libxr 经长度钩子来问。
+//
+// Request length of vendor commands (docs/protocol.md 3.2). DAP_ExecuteCommands and
+// DAP_QueueCommands place several commands back to back in one packet with no length
+// field; CMSIS-DAP requires every command's length to follow from its own content.
+// libxr works out standard commands, this works out 0x80 to 0x85, a platform works out its
+// own extra command, and libxr asks through its length hook.
+
+#include <cstdint>
+
+namespace XrDap::Vendor
+{
+
+/// @brief 算出 req 开头这条厂商命令的请求字节数 / Work out the request bytes of the
+///        vendor command at the start of req.
+/// @param avail req 里可用的字节数 / Bytes available in req.
+/// @param len 成功时为这条命令的字节数，不超过 avail / On success, the bytes of this
+///        command, at most avail.
+/// @return 命令号不是 0x80 到 0x85 或内容不完整时 false / False when the command is not
+///         0x80 to 0x85 or its content is incomplete.
+/// @note 纯函数，任何上下文 / Pure function, any context.
+bool RequestLength(const uint8_t* req, uint16_t avail, uint16_t& len);
+
+}  // namespace XrDap::Vendor
+
+// ===== Reply space 回复空间 =====
+
+// 厂商命令的回复空间检查，所有命令共用一处（docs/protocol.md 3.2）。执行前先算出这条
+// 命令的回复要多少字节：空间不到 2 字节时只回一个 0xFF，不够整条回复时回
+// [命令号, 0x03]，都不执行命令，也不写出给定的空间。DAP_ExecuteCommands 里排在后面的
+// 命令剩下的空间可能只有 1 字节。
+//
+// Reply space check for vendor commands, one place for all of them (docs/protocol.md
+// 3.2). Before a command runs, the bytes its reply needs are worked out: with less than
+// 2 bytes of space the reply is 0xFF alone, with less than the whole reply it is
+// [command, 0x03]; the command does not run in either case and nothing is written past
+// the given space. A command late in a DAP_ExecuteCommands batch may have only 1 byte
+// left.
+
+#include <cstdint>
+
+namespace XrDap::Vendor
+{
+
+/// @brief 命令 0x80 到 0x85 的回复最多要多少字节；请求本身不合法时为 2（只回状态）/
+///        Bytes the reply of command 0x80 to 0x85 needs at most; 2 (status only) when
+///        the request itself is malformed.
+/// @note 纯函数，任何上下文 / Pure function, any context.
+uint16_t RequiredReply(const uint8_t* req, uint16_t len);
+
+/// @brief 检查回复空间，不够时写好回复 / Check the reply space and write the reply when
+///        it is short.
+/// @param need 这条命令的回复要的字节数，至少 2 / Bytes this command's reply needs, at
+///        least 2.
+/// @return 空间够、可以执行时 true / True when there is room and the command may run.
+/// @note 纯函数，任何上下文 / Pure function, any context.
+bool ReserveReply(uint8_t cmd, uint16_t need, uint8_t* resp, uint16_t cap, uint16_t& out);
+
+}  // namespace XrDap::Vendor
+
+// ===== SUB_START checks SUB_START 检查 =====
+
+// SUB_START（0x83）请求的检查（docs/protocol.md 3.4）：一条命令带全部配置，检查通过就
+// 开始采样，探针不保存“已配置未开始”的状态。这里只看请求本身是否合法、放不放得下，不估计
+// 耗时；能否跟上在运行时由跳拍、丢帧和缓冲占用判断。
+//
+// Check of a SUB_START (0x83) request (docs/protocol.md 3.4): one command carries the
+// whole configuration and sampling starts once it passes; the probe keeps no "configured
+// but not started" state. Only the request itself is checked (valid, fits); no time is
+// estimated. Whether sampling keeps up is judged at run time from skipped ticks, dropped
+// frames and ring fill.
+
+#include <cstdint>
+
+#include "xrdap/vendor/protocol.hpp"
+
+namespace XrDap::Vendor
+{
+
+/// SUB_START 请求的内容 / Contents of a SUB_START request.
+struct SubStartRequest
+{
+  uint32_t period_us = 0U;    ///< 周期 / Period.
+  bool stop_on_full = false;  ///< 缓冲满时丢新帧 / Drop new frames when full.
+  SubItemList items{nullptr, nullptr, 0U};  ///< 条目，仍在请求字节里 / Items, still in
+                                            ///< the request bytes.
+};
+
+/// @brief 检查 SUB_START 请求 / Check a SUB_START request.
+/// @return kStatusOk 时 out 有效；否则 kStatusArg 或 kStatusResource / out is valid on
+///         kStatusOk; otherwise kStatusArg or kStatusResource.
+/// @note 纯函数，任何上下文 / Pure function, any context.
+uint8_t ParseSubStart(const uint8_t* req, uint16_t len, SubStartRequest& out);
 
 }  // namespace XrDap::Vendor

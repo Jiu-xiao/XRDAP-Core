@@ -18,8 +18,8 @@
 #include <cstdint>
 
 #include "check.hpp"
-#include "xrdap/vendor/command_yield.hpp"
-#include "xrdap/vendor/tick_account.hpp"
+#include "xrdap/vendor/sampling.hpp"
+#include "xrdap/vendor/sampling.hpp"
 
 using namespace XrDap::Vendor;
 

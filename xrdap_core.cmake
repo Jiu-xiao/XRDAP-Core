@@ -12,11 +12,8 @@ set(XRDAP_CORE_DIR "${CMAKE_CURRENT_LIST_DIR}")
 set(XRDAP_CORE_PURE_SOURCES
     "${XRDAP_CORE_DIR}/xrdap/light/status_light.cpp"
     "${XRDAP_CORE_DIR}/xrdap/probe/probe_identity.cpp"
-    "${XRDAP_CORE_DIR}/xrdap/vendor/frame_ring.cpp"
-    "${XRDAP_CORE_DIR}/xrdap/vendor/reply_space.cpp"
-    "${XRDAP_CORE_DIR}/xrdap/vendor/request_length.cpp"
-    "${XRDAP_CORE_DIR}/xrdap/vendor/sub_start.cpp"
-    "${XRDAP_CORE_DIR}/xrdap/vendor/tick_account.cpp")
+    "${XRDAP_CORE_DIR}/xrdap/vendor/protocol.cpp"
+    "${XRDAP_CORE_DIR}/xrdap/vendor/sampling.cpp")
 set(XRDAP_CORE_SOURCES
     ${XRDAP_CORE_PURE_SOURCES}
     "${XRDAP_CORE_DIR}/xrdap/vendor/dap_vendor.cpp"
