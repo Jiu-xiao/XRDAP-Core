@@ -506,6 +506,54 @@ void OnlyActiveSamplingReusesCommandCsw()
   CHECK_RECOVERY(read_value() == original + 19U && swd.csw_reads == 5U);
   CHECK_RECOVERY(command({0x84U, 0U}) == XrDap::DapVendor::Result::HANDLED);
 }
+
+void ConnectFromTheSamplingLinkRestartsIt()
+{
+  // 采样中上位机被强杀、没发 DAP_Disconnect：同一条链路上新的 DAP_Connect 结束旧的采样并
+  // 重新连接；别的链路的 DAP_Connect 仍被拒绝 / The host is killed while sampling and sends no
+  // DAP_Disconnect: a new DAP_Connect on the same link ends the old sampling and connects
+  // afresh; a DAP_Connect on another link is still refused.
+  ModelSwd swd;
+  XrDap::DapVendor vendor(swd);
+  Timer timer;
+  uint8_t response[128] = {};
+  uint16_t length = 0U;
+  auto command = [&](XrDap::Transport link, const std::vector<uint8_t>& request)
+  {
+    vendor.SetCurrentLink(link);
+    vendor.CommandBegin();
+    const auto handled = vendor.OnCommand(request.data(), request.size(), response,
+                                          sizeof(response), length);
+    vendor.CommandEnd();
+    return handled;
+  };
+  CHECK_RECOVERY(command(XrDap::Transport::USB, {0x02U, 0x01U}) ==
+                 XrDap::DapVendor::Result::PASS);
+  Item it;
+  it.ap = 0U;
+  it.base = 0x08000000U;
+  it.size = 4U;
+  const auto encoded = Entries({it});
+  std::vector<uint8_t> start = {0x83U, 0xA0U, 0x86U, 0x01U, 0U, 0U, 1U, 0U};
+  start.insert(start.end(), encoded.begin(), encoded.end());
+  CHECK_RECOVERY(command(XrDap::Transport::USB, start) ==
+                 XrDap::DapVendor::Result::HANDLED);
+  CHECK_RECOVERY(vendor.Sampling());
+  // 别的链路：被拒绝，采样不受影响 / Another link: refused, sampling unaffected
+  CHECK_RECOVERY(command(XrDap::Transport::TCP, {0x02U, 0x01U}) ==
+                 XrDap::DapVendor::Result::REFUSED);
+  CHECK_RECOVERY(vendor.Sampling());
+  // 同一条链路：旧采样结束，新连接成立 / The same link: old sampling ends, new connection
+  CHECK_RECOVERY(command(XrDap::Transport::USB, {0x02U, 0x01U}) ==
+                 XrDap::DapVendor::Result::PASS);
+  CHECK_RECOVERY(!vendor.Sampling());
+  CHECK_RECOVERY(vendor.ConnectedLink() == XrDap::Transport::USB);
+  CHECK_RECOVERY(command(XrDap::Transport::USB, start) ==
+                 XrDap::DapVendor::Result::HANDLED);
+  CHECK_RECOVERY(response[1] == kStatusOk);
+  CHECK_RECOVERY(command(XrDap::Transport::USB, {0x84U, 0U}) ==
+                 XrDap::DapVendor::Result::HANDLED);
+}
 }  // namespace
 
 int main()
@@ -518,5 +566,6 @@ int main()
   StandardInfoDoesNotParkSampler();
   ReuseCswKeepsDataFreshAndInvalidatesOnFailure();
   OnlyActiveSamplingReusesCommandCsw();
+  ConnectFromTheSamplingLinkRestartsIt();
   std::puts("AP selection and sampler framing recovery passed");
 }

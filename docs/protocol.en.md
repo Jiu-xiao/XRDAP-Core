@@ -93,6 +93,8 @@ That the probe is used over one link (USB, serial, TCP, radio peer) at a time is
 
 When the connection is not on the link that was lost, nothing happens.
 
+While sampling runs, a `DAP_Connect` on the link that started it means its host came back (the old one is gone without a `DAP_Disconnect`, for example killed): the probe ends the old connection and sampling and connects afresh. A `DAP_Connect` on another link is still answered `FF` (during sampling only `DAP_Info`, `DAP_HostStatus` and the vendor commands pass).
+
 With the connection on serial, the host sends a request at least every 5 s (SUB_READ will do).
 
 USB connecting and disconnecting (the host opens or closes USB, re-enumerates) belongs to USB alone: only when the connection is on USB or there is none does the probe reset the SWD and DAP state because of it; with the connection on another link, its SWD connection, clock and settings stay as they are.

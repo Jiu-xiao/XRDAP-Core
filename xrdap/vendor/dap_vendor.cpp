@@ -95,6 +95,18 @@ DapVendorBase::Result DapVendorT<Policy>::OnCommand(const uint8_t* req, uint16_t
     sampler_.CommandReadOnly();
   }
 
+  // 开始采样的那条链路又发来 DAP_Connect：它的上位机回来了（旧的没发 DAP_Disconnect 就没了，
+  // 例如被强杀），结束旧的连接和采样，重新连接。别的链路发来的 DAP_Connect 照旧被拒绝。
+  // A DAP_Connect from the link that started sampling means its host came back (the old one
+  // is gone without a DAP_Disconnect, for example killed): end the old connection and
+  // sampling and connect afresh. A DAP_Connect from another link is still refused.
+  if (cmd == Byte(DapCmd::CONNECT) && sampler_.Active() &&
+      ConnectedLink() == current_link_ && current_link_ != Transport::NONE)
+  {
+    sampler_.Stop();
+    Drop();
+  }
+
   if (sampler_.Active())
   {
     // 采样期间探针被订阅独占：只放行 DAP_Info、DAP_HostStatus 和厂商命令。
