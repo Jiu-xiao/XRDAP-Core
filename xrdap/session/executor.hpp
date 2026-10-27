@@ -110,7 +110,18 @@ class Executor
     }
     if (!worked && pending_.load(std::memory_order_acquire) == 0U)
     {
-      (void)dap_.WaitForWork(wait_ms);
+      // 只有在等的时候节拍中断才需要叫醒：先声明在等，再看一遍有没有事，没有才等。中断先加
+      // 计数、再读 waiting_；这里先写 waiting_、再读计数，seq_cst 的全序保证至少一边看得到
+      // 对方 / The tick interrupt has to wake only while waiting: declare the wait, look once
+      // more for work, and wait only if there is none. The interrupt adds to the count and
+      // then reads waiting_; here waiting_ is written and then the count read, and the total
+      // order of seq_cst guarantees one side sees the other.
+      waiting_.store(1U, std::memory_order_seq_cst);
+      if (!vendor_.SampleDue() && pending_.load(std::memory_order_seq_cst) == 0U)
+      {
+        (void)dap_.WaitForWork(wait_ms);
+      }
+      waiting_.store(0U, std::memory_order_seq_cst);
     }
   }
 
@@ -220,7 +231,11 @@ class Executor
 
   static void Wake(void* ctx, bool in_isr)
   {
-    static_cast<Executor*>(ctx)->dap_.WakeStep(in_isr);
+    auto* self = static_cast<Executor*>(ctx);
+    if (self->waiting_.load(std::memory_order_seq_cst) != 0U)
+    {
+      self->dap_.WakeStep(in_isr);
+    }
   }
 
   static bool Hook(void* ctx, const uint8_t* req, uint16_t len, uint8_t* resp,
@@ -294,6 +309,7 @@ class Executor
   void* forwarder_ctx_ = nullptr;
   Slot slots_[kSlots];
   std::atomic<uint32_t> pending_{0U};
+  std::atomic<uint32_t> waiting_{0U};  ///< 执行上下文在 WaitForWork 里（或正要进去）/ In WaitForWork, or about to be.
   uint32_t next_ = 0U;
   Transport current_ = Transport::NONE;
 };
