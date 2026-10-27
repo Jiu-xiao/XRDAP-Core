@@ -20,11 +20,11 @@ Headers are included as `xrdap/<module>/<file>.hpp`:
 |---|---|
 | `session/` | `SessionOwner`: which transport (USB, serial, TCP, radio) owns the probe and when its session ends; `Executor`: every call into the libxr DAP instance goes through it, and a transport that is not the owner gets busy |
 | `vendor/` | `DapVendor` (commands 0x80 to 0x85, plus one extra command a platform attaches, such as XRDAP-ESP's 0x86 Wi-Fi configuration), `MemAp` (MEM-AP access along pointer chains over SWD), `Sampler`, `TickAccount`, `FrameRing` (sampling on the probe), request checks and reply space |
-| `serial/` | `Framer` (assembles and packs serial frames), `SerialLink` (the serial worker thread) |
+| `serial/` | `Framer` (serial frames: the header and CRCs are libxr Topic's packing format, only the payload and the streaming resync live here), `SerialLink` (the serial worker thread) |
 | `activity/` | `DapActivity`: DAP activity and the host state reported by DAP_HostStatus |
 | `light/` | `StatusLight`: computes the colour and level of the light at each moment from the link, the settings and DAP activity |
 | `probe/` | `SetProbeInfo`, `FormatSerial` (DAP_Info strings and the serial rule), `family.hpp` (VID:PID and each board's bcdDevice), `chip_uid.hpp` (the STM32F1/CH32V3 unique id) |
-| `protocol/` | CMSIS-DAP command ids and status values |
+| `protocol/` | `dap_cmd.hpp`: aliases for libxr's CMSIS-DAP command ids and status values, defined nowhere else |
 | `swd/` | `F1Gpio`: the register-level SWD pin shared by the STM32F1 and the CH32V3 |
 
 Apart from `swd/F1Gpio`, which reads and writes the STM32F1/CH32V3 GPIO registers directly, this repository touches no peripherals. Time, mutexes and semaphores come from libxr's `Timebase`, `Mutex` and `Semaphore`; what libxr has no common abstraction for is supplied by the platform:
@@ -84,7 +84,7 @@ class SpinLock
 
 ### Session owner and executor
 
-Every DAP command enters the libxr DAP instance through `Executor`: USB with `StepUsb()`, the other transports with `Execute()`. The executor runs one command at a time and notes which transport each command belongs to. One table in `session/command_class.hpp` puts commands in two classes: read-only status and settings queries and the status light (`DAP_Info`, `DAP_HostStatus`, vendor INFO, the 0x86 query, 0x9F 0x13) need no ownership and run from any transport; every other command needs to own the probe. The first transport that runs a command needing ownership becomes the session owner; until its session ends such commands from the other transports get busy (`command FF` for standard commands, `command 05` for vendor commands):
+Every DAP command enters the libxr DAP instance through `Executor`: USB with `StepUsb()`, the other transports with `Execute()`. The executor runs one command at a time and notes which transport each command belongs to. One table in `session/command_class.hpp` puts commands in two classes: read-only status and settings queries and the status light (`DAP_Info`, `DAP_HostStatus`, vendor INFO, and the queries a platform registers with `Executor::SetFreeCommands()`, e.g. the 0x86 query of XRDAP-ESP and 0x9F 0x13 of the CH32V3) need no ownership and run from any transport; every other command needs to own the probe. The first transport that runs a command needing ownership becomes the session owner; until its session ends such commands from the other transports get busy (`command FF` for standard commands, `command 05` for vendor commands):
 
 ```cpp
 #include "xrdap/session/executor.hpp"

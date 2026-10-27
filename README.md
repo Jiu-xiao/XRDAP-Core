@@ -20,11 +20,11 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 |---|---|
 | `session/` | `SessionOwner`：哪条传输（USB、串口、TCP、无线）拥有探针，会话什么时候结束；`Executor`：所有进入 libxr DAP 实例的调用都经过它，不是主人的传输回“忙” |
 | `vendor/` | `DapVendor`（命令 0x80 到 0x85，以及平台挂上的一条附加命令，例如 XRDAP-ESP 的 0x86 Wi-Fi 配置）、`MemAp`（经 SWD 沿指针链访问 MEM-AP）、`Sampler`、`TickAccount`、`FrameRing`（探针端采样）、请求检查和回复空间 |
-| `serial/` | `Framer`（串口帧的拼接和打包）、`SerialLink`（串口收发线程） |
+| `serial/` | `Framer`（串口帧：帧头和 CRC 用 libxr Topic 的打包格式，这里只做 payload 和流式重同步）、`SerialLink`（串口收发线程） |
 | `activity/` | `DapActivity`：DAP 活动和 DAP_HostStatus 报告的上位机状态 |
 | `light/` | `StatusLight`：由连接、设置和 DAP 活动算出每一刻的灯色和亮度 |
 | `probe/` | `SetProbeInfo`、`FormatSerial`（DAP_Info 字符串和序列号规则）、`family.hpp`（VID:PID 和各板的 bcdDevice）、`chip_uid.hpp`（STM32F1/CH32V3 的芯片唯一标识） |
-| `protocol/` | CMSIS-DAP 命令号和状态值 |
+| `protocol/` | `dap_cmd.hpp`：取 libxr 的 CMSIS-DAP 命令号和状态值的别名，不再重复定义 |
 | `swd/` | `F1Gpio`：STM32F1 和 CH32V3 共用的寄存器级 SWD 引脚 |
 
 除 `swd/F1Gpio` 直接读写 STM32F1/CH32V3 的 GPIO 寄存器外，本仓库不碰外设。时间、互斥量和信号量用 libxr 的 `Timebase`、`Mutex`、`Semaphore`；libxr 没有统一抽象的部分由平台提供：
@@ -84,7 +84,7 @@ class SpinLock
 
 ### 会话主人和执行器
 
-所有 DAP 命令都经 `Executor` 进入 libxr 的 DAP 实例：USB 用 `StepUsb()`，别的传输用 `Execute()`。执行器每次只执行一条命令，并记下命令属于哪条传输。命令按 `session/command_class.hpp` 的一张表分两类：只读的状态和设置查询、状态灯（`DAP_Info`、`DAP_HostStatus`、厂商 INFO、0x86 查询、0x9F 0x13）不需要拥有探针，任何传输都照常执行；其余命令要拥有探针。第一条执行要拥有探针的命令的传输成为会话主人；会话结束前别的传输的这类命令回“忙”（标准命令回 `命令号 FF`，厂商命令回 `命令号 05`）：
+所有 DAP 命令都经 `Executor` 进入 libxr 的 DAP 实例：USB 用 `StepUsb()`，别的传输用 `Execute()`。执行器每次只执行一条命令，并记下命令属于哪条传输。命令按 `session/command_class.hpp` 的一张表分两类：只读的状态和设置查询、状态灯（`DAP_Info`、`DAP_HostStatus`、厂商 INFO，以及平台用 `Executor::SetFreeCommands()` 登记的查询，例如 XRDAP-ESP 的 0x86 查询、CH32V3 的 0x9F 0x13）不需要拥有探针，任何传输都照常执行；其余命令要拥有探针。第一条执行要拥有探针的命令的传输成为会话主人；会话结束前别的传输的这类命令回“忙”（标准命令回 `命令号 FF`，厂商命令回 `命令号 05`）：
 
 ```cpp
 #include "xrdap/session/executor.hpp"
