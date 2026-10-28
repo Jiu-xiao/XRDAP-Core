@@ -48,6 +48,10 @@ class DapVendor
   /// the same rules as RequestLength.
   using ExtraLength = bool (*)(const uint8_t* req, uint16_t avail, uint16_t& len);
 
+  /// @brief 把一个功能位并入 INFO / Merge one feature bit into INFO.
+  /// @note 初始化时调用 / Call at initialisation.
+  void AddFeature(uint32_t bit) { added_features_ |= bit; }
+
   /// @brief 挂一条附加命令，其 feature 并入 INFO 功能位 / Attach one extra command whose
   ///        feature bit is merged into INFO.
   /// @param cmd 命令字节，应在 0x85 之后 / Command byte, expected above 0x85.
@@ -159,6 +163,7 @@ class DapVendor
 
   uint8_t extra_cmd_ = 0U;
   uint32_t extra_feature_ = 0U;
+  uint32_t added_features_ = 0U;
   ExtraHandler extra_handler_ = nullptr;
   ExtraLength extra_length_ = nullptr;
   void* extra_ctx_ = nullptr;

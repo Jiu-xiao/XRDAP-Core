@@ -45,6 +45,9 @@ constexpr uint8_t kVersion = 2;
 /// 功能位：READ | WRITE | 采样 | 8 字节访问 / Feature bits: READ | WRITE | sampling |
 /// 8-byte access.
 constexpr uint32_t kFeatures = 0x0F;
+/// 功能位 bit5:探针有控制口(docs/protocol.md 3.7.1)/ Feature bit 5: the probe has a control
+/// port (docs/protocol.md 3.7.1).
+constexpr uint32_t kFeatureControl = 1U << 5;
 /// 一条命令最多的条目数 / Maximum items per command.
 constexpr uint16_t kMaxItems = 32;
 /// 指针链最大深度 / Maximum pointer-chain depth.

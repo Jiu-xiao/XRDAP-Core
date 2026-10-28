@@ -185,7 +185,7 @@ n 为 0 时直接访问 `base + final_off`。base 为 0 是合法的（Cortex-M 
 | 0 | 1 | 0x80 |
 | 1 | 1 | 整体状态 |
 | 2 | 1 | 协议版本，当前为 2 |
-| 3 | 4 | 功能位：bit0 READ，bit1 WRITE，bit2 采样，bit3 8 字节访问，bit4 Wi-Fi 配置（0x86）；XRDAP-ESP 为 0x1F，其余为 0x0F |
+| 3 | 4 | 功能位：bit0 READ，bit1 WRITE，bit2 采样，bit3 8 字节访问，bit4 Wi-Fi 配置（0x86），bit5 有控制口（3.7.1）；XRDAP-ESP 为 0x3F（旧固件 0x1F），其余为 0x0F |
 | 7 | 2 | 一个请求或一次采样最多的条目数：32 |
 | 9 | 1 | 最大解引用深度：8 |
 | 10 | 4 | 环形缓冲字节数：XRDAP-ESP 为 16384，XRDAP-F103C8 和 XRDAP-CH32V307 为 4096 |

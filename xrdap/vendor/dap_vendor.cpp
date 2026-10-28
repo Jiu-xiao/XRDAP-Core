@@ -212,7 +212,7 @@ bool DapVendor::CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out)
   }
   resp[1] = kStatusOk;
   resp[2] = kVersion;
-  Put32(&resp[3], kFeatures | extra_feature_);
+  Put32(&resp[3], kFeatures | extra_feature_ | added_features_);
   Put16(&resp[7], kMaxItems);
   resp[9] = kMaxDepth;
   Put32(&resp[10], kRingBytes);

@@ -385,6 +385,17 @@ void ControlRequestsRunInTheExecutionContext()
         return 3U;
       },
       nullptr);
+  {
+    // 有控制口的探针在 INFO 里报功能位 5 / A probe with a control port reports feature bit 5
+    // in INFO.
+    const uint8_t info[1] = {0x80U};
+    uint8_t r[64] = {};
+    uint16_t o = 0U;
+    p.exec.ExecuteHere(XrDap::Transport::TCP, info, sizeof(info), r, sizeof(r), o);
+    EXPECT(o >= 7U && r[1] == 0x00U);
+    const uint32_t features = r[3] | (r[4] << 8) | (r[5] << 16) | (static_cast<uint32_t>(r[6]) << 24);
+    EXPECT((features & (1U << 5)) != 0U);
+  }
   UsbThread usb(p, 5U);
   std::thread links[4];
   const XrDap::Transport kinds[4] = {XrDap::Transport::TCP, XrDap::Transport::SERIAL,

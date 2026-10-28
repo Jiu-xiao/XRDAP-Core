@@ -185,7 +185,7 @@ The response is always 22 bytes:
 | 0 | 1 | 0x80 |
 | 1 | 1 | Overall status |
 | 2 | 1 | Protocol version, currently 2 |
-| 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86); 0x1F on XRDAP-ESP, 0x0F on the others |
+| 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86), bit5 control port (3.7.1); 0x3F on XRDAP-ESP (0x1F on older firmware), 0x0F on the others |
 | 7 | 2 | Maximum items per request or sampling run: 32 |
 | 9 | 1 | Maximum dereference depth: 8 |
 | 10 | 4 | Ring buffer size in bytes: 16384 on XRDAP-ESP, 4096 on XRDAP-F103C8 and XRDAP-CH32V307 |

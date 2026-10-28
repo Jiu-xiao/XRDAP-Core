@@ -84,6 +84,7 @@ class Executor
   {
     control_ = handler;
     control_ctx_ = ctx;
+    vendor_.AddFeature(handler != nullptr ? Vendor::kFeatureControl : 0U);
   }
 
   /// @brief 设置执行上下文空闲时多做的一件事（USB 控制口的请求处理）/ Set one more piece of
