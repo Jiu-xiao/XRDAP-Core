@@ -178,6 +178,17 @@ class Executor
     out = HandleControl(req, len, resp, cap);
   }
 
+  /// @brief 别的任务：让执行上下文运行一个函数，等它运行完 / Other tasks: have the execution
+  ///        context run a function and wait until it has.
+  /// @note 用来让命令行之类的入口改探针的设置时与采样、DAP 命令串行；限制同 Execute /
+  ///       lets an entry such as the console change the probe's settings serialised with
+  ///       sampling and DAP commands; the same limits as Execute.
+  void Call(Transport t, void (*fn)(void*), void* ctx)
+  {
+    uint16_t unused = 0U;
+    Post(t, false, nullptr, 0U, nullptr, 0U, unused, fn, ctx);
+  }
+
   /// @brief 在执行上下文里直接执行一条命令（单循环的探针里，链路在主循环里被轮询）/ Run one
   ///        command directly in the execution context (on a single-loop probe, where the
   ///        link is polled in the main loop).
@@ -223,6 +234,8 @@ class Executor
   {
     Transport t = Transport::NONE;
     bool control = false;  ///< 控制请求，不是 DAP 命令 / A control request, not a DAP command.
+    void (*call)(void*) = nullptr;  ///< 要在执行上下文里跑的函数 / A function to run in the execution context.
+    void* call_ctx = nullptr;
     const uint8_t* req = nullptr;
     uint16_t len = 0U;
     uint8_t* resp = nullptr;
@@ -239,11 +252,14 @@ class Executor
   }
 
   void Post(Transport t, bool control, const uint8_t* req, uint16_t len, uint8_t* resp,
-            uint16_t cap, uint16_t& out)
+            uint16_t cap, uint16_t& out, void (*call)(void*) = nullptr,
+            void* call_ctx = nullptr)
   {
     Slot& slot = slots_[SlotOf(t)];
     slot.t = t;
     slot.control = control;
+    slot.call = call;
+    slot.call_ctx = call_ctx;
     slot.req = req;
     slot.len = len;
     slot.resp = resp;
@@ -285,7 +301,11 @@ class Executor
     {
       Scope scope(*this, slot.t);
       *slot.out = 0U;
-      if (slot.control)
+      if (slot.call != nullptr)
+      {
+        slot.call(slot.call_ctx);
+      }
+      else if (slot.control)
       {
         *slot.out = HandleControl(slot.req, slot.len, slot.resp, slot.cap);
       }

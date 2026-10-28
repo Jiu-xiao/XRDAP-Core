@@ -484,6 +484,54 @@ void UsbControlTakesTwoTransfers()
   std::printf("  UsbControlTakesTwoTransfers: done\n");
 }
 
+void CallRunsInTheExecutionContext()
+{
+  // Call 让执行上下文运行一个函数:函数在执行线程里跑,与 DAP 命令不同时进行 / Call has the
+  // execution context run a function: it runs in the execution thread, never together with a DAP
+  // command.
+  Probe p;
+  p.dap.usb_cost_ms_ = 1U;
+  UsbThread usb(p, 5U);
+  std::atomic<bool> stop{false};
+  std::thread feeder(
+      [&]()
+      {
+        while (!stop.load())
+        {
+          p.dap.Feed(Byte(DapCmd::INFO));
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+      });
+  const std::thread::id caller = std::this_thread::get_id();
+  std::atomic<int> runs{0};
+  for (int i = 0; i < 100; ++i)
+  {
+    struct Ctx
+    {
+      Probe* p;
+      std::thread::id caller;
+      std::atomic<int>* runs;
+      bool other_thread = false;
+      bool dap_idle = false;
+    } ctx{&p, caller, &runs};
+    p.exec.Call(
+        XrDap::Transport::CONSOLE,
+        +[](void* c)
+        {
+          auto* x = static_cast<Ctx*>(c);
+          x->other_thread = std::this_thread::get_id() != x->caller;
+          x->dap_idle = x->p->dap.in_flight_.load() == 0;
+          x->runs->fetch_add(1);
+        },
+        &ctx);
+    EXPECT(ctx.other_thread && ctx.dap_idle);
+  }
+  stop.store(true);
+  feeder.join();
+  EXPECT(runs.load() == 100);
+  std::printf("  CallRunsInTheExecutionContext: done\n");
+}
+
 void ConnectionFollowsTheLink()
 {
   // DAP_Connect 记下它来自哪条链路；别的链路丢了不影响，这条丢了或 DAP_Disconnect 才作废 /
@@ -622,6 +670,7 @@ int main()
   ExecuteHereRunsInTheCallersContext();
   ControlRequestsRunInTheExecutionContext();
   UsbControlTakesTwoTransfers();
+  CallRunsInTheExecutionContext();
   UsbRebindLeavesAnotherLinksSwdAlone();
   ConnectionFollowsTheLink();
   UsbResetEndsAUsbConnectionOnly();
