@@ -79,7 +79,13 @@ const SamplerCore::ApCsw* SamplerCore::FindCsw(uint8_t ap) const
   return nullptr;
 }
 
-void SamplerCore::SampleTick(const TickAccount::Step& step)
+// 每帧都跑：入口对齐到 16 字节，免得别处代码长度一变，它在取指要等待的 Flash 上（例如
+// STM32F1 的 64 位预取行）落到行的后半、每帧慢几微秒。-Os 下 GCC 不管 -falign-functions。
+// Runs every frame: the entry is aligned to 16 bytes so that a change in code size
+// elsewhere cannot move it to the second half of a fetch line on flash with wait states
+// (the 64-bit prefetch lines of the STM32F1) and cost every frame a few microseconds.
+// GCC ignores -falign-functions under -Os.
+[[gnu::aligned(16)]] void SamplerCore::SampleTick(const TickAccount::Step& step)
 {
   uint8_t frame[kMaxFrameBytes];
   uint16_t order[kMaxItems];
