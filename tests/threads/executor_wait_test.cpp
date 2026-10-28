@@ -11,6 +11,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <thread>
 
 #include "libxr.hpp"
@@ -22,6 +23,7 @@
 #include "xrdap/session/transport.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
 #include "model_swd.hpp"
+#include "xrdap/control/usb_control.hpp"
 
 namespace
 {
@@ -120,6 +122,17 @@ class FakeDap
   }
 
   void WakeStep(bool) { usb_.Post(); }
+  class VendorPort
+  {
+   public:
+    virtual LibXR::ErrorCode OnVendorOut(bool, uint8_t, LibXR::ConstRawData) = 0;
+    virtual LibXR::ConstRawData OnVendorIn(bool, uint8_t) = 0;
+
+   protected:
+    ~VendorPort() = default;
+  };
+  void SetVendorPort(VendorPort* port) { port_ = port; }
+  VendorPort* port_ = nullptr;
 
   std::atomic<uint32_t> usb_done_{0U};
   uint32_t usb_cost_ms_ = 0U;
@@ -341,13 +354,16 @@ void ControlRequestsRunInTheExecutionContext()
   // 控制请求和 DAP 命令一样在执行上下文里一次一条：处理函数里不会有第二个调用者；没有处理函数时
   // 回“不支持” / Control requests run in the execution context one at a time like DAP commands: the
   // handler never has a second caller; without a handler the answer is "unsupported".
+  {
+    Probe none;
+    UsbThread usb(none, 5U);
+    uint8_t resp[16] = {};
+    uint16_t out = 0U;
+    const uint8_t req[3] = {0x42U, 0x01U, 0x02U};
+    none.exec.Control(XrDap::Transport::CONSOLE, req, sizeof(req), resp, sizeof(resp), out);
+    EXPECT(out == 2U && resp[0] == 0x42U && resp[1] == XrDap::Control::kStatusUnsupported);
+  }
   Probe p;
-  UsbThread usb(p, 5U);
-  uint8_t resp[16] = {};
-  uint16_t out = 0U;
-  const uint8_t req[3] = {0x42U, 0x01U, 0x02U};
-  p.exec.Control(XrDap::Transport::CONSOLE, req, sizeof(req), resp, sizeof(resp), out);
-  EXPECT(out == 2U && resp[0] == 0x42U && resp[1] == XrDap::Control::kStatusUnsupported);
 
   static std::atomic<int> in_handler{0};
   static std::atomic<int> max_in_handler{0};
@@ -369,6 +385,7 @@ void ControlRequestsRunInTheExecutionContext()
         return 3U;
       },
       nullptr);
+  UsbThread usb(p, 5U);
   std::thread links[4];
   const XrDap::Transport kinds[4] = {XrDap::Transport::TCP, XrDap::Transport::SERIAL,
                                      XrDap::Transport::RADIO, XrDap::Transport::CONSOLE};
@@ -394,6 +411,66 @@ void ControlRequestsRunInTheExecutionContext()
   EXPECT(calls.load() == 400);
   EXPECT(max_in_handler.load() == 1);
   std::printf("  ControlRequestsRunInTheExecutionContext: done\n");
+}
+
+// 一次 USB 控制传输：SEND 一个请求，再 RECV 到应答 / One USB control exchange: SEND a request,
+// then RECV the answer.
+size_t UsbExchange(FakeDap& dap, const uint8_t* q, size_t n, uint8_t* a)
+{
+  EXPECT(dap.port_->OnVendorOut(false, 1U, {q, n}) == ErrorCode::OK);
+  // 新 SEND 在应答取走前被拒绝 / A new SEND is refused before the answer is taken.
+  EXPECT(dap.port_->OnVendorOut(false, 1U, {q, n}) != ErrorCode::OK);
+  for (int i = 0; i < 2000; ++i)
+  {
+    const LibXR::ConstRawData d = dap.port_->OnVendorIn(false, 2U);
+    if (d.size_ != 0U)
+    {
+      std::memcpy(a, d.addr_, d.size_);
+      return d.size_;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return 0U;
+}
+
+void UsbControlTakesTwoTransfers()
+{
+  // USB 控制口：SEND 收进请求并叫醒执行上下文，处理后 RECV 取应答；没好时 RECV 取到 0 字节；
+  // 应答取走前新的 SEND 被拒绝 / USB control port: SEND copies the request and wakes the execution
+  // context, RECV takes the answer after it is handled; not ready, RECV gets 0 bytes; a new SEND is
+  // refused until the answer is taken.
+  const uint8_t req[3] = {0x21U, 0xAAU, 0xBBU};
+  uint8_t ans[96] = {};
+  {
+    // 没有处理函数：不支持 / No handler: unsupported.
+    Probe p;
+    XrDap::Control::UsbControl<FakeDap> port(p.dap, p.exec);
+    UsbThread usb(p, 50U);
+    const size_t an = UsbExchange(p.dap, req, sizeof(req), ans);
+    EXPECT(an == 2U && ans[0] == 0x21U && ans[1] == XrDap::Control::kStatusUnsupported);
+    EXPECT(p.dap.port_->OnVendorIn(false, 2U).size_ == 0U);  // 没有应答 / no answer
+    EXPECT(p.dap.port_->OnVendorOut(false, 9U, {req, sizeof(req)}) != ErrorCode::OK);
+  }
+  {
+    Probe p;
+    p.exec.SetControl(
+        +[](void*, const uint8_t* r, uint16_t len, uint8_t* o, uint16_t) -> uint16_t
+        {
+          o[0] = r[0];
+          o[1] = XrDap::Control::kStatusOk;
+          o[2] = static_cast<uint8_t>(len);
+          return 3U;
+        },
+        nullptr);
+    XrDap::Control::UsbControl<FakeDap> port(p.dap, p.exec);
+    UsbThread usb(p, 50U);
+    for (int i = 0; i < 20; ++i)
+    {
+      const size_t an = UsbExchange(p.dap, req, sizeof(req), ans);
+      EXPECT(an == 3U && ans[0] == 0x21U && ans[1] == 0U && ans[2] == 3U);
+    }
+  }
+  std::printf("  UsbControlTakesTwoTransfers: done\n");
 }
 
 void ConnectionFollowsTheLink()
@@ -533,6 +610,7 @@ int main()
   SamplingSharesTheContextWithCommands();
   ExecuteHereRunsInTheCallersContext();
   ControlRequestsRunInTheExecutionContext();
+  UsbControlTakesTwoTransfers();
   UsbRebindLeavesAnotherLinksSwdAlone();
   ConnectionFollowsTheLink();
   UsbResetEndsAUsbConnectionOnly();

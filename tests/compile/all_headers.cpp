@@ -12,6 +12,7 @@
 #include "xrdap/session/executor.hpp"
 #include "xrdap/session/transport.hpp"
 #include "xrdap/control/control.hpp"
+#include "xrdap/control/usb_control.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
 #include "xrdap/vendor/sampling.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
@@ -33,6 +34,17 @@ struct FakeDap
   void SetSessionResetGate(SessionResetGate, void*) {}
   LibXR::ErrorCode WaitForWork(uint32_t) { return LibXR::ErrorCode::OK; }
   void WakeStep(bool) {}
+  class VendorPort
+  {
+   public:
+    virtual LibXR::ErrorCode OnVendorOut(bool, uint8_t, LibXR::ConstRawData) = 0;
+    virtual LibXR::ConstRawData OnVendorIn(bool, uint8_t) = 0;
+
+   protected:
+    ~VendorPort() = default;
+  };
+  void SetVendorPort(VendorPort* port) { port_ = port; }
+  VendorPort* port_ = nullptr;
   LibXR::ErrorCode Step(uint32_t) { return LibXR::ErrorCode::OK; }
   LibXR::ErrorCode ExecuteExternal(const uint8_t*, uint16_t, uint8_t*, uint16_t,
                                    uint16_t& out)
@@ -44,6 +56,7 @@ struct FakeDap
 }  // namespace
 
 template class XrDap::Executor<FakeDap>;
+template class XrDap::Control::UsbControl<FakeDap>;
 
 template class XrDap::SerialLink<XrDap::Executor<FakeDap>, 64U>;
 
@@ -51,3 +64,4 @@ template class XrDap::SerialLink<XrDap::Executor<FakeDap>, 64U>;
 // The real libxr DAP class: every executor call into it (SetCommandHook with the length
 // hook included) must compile.
 template class XrDap::Executor<LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>>;
+template class XrDap::Control::UsbControl<LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>>;

@@ -86,6 +86,16 @@ class Executor
     control_ctx_ = ctx;
   }
 
+  /// @brief 设置执行上下文空闲时多做的一件事（USB 控制口的请求处理）/ Set one more piece of
+  ///        work the execution context does when idle (handling USB control requests).
+  /// @param work 做了事返回 true / Returns true when it did something.
+  /// @note 初始化时调用 / Call at initialisation.
+  void SetExtraWork(bool (*work)(void* ctx), void* ctx)
+  {
+    extra_work_ = work;
+    extra_ctx_ = ctx;
+  }
+
   /// @brief 设置平台转发器 / Set the platform forwarder.
   /// @note 初始化时、命令开始执行之前调用 / Call at initialisation, before commands run.
   void SetForwarder(Forwarder forwarder, void* ctx)
@@ -111,6 +121,10 @@ class Executor
     else
     {
       worked = ServeOne();
+      if (!worked && extra_work_ != nullptr)
+      {
+        worked = extra_work_(extra_ctx_);
+      }
     }
     if (vendor_.SampleDue())
     {
@@ -366,6 +380,8 @@ class Executor
   std::atomic<uint32_t> pending_{0U};
   std::atomic<uint32_t> waiting_{0U};  ///< 执行上下文在 WaitForWork 里（或正要进去）/ In WaitForWork, or about to be.
   uint32_t next_ = 0U;
+  bool (*extra_work_)(void*) = nullptr;
+  void* extra_ctx_ = nullptr;
   Control::Handler control_ = nullptr;
   void* control_ctx_ = nullptr;
   Transport current_ = Transport::NONE;
