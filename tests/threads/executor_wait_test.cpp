@@ -136,8 +136,8 @@ class FakeDap
 
   std::atomic<uint32_t> usb_done_{0U};
   uint32_t usb_cost_ms_ = 0U;
-  /// 同时在 Run 里的调用数最大值：执行器的锁应保证它是 1 / Largest number of calls in Run
-  /// at once: the executor's lock must keep it at 1.
+  /// 同时在 Run 里的调用数最大值：只有一个执行上下文，它应是 1 / Largest number of calls
+  /// in Run at once: there is one execution context, so it must be 1.
   std::atomic<int> max_in_flight_{0};
   std::atomic<int> in_flight_{0};
 

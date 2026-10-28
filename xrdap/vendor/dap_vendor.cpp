@@ -253,7 +253,7 @@ bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp,
   {
     return Reply(resp, kStatusNoTarget, out);
   }
-  MemAp::Lock lock(mem_);
+  MemAp::Access access(mem_);
   // Sampling owns the link: only our sampler and vendor commands can change CSW.
   // Reuse its stable base bits, but always reprogram size/increment before reading.
   mem_.ResetCache(sampling);
@@ -312,7 +312,7 @@ bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16
   {
     return Reply(resp, kStatusNoTarget, out);
   }
-  MemAp::Lock lock(mem_);
+  MemAp::Access access(mem_);
   mem_.ResetCache();
   resp[1] = kStatusOk;
   resp[2] = count;

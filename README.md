@@ -2,15 +2,15 @@
 
 [English](README.en.md)
 
-XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://github.com/xrobot-org/libxr)。它包含 XR 厂商扩展（一次读写多个地址、沿指针链读变量、在探针上按固定周期采样）、同一时间只让一条传输驱动探针的会话主人和命令执行器、串口 DAP 链路、全系列统一的状态灯规则、探针身份和家族常量。各探针固件以 git 子模块引用本仓库：
+XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://github.com/xrobot-org/libxr)。它包含 XR 厂商扩展（一次读写多个地址、沿指针链读变量、在探针上按固定周期采样）、唯一的执行上下文（命令执行器）、与 DAP 分开的控制口、串口 DAP 链路、全系列统一的状态灯规则、探针身份和家族常量。各探针固件以 git 子模块引用本仓库：
 
 | 固件 | 芯片 | 采样的运行方式 |
 |---|---|---|
-| [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3、ESP32-S2、ESP32-C3、ESP32 | 采样任务，gptimer 计节拍 |
-| [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8) | STM32F103（STLINK-V2 板） | 主循环轮询，没有 RTOS |
-| XRDAP-CH32V307 | CH32V307、CH32V305 | 采样任务，TIM7 计节拍 |
+| [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3、ESP32-S2、ESP32-C3、ESP32 | 一个执行任务跑 `Run()`，gptimer 计节拍 |
+| [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8) | STM32F103（STLINK-V2 板） | 主循环跑 `Run()`，没有 RTOS |
+| XRDAP-CH32V307 | CH32V307、CH32V305 | 主循环跑 `Run()`，没有 RTOS，TIM7 计节拍 |
 
-电脑端工具在 [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host)。探针与电脑之间的协议见 [docs/protocol.md](docs/protocol.md)：第 1 节是串口帧，第 3 节是厂商扩展（协议版本 2）和会话主人，第 4 节是探针身份。
+电脑端工具在 [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host)。探针与电脑之间的协议见 [docs/protocol.md](docs/protocol.md)：第 1 节是串口帧，第 3 节是厂商扩展（协议版本 2）、一次一条链路的规则和控制口，第 4 节是探针身份。
 
 ## 内容
 
@@ -213,7 +213,7 @@ for (;;)
 
 ## 测试
 
-`tests/` 在电脑上编译不依赖硬件和 libxr 的纯逻辑（回复空间、请求长度、SUB_START 检查、节拍账目、采样给命令让路、按 CPU 模拟的采样与命令、帧缓冲、条目解析、串口帧和补位、DAP 活动、序列号），用 ctest 运行，带 AddressSanitizer 和 UBSan；判据来自协议文档、CMSIS-DAP 规范和用户的决定。另一个 ctest 检查 `xrdap/` 里的原子变量只用 32 位整数。给出 libxr 的路径时，另外把全部源文件和公开头文件按 libxr 的 Linux 系统层编译一遍，并运行两个用 libxr 的测试：多线程下的执行器（等输入时不占锁、连接跟着链路、USB 复位只让 USB 上的连接作废、几条链路同时发命令时一次只执行一条、USB 重新连接不动别的链路的 SWD、串口写的结果归类）和 MEM-AP 的写入与总线错误：
+`tests/` 在电脑上编译不依赖硬件和 libxr 的纯逻辑（回复空间、请求长度、SUB_START 检查、节拍账目、帧缓冲、条目解析、串口帧和补位、DAP 活动、序列号），用 ctest 运行，带 AddressSanitizer 和 UBSan；判据来自协议文档、CMSIS-DAP 规范和用户的决定。另一个 ctest 检查 `xrdap/` 里的原子变量只用 32 位整数。给出 libxr 的路径时，另外把全部源文件和公开头文件按 libxr 的 Linux 系统层编译一遍，并运行三个用 libxr 的测试：多线程下的执行器（USB 等命令时别的链路的命令照常执行、采样和命令共用执行上下文、`ExecuteHere`、控制请求和 `Call` 在执行上下文里运行、USB 控制口的两次传输、连接跟着链路、USB 复位只让 USB 上的连接作废、几条链路同时发命令时一次只执行一条、USB 重新连接不动别的链路的 SWD、串口写的结果归类），MEM-AP 的写入与总线错误，以及采样在总线错误后的恢复：
 
 ```bash
 cmake -S tests -B build -DLIBXR_DIR=<libxr>

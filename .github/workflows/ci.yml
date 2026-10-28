@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, "feat/**"]
+    branches: [main, "feat/**", "refactor/**"]
   pull_request:
 
 jobs:
@@ -18,10 +18,11 @@ jobs:
   host-tests:
     runs-on: ubuntu-latest
     env:
-      # 需要的 libxr：SetCommandHook 带厂商命令长度钩子、WaitForWork、SetSessionResetGate
-      # （feat/xrdap-r2-swd-loop）/ The libxr required: SetCommandHook with the vendor
-      # length hook, WaitForWork and SetSessionResetGate (feat/xrdap-r2-swd-loop).
-      LIBXR_COMMIT: 6497a26e63a2c9eaa3060bb090baf1eada7f4d3b
+      # 需要的 libxr：SetCommandHook 带厂商命令长度钩子、WaitForWork、SetSessionResetGate、
+      # WakeStep 和 VendorPort（release/0.6-candidate）/ The libxr required: SetCommandHook
+      # with the vendor length hook, WaitForWork, SetSessionResetGate, WakeStep and
+      # VendorPort (release/0.6-candidate).
+      LIBXR_COMMIT: cdff20b553309d88a26b2f6420d995ffb31a7d8b
     steps:
       - uses: actions/checkout@v4
       - name: libxr

@@ -2,14 +2,13 @@
 #pragma once
 
 // 经 SWD 访问 MEM-AP：沿指针链读写目标内存。自己管理 SELECT、CSW、TAR，不走 DAP 的传输
-// 流水线。命令和采样共用一条 SWD 链路，访问前要持有 Lock；Lock 释放时让 SWD 的 SELECT
-// 缓存失效，上位机须把 SELECT、CSW、TAR 视为未知。
+// 流水线。每次访问在一个 Access 里做；Access 结束时让 SWD 的 SELECT 缓存失效，上位机须
+// 把 SELECT、CSW、TAR 视为未知。
 //
 // MEM-AP access over SWD: reads and writes target memory along pointer chains. It manages
-// SELECT, CSW and TAR itself, bypassing the DAP transfer pipeline. Commands and sampling
-// share one SWD link and must hold a Lock while accessing it; releasing the Lock
-// invalidates the SWD SELECT cache, so the host must treat SELECT, CSW and TAR as
-// unknown.
+// SELECT, CSW and TAR itself, bypassing the DAP transfer pipeline. Every access is made
+// inside an Access; the end of the Access invalidates the SWD SELECT cache, so the host must
+// treat SELECT, CSW and TAR as unknown.
 
 #include <cstdint>
 
@@ -20,9 +19,9 @@ namespace XrDap::Vendor
 {
 
 /// 共享 SWD 链路上的 MEM-AP 访问 / MEM-AP access on a shared SWD link.
-/// @note 在 DAP 执行上下文或采样的执行上下文里用；Lock 以外的方法都要求调用方持有
-///       Lock / Used in the DAP execution context or the sampling context; every method
-///       other than Lock requires the caller to hold a Lock.
+/// @note 只在执行上下文里用；Access 以外的方法都要在一个 Access 里调用 / Used in the
+///       execution context only; every method other than Access is called inside an
+///       Access.
 class MemAp
 {
  public:
@@ -45,13 +44,13 @@ class MemAp
   /// 一次 SWD 访问的作用域：结束时让 SELECT 缓存失效。SWD 只在执行上下文里访问，所以不加锁 /
   /// Scope of one SWD access: invalidates the SELECT cache at the end. SWD is accessed in the
   /// execution context only, so there is no lock.
-  class Lock
+  class Access
   {
    public:
-    explicit Lock(MemAp& mem) : mem_(mem) {}
-    ~Lock() { mem_.swd_.InvalidateSelectCache(); }
-    Lock(const Lock&) = delete;
-    Lock& operator=(const Lock&) = delete;
+    explicit Access(MemAp& mem) : mem_(mem) {}
+    ~Access() { mem_.swd_.InvalidateSelectCache(); }
+    Access(const Access&) = delete;
+    Access& operator=(const Access&) = delete;
 
    private:
     MemAp& mem_;
@@ -61,8 +60,7 @@ class MemAp
   ///        object.
   explicit MemAp(LibXR::Debug::Swd& swd) : swd_(swd) {}
 
-  // 以下方法都要求调用方持有 Lock / Every method below requires the caller to hold a
-  // Lock.
+  // 以下方法都在一个 Access 里调用 / Every method below is called inside an Access.
 
   /// @brief 开始一条命令时清除 AP 写入状态 / Clear AP write state at command start.
   /// @param reuse_csw 采样独占 SWD 时保留已读成功的 CSW 基值；发生过传输失败时仍清空。
@@ -109,7 +107,7 @@ class MemAp
 
   /// Read consecutive aligned u32 words within one 1 KiB TAR window. Returns
   /// the number of confirmed values; the remaining values must be marked failed.
-  /// No failed target read is replayed. Caller holds Lock, count is nonzero.
+  /// No failed target read is replayed. Called inside an Access, count is nonzero.
   uint16_t ReadWords(ApState& ap, uint32_t addr, uint16_t count, uint8_t* out);
 
  private:
@@ -148,7 +146,7 @@ class MemAp
   LibXR::Debug::Swd& swd_;
   ApState ap_[kMaxAps];
   uint8_t ap_count_ = 0U;
-  /// A transaction failed since the last ResetCache; blocks CSW reuse. Under Lock.
+  /// A transaction failed since the last ResetCache; blocks CSW reuse. Inside an Access.
   bool failed_since_reset_ = false;
 };
 

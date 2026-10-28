@@ -152,8 +152,9 @@ class Executor
   /// @brief 别的链路：把一条命令交给执行上下文，等它执行完 / Other links: hand a command
   ///        to the execution context and wait until it has run.
   /// @note 链路自己的任务里调用，不能在中断里，也不能在执行上下文里（那里用 ExecuteHere）；
-  ///       每条链路同时只有一条在途；执行上下文要在跑 Run() / Call from the link's own task, not from an interrupt; one in flight
-  ///       per link; the execution context must be running Run().
+  ///       每条链路同时只有一条在途；执行上下文要在跑 Run() / Call from the link's own task,
+  ///       not from an interrupt and not from the execution context (use ExecuteHere there);
+  ///       one in flight per link; the execution context must be running Run().
   void Execute(Transport t, const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                uint16_t& out)
   {

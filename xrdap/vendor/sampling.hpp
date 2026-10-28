@@ -16,7 +16,7 @@
 // 每帧之后定下一个要采的节拍：它晚于采完时的计数，并且从这一帧的节拍算起至少过了
 // “这一帧的占用 + 间隙”，间隙为 max(kMinGapUs, 周期/8, 占用/4)。所以两帧之间同一核上
 // 的别的任务至少有这段间隙（减去唤醒的延迟），约占这个核 1/5 以上的时间，与周期无关。
-// 中断只在计数到达下一个要采的节拍时唤醒采样（TickWakes），采样任务因此只为要采的节拍
+// 中断只在计数到达下一个要采的节拍时唤醒执行上下文（TickWakes），所以它只为要采的节拍
 // 醒来，不会为跳过的节拍一拍拍空转。
 //
 // Sampling tick accounting (docs/protocol.md 3.5). The tick timer is the only clock: its
@@ -27,11 +27,9 @@
 // "this frame's busy time + gap" after this frame's tick, with gap = max(kMinGapUs,
 // period/8, busy/4). Other tasks on the same core therefore get at least that gap between
 // two frames (less the wake latency), about 1/5 of the core or more, whatever the period.
-// The interrupt wakes sampling only when the count reaches the next tick to sample
-// (TickWakes), so the sampling task wakes only for ticks it samples and does not spin
-// through skipped ones.
-
-#include <cstdint>
+// The interrupt wakes the execution context only when the count reaches the next tick to
+// sample (TickWakes), so it wakes only for ticks it samples and does not spin through
+// skipped ones.
 
 namespace XrDap::Vendor
 {

@@ -3,7 +3,7 @@
 
 // 探针端周期采样（docs/protocol.md 3.5）。节拍定时器（TickTimer，平台实现）是唯一的
 // 时钟：它的中断调用 OnTickIsr()，把节拍计数加上实际跨过的周期数；执行上下文调用 Sample()
-// 时按 TickAccount 决定采哪一拍、跳过了几拍，时基只用来给帧打时间戳。每一拍在 MemAp::Lock
+// 时按 TickAccount 决定采哪一拍、跳过了几拍，时基只用来给帧打时间戳。每一拍在一个 MemAp::Access
 // 里完成：确认这次运行还在（代号没变）、读到期的条目、把帧放进缓冲，所以停止后换了配置也
 // 不会混进旧的帧。采样和命令在同一个执行上下文里一件一件做（executor.hpp），所以没有锁、
 // 没有让路、没有第二个任务；要不要叫醒执行上下文由平台给的 WakeFn 决定。
@@ -12,7 +12,7 @@
 // implemented by the platform) is the only clock: its interrupt calls OnTickIsr(), which
 // adds elapsed_ticks to the tick count. When the execution context calls Sample(),
 // TickAccount decides which tick to sample and how many were skipped; the time base only
-// stamps frames. Every tick completes under MemAp::Lock: it checks the run is still current
+// stamps frames. Every tick completes inside one MemAp::Access: it checks the run is still current
 // (same generation), reads the due items and puts the frame into the buffer, so a frame of
 // an old run cannot land after a stop and a new configuration. Sampling and commands run
 // one after the other in the same execution context (executor.hpp), so there is no lock,
@@ -30,11 +30,10 @@ namespace XrDap::Vendor
 {
 
 /// @brief 节拍定时器，平台实现 / Tick timer, implemented by the platform.
-/// @note Start 和 Stop 都在采样的执行上下文里调用（采样任务或单循环），定时器中断因此
-///       可以分配在采样所在的核上。中断里调用 DapVendor::OnTickIsr() / Start and Stop
-///       are both called in the sampling context (sampling task or single loop), so the
-///       timer interrupt can be allocated on the sampling core. Its interrupt calls
-///       DapVendor::OnTickIsr().
+/// @note Start 和 Stop 都在执行上下文里调用，定时器中断因此可以分配在执行上下文所在的
+///       核上。中断里调用 DapVendor::OnTickIsr() / Start and Stop are both called in the
+///       execution context, so the timer interrupt can be allocated on its core. Its
+///       interrupt calls DapVendor::OnTickIsr().
 class TickTimer
 {
  public:
@@ -53,8 +52,8 @@ class TickTimer
 ///       expands to much more than a call, and Service needs it in several places.
 uint64_t SamplerNowUs();
 
-/// 两种运行方式共用的采样部分：配置、帧的组装、帧缓冲 / The part of sampling both ways
-/// share: configuration, frame assembly and the frame buffer.
+/// 采样的配置、帧的组装和帧缓冲 / Sampling configuration, frame assembly and the frame
+/// buffer.
 class SamplerCore
 {
  public:
@@ -91,21 +90,21 @@ class SamplerCore
   /// @brief 读一拍里到期的条目，组成帧放进缓冲 / Read the items due in one tick and put
   ///        the frame into the buffer.
   /// @param step 这一拍的节拍号和漏拍数 / The tick number and skipped count of this tick.
-  /// @note 帧 = 节拍号 u32 + 时间戳 u48 + 状态位图 + 各到期条目的值；持有 MemAp::Lock
-  ///       时调用 / Frame = tick u32 + timestamp u48 + status bitmap + the due items'
-  ///       values; called while holding MemAp::Lock.
+  /// @note 帧 = 节拍号 u32 + 时间戳 u48 + 状态位图 + 各到期条目的值；在一个 MemAp::Access
+  ///       里调用 / Frame = tick u32 + timestamp u48 + status bitmap + the due items'
+  ///       values; called inside a MemAp::Access.
   void SampleTick(const TickAccount::Step& step);
 
   MemAp& mem_;
   KeepFn keep_;
   void* keep_ctx_;
 
-  // 以下在 MemAp::Lock 里读写 / The members below are read and written under
-  // MemAp::Lock.
+  // 以下在 MemAp::Access 里读写 / The members below are read and written inside a
+  // MemAp::Access.
   uint32_t period_us_ = 0U;
   uint32_t session_ = 0U;
 
-  // 以下只在采样的执行上下文里用 / The members below are used only in the sampling
+  // 以下只在执行上下文里用 / The members below are used only in the execution
   // context.
   uint32_t run_gen_ = 0U;
   bool timer_on_ = false;
@@ -137,21 +136,21 @@ class SamplerCore
 
   const ApCsw* FindCsw(uint8_t ap) const;
 
-  // 以下在 MemAp::Lock 里读写 / The members below are read and written under
-  // MemAp::Lock.
+  // 以下在 MemAp::Access 里读写 / The members below are read and written inside a
+  // MemAp::Access.
   SubItem items_[kMaxItems];
   uint16_t count_ = 0U;
   bool stop_on_full_ = false;
   ApCsw csw_[kMaxAps];
   uint8_t csw_count_ = 0U;
 
-  // 以下只在采样的执行上下文里用 / The members below are used only in the sampling
+  // 以下只在执行上下文里用 / The members below are used only in the execution
   // context.
   bool resync_pending_ = false;
   uint64_t resync_after_us_ = 0U;
 
-  // 采样往里放帧，DAP 执行上下文取帧和清空；它自己的自旋锁保护 / Sampling pushes frames,
-  // the DAP execution context takes and clears them; guarded by its own spin lock.
+  // 采样往里放帧，SUB_READ 取帧，都在执行上下文里 / Sampling pushes frames and SUB_READ
+  // takes them, both in the execution context.
   FrameRing ring_;
 };
 
@@ -250,7 +249,7 @@ class Sampler : public SamplerCore
   ///         sample has already come, to run again without waiting.
   bool Sample(TickTimer& timer)
   {
-    MemAp::Lock lock(mem_);
+    MemAp::Access access(mem_);
     uint32_t count = Ticks();
     if (!Active())
     {

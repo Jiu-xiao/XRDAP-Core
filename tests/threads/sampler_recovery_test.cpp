@@ -49,7 +49,7 @@ void ApSelection()
 {
   ModelSwd swd;
   MemAp mem(swd);
-  MemAp::Lock lock(mem);
+  MemAp::Access access(mem);
   CHECK_RECOVERY(Read(mem, 0) == (0x08000000U ^ 0x12340000U));
   CHECK_RECOVERY(Read(mem, 1) == (0x08000000U ^ 0x12340001U));
   CHECK_RECOVERY(Read(mem, 0) == (0x08000000U ^ 0x12340000U));
@@ -112,7 +112,7 @@ void BurstReadAndFailure()
   {
     ModelSwd swd;
     MemAp mem(swd);
-    MemAp::Lock lock(mem);
+    MemAp::Access access(mem);
     MemAp::ApState ap;
     ap.ap = 0U;
     ap.valid = true;
@@ -294,7 +294,7 @@ void ReuseCswKeepsDataFreshAndInvalidatesOnFailure()
 {
   ModelSwd swd;
   MemAp mem(swd);
-  MemAp::Lock lock(mem);
+  MemAp::Access access(mem);
   mem.ResetCache();
   const uint32_t initial = Read(mem, 0U);
   CHECK_RECOVERY(swd.csw_reads == 1U);

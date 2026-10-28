@@ -300,7 +300,7 @@ TEST(WriteToGoodAddressSucceeds)
 {
   FakeMemApSwd swd;
   XrDap::Vendor::MemAp mem(swd);
-  XrDap::Vendor::MemAp::Lock lock(mem);
+  XrDap::Vendor::MemAp::Access access(mem);
   mem.ResetCache();
 
   const XrDap::Vendor::Item IT = MakeWordItem(0x20000000U);
@@ -316,7 +316,7 @@ TEST(WriteFaultIsReportedOnTheItemThatWroteIt)
 {
   FakeMemApSwd swd;
   XrDap::Vendor::MemAp mem(swd);
-  XrDap::Vendor::MemAp::Lock lock(mem);
+  XrDap::Vendor::MemAp::Access access(mem);
   mem.ResetCache();
 
   const XrDap::Vendor::Item BAD = MakeWordItem(FakeMemApSwd::kFaultAddr);

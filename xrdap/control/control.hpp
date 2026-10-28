@@ -5,7 +5,7 @@
 //   请求  op(1) + 载荷
 //   应答  op(1) + 状态(1) + 载荷
 // 请求和 DAP 命令一样由执行上下文一次执行一条（Executor::Control），所以处理函数不需要
-// 锁，与采样、DAP 命令串行。协议见 DESIGN-control-channel.md。
+// 锁，与采样、DAP 命令串行。各链路上的格式见 docs/protocol.md 3.7.1。
 //
 // The probe's control port: settings requests (Wi-Fi, radio) are not DAP and take no DAP
 // command number. One request, one answer:
@@ -13,7 +13,7 @@
 //   answer   op(1) + status(1) + payload
 // Like a DAP command, a request is run by the execution context, one at a time
 // (Executor::Control), so a handler needs no lock and is serialised with sampling and DAP
-// commands.
+// commands. The format on each link is in docs/protocol.en.md 3.7.1.
 
 #include <cstdint>
 

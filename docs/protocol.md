@@ -2,7 +2,7 @@
 
 [English](protocol.en.md)
 
-本文说明 XR-DAP 系列探针（XRDAP-ESP、XRDAP-F103C8、XRDAP-CH32V307）与上位机之间的协议：XRDAP-ESP 在串口和 TCP 上传输 CMSIS-DAP 包时使用的帧格式，全系列都实现的 XR 厂商扩展命令（协议版本 2；0x80 到 0x85 为数据命令；0x86 为 Wi-Fi 配置，仅 XRDAP-ESP）和探针一次只使用一条链路的规则，探针的身份信息和 mDNS 广播，ESP32-C3 的 USB 口上 DAP 链路与命令行的分流，`xrdap share usbip` 提供的 USB/IP 虚拟设备，以及 USB 主机要注意的零长度包。USB 上的 DAP 包按 CMSIS-DAP v2 的 Bulk 端点收发，没有额外的帧。这些规则在本仓库的 `xrdap/` 里实现：串口帧在 `xrdap/serial/`，会话主人在 `xrdap/session/`，厂商扩展在 `xrdap/vendor/`。
+本文说明 XR-DAP 系列探针（XRDAP-ESP、XRDAP-F103C8、XRDAP-CH32V307）与上位机之间的协议：XRDAP-ESP 在串口和 TCP 上传输 CMSIS-DAP 包时使用的帧格式，全系列都实现的 XR 厂商扩展命令（协议版本 2；0x80 到 0x85 为数据命令；0x86 为 Wi-Fi 配置，仅 XRDAP-ESP）和探针一次只使用一条链路的规则，探针的身份信息和 mDNS 广播，ESP32-C3 的 USB 口上 DAP 链路与命令行的分流，`xrdap share usbip` 提供的 USB/IP 虚拟设备，以及 USB 主机要注意的零长度包。USB 上的 DAP 包按 CMSIS-DAP v2 的 Bulk 端点收发，没有额外的帧。这些规则在本仓库的 `xrdap/` 里实现：串口帧在 `xrdap/serial/`，执行器在 `xrdap/session/`，控制口在 `xrdap/control/`，厂商扩展在 `xrdap/vendor/`。
 
 目录：1 串口帧；2 TCP 帧；3 XR 厂商扩展（3.1 规则与一次只使用一条链路，3.2 状态与回复空间，3.3 条目，3.4 命令，3.5 采样，3.6 SWD 访问，3.7 0x86，3.8 字节示例）；4 探针身份与发现（DAP_Info、mDNS）；5 ESP32-C3 的 USB 口；6 USB/IP 虚拟设备；7 USB 主机的注意事项。
 

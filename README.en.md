@@ -2,15 +2,15 @@
 
 [中文](README.md)
 
-Firmware code shared by the XR-DAP family of CMSIS-DAP probes, built on [libxr](https://github.com/xrobot-org/libxr). It holds the XR vendor extension (multi-address read/write, pointer-chain reads, periodic sampling on the probe), the session owner and command executor that let one transport drive the probe at a time, the serial DAP link, the status light rule of the whole family, the probe identity and the family constants. Each probe firmware uses this repository as a git submodule:
+Firmware code shared by the XR-DAP family of CMSIS-DAP probes, built on [libxr](https://github.com/xrobot-org/libxr). It holds the XR vendor extension (multi-address read/write, pointer-chain reads, periodic sampling on the probe), the one execution context (the command executor), a control port apart from DAP, the serial DAP link, the status light rule of the whole family, the probe identity and the family constants. Each probe firmware uses this repository as a git submodule:
 
 | Firmware | Chip | How sampling runs |
 |---|---|---|
-| [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3, ESP32-S2, ESP32-C3, ESP32 | sampling task, ticks counted by a gptimer |
-| [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8) | STM32F103 (STLINK-V2 board) | polled from the main loop, no RTOS |
-| XRDAP-CH32V307 | CH32V307, CH32V305 | sampling task, ticks counted by TIM7 |
+| [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3, ESP32-S2, ESP32-C3, ESP32 | one execution task runs `Run()`, ticks counted by a gptimer |
+| [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8) | STM32F103 (STLINK-V2 board) | the main loop runs `Run()`, no RTOS |
+| XRDAP-CH32V307 | CH32V307, CH32V305 | the main loop runs `Run()`, no RTOS, ticks counted by TIM7 |
 
-The host tool is [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host). The protocol between probe and host is in [docs/protocol.en.md](docs/protocol.en.md): section 1 is the serial frame, section 3 the vendor extension (protocol version 2) and the session owner, section 4 the probe identity.
+The host tool is [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host). The protocol between probe and host is in [docs/protocol.en.md](docs/protocol.en.md): section 1 is the serial frame, section 3 the vendor extension (protocol version 2), the one-link-at-a-time rule and the control port, section 4 the probe identity.
 
 ## Contents
 
@@ -213,7 +213,7 @@ for (;;)
 
 ## Tests
 
-`tests/` builds the pure logic that depends on neither hardware nor libxr (reply space, request lengths, SUB_START checks, tick accounting, sampling yielding to commands, a CPU simulation of sampling and commands, frame ring, item parsing, serial frames and padding, DAP activity, serial numbers) on a PC and runs it with ctest under AddressSanitizer and UBSan; the oracles come from the protocol document, the CMSIS-DAP specification and the user's decisions. Another ctest checks that atomics in `xrdap/` are 32-bit integers only. Given a libxr path, every source and public header is also compiled against libxr's Linux system layer, and two tests that use libxr run: the executor with threads (no lock held while waiting for input, the connection following its link, a USB reset lapsing only a connection on USB, one command at a time when several links send at once, a USB re-attach leaving another link's SWD alone, serial write results) and MEM-AP writes and bus faults:
+`tests/` builds the pure logic that depends on neither hardware nor libxr (reply space, request lengths, SUB_START checks, tick accounting, frame ring, item parsing, serial frames and padding, DAP activity, serial numbers) on a PC and runs it with ctest under AddressSanitizer and UBSan; the oracles come from the protocol document, the CMSIS-DAP specification and the user's decisions. Another ctest checks that atomics in `xrdap/` are 32-bit integers only. Given a libxr path, every source and public header is also compiled against libxr's Linux system layer, and three tests that use libxr run: the executor with threads (another link's command answered while USB waits, sampling sharing the execution context with commands, `ExecuteHere`, control requests and `Call` running in the execution context, the two transfers of the USB control port, the connection following its link, a USB reset lapsing only a connection on USB, one command at a time when several links send at once, a USB re-attach leaving another link's SWD alone, serial write results), MEM-AP writes and bus faults, and sampling recovering after bus faults:
 
 ```bash
 cmake -S tests -B build -DLIBXR_DIR=<libxr>

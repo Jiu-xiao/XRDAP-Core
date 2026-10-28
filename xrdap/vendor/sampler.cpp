@@ -20,7 +20,7 @@ void MarkFailed(uint8_t* marks, uint16_t i)
 uint8_t SamplerCore::Configure(const SubItemList& items, uint32_t period_us,
                                bool stop_on_full, uint32_t session)
 {
-  MemAp::Lock lock(mem_);
+  MemAp::Access access(mem_);
   mem_.ResetCache();
   count_ = 0U;
   items.ForEach([&](const SubItem& sub) { items_[count_++] = sub; });
