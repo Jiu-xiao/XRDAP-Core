@@ -358,7 +358,7 @@ Response: `86 status`. With status 0x00 the credentials have been cleared, and a
 
 ### 3.7.1 Control port
 
-Settings requests (for now only the Wi-Fi operations above) can also bypass DAP and use the probe's control port. A request is `op(1) + payload` and the answer `op(1) + status(1) + payload`; `op` and the payload are those of the matching DAP command, but the request has no `86` byte and the first byte of the answer is the `op`. The probe's execution context handles a control request one after the other with DAP commands; there is no connection, and the DAP connection and sampling are not affected. An operation the probe does not have answers status `0x02` (the control port's own "unsupported"), an empty request status `0x01`.
+Settings requests (for now only the Wi-Fi operations above) can also bypass DAP and use the probe's control port. A request is `op(1) + payload` and the answer `op(1) + status(1) + payload`; `op` and the payload are those of the matching DAP command, but the request has no `86` byte and the first byte of the answer is the `op`. The probe's execution context handles a control request one after the other with DAP commands; there is no connection, and the DAP connection and sampling are not affected. An operation the probe does not have answers status `0xF2` (the control port's own "unsupported"), an empty request status `0xF1`; `0xF0` to `0xFF` belong to the control port and a probe's own operations use the low status codes.
 
 | Link | How to send |
 |---|---|

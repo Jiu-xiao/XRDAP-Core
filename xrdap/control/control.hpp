@@ -20,10 +20,13 @@
 namespace XrDap::Control
 {
 
-/// 应答里的状态 / Status in an answer.
+/// 应答里的状态。0 表示成功；0xF0 到 0xFF 留给控制口自己，探针自己的操作用低位的状态码（例如
+/// 1 参数错、3 资源不足），两边不会撞 / Status in an answer. 0 is success; 0xF0 to 0xFF belong
+/// to the control port itself, and a probe's own operations use the low codes (for example 1
+/// bad argument, 3 out of resources), so the two never collide.
 inline constexpr uint8_t kStatusOk = 0U;
-inline constexpr uint8_t kStatusBadRequest = 1U;   ///< 请求格式不对 / Malformed request.
-inline constexpr uint8_t kStatusUnsupported = 2U;  ///< 没有这个操作 / No such operation.
+inline constexpr uint8_t kStatusBadRequest = 0xF1U;   ///< 请求格式不对 / Malformed request.
+inline constexpr uint8_t kStatusUnsupported = 0xF2U;  ///< 没有这个操作 / No such operation.
 
 /// @brief 处理一个控制请求，返回应答长度 / Handle one control request and return the answer
 ///        length.
