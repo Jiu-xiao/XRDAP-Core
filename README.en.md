@@ -225,7 +225,7 @@ Tests on real probes are separate: the test specification of the whole family, [
 
 ## Code style
 
-C++17, clang-format 21.1.8 with libxr's configuration (`.clang-format`). Public headers carry bilingual Doxygen comments and state the execution context they may be called from. Atomics are 32-bit integers only (`std::atomic<uint32_t>`): the CH32V307 has word-sized atomic instructions only, and the `xrdap_core_word_atomics` test checks this.
+C++20 (as libxr), clang-format 21.1.8 with libxr's configuration (`.clang-format`). Public headers carry bilingual Doxygen comments and state the execution context they may be called from. Atomics are 32-bit integers only (`std::atomic<uint32_t>`): the CH32V307 has word-sized atomic instructions only, and the `xrdap_core_word_atomics` test checks this.
 
 ## License
 
