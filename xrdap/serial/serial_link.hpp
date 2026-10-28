@@ -138,8 +138,8 @@ class SerialLink
     {
       return 0U;
     }
-    return framer_.Feed(data, len, [this](const uint8_t* req, uint16_t req_len)
-                        { OnRequest(req, req_len); });
+    return framer_.Feed(data, len, [this](const uint8_t* req, uint16_t req_len, bool control)
+                        { OnRequest(req, req_len, control); });
   }
 
   /// @brief 等一会儿、取走串口里已有的字节并处理 / Wait briefly, take the bytes queued in
@@ -255,14 +255,24 @@ class SerialLink
     }
   }
 
-  void OnRequest(const uint8_t* req, uint16_t len)
+  void OnRequest(const uint8_t* req, uint16_t len, bool control)
   {
     uint16_t out = 0U;
-    last_request_ms_.store(static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds()));
-    active_.store(1U);
-    exec_.Execute(Transport::SERIAL, req, len, resp_, MaxPacket, out);
+    if (control)
+    {
+      // 控制请求不算 DAP 链路在用,不续租期 / A control request does not count as the DAP
+      // link being in use and does not renew the lease.
+      exec_.Control(Transport::SERIAL, req, len, resp_, MaxPacket, out);
+    }
+    else
+    {
+      last_request_ms_.store(static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds()));
+      active_.store(1U);
+      exec_.Execute(Transport::SERIAL, req, len, resp_, MaxPacket, out);
+    }
     const size_t frame = FramerT::PackResponse(
-        resp_, out, static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds()), tx_frame_);
+        resp_, out, static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds()), tx_frame_,
+        control);
     WriteFrame(FramerT::AppendPad(tx_frame_, frame));
   }
 

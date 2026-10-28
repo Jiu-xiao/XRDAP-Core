@@ -6,7 +6,7 @@
 // LibXR::CRC8、CRC32），这里只有 payload 和流式重同步：
 //   0x5A + data_len(3) + topic_crc32(4) + timestamp_us(6) + version 1 + header_crc8 +
 //   payload + crc8，payload = n(2) + DAP 包(n)。
-// 请求的 topic 是 dap_req，响应的是 dap_resp。帧头 CRC8 或尾 CRC8 错、版本或 topic 不对、
+// 请求的 topic 是 dap_req，响应的是 dap_resp；控制请求是 ctrl_req，响应是 ctrl_resp。帧头 CRC8 或尾 CRC8 错、版本或 topic 不对、
 // 长度不合法时丢掉当前候选帧，从缓冲里下一个 0x5A 重新开始。这里只拼帧、校验、打包，
 // 不碰串口，也不执行命令。
 //
@@ -16,7 +16,7 @@
 // CRC32); only the payload and the streaming resync live here:
 //   0x5A + data_len(3) + topic_crc32(4) + timestamp_us(6) + version 1 + header_crc8 +
 //   payload + crc8, with payload = n(2) + DAP packet(n).
-// Requests use topic dap_req, responses dap_resp. A wrong header or trailing CRC8, a
+// Requests use topic dap_req, responses dap_resp; control requests use ctrl_req and responses ctrl_resp. A wrong header or trailing CRC8, a
 // wrong version or topic, or a bad length drops the current candidate and parsing
 // restarts at the next 0x5A in the buffer. This only assembles, checks and packs frames;
 // it touches no UART and runs no command.
@@ -45,6 +45,11 @@ inline constexpr uint8_t kPad = 0x00U;
 inline constexpr char kRequestTopicName[] = "dap_req";
 /// 响应 topic 的名字 / Name of the response topic.
 inline constexpr char kResponseTopicName[] = "dap_resp";
+/// 控制请求 topic 的名字:探针自己的设置,不是 DAP 命令 / Name of the control request topic: the
+/// probe's own settings, not a DAP command.
+inline constexpr char kControlRequestTopicName[] = "ctrl_req";
+/// 控制响应 topic 的名字 / Name of the control response topic.
+inline constexpr char kControlResponseTopicName[] = "ctrl_resp";
 
 /// topic 名字的 CRC32 键，与 libxr Topic 的算法相同 / The CRC32 key of a topic name, the
 /// same as libxr's Topic computes.
@@ -67,8 +72,9 @@ class Framer
   /// 一帧的最大字节数 / Largest frame.
   static constexpr size_t kFrameCapacity = kHeaderSize + kPayloadCapacity + 1U;
 
-  /// @brief 送入收到的字节；每拼出一个合法请求就调用一次 on_request(dap, len) / Feed
-  ///        received bytes; on_request(dap, len) is called for every valid request.
+  /// @brief 送入收到的字节；每拼出一个合法请求就调用一次 on_request(data, len, control)，
+  ///        control 为真表示它是控制请求 / Feed received bytes; on_request(data, len, control)
+  ///        is called for every valid request, control true for a control request.
   /// @return 这次交出的请求数 / Requests handed out by this call.
   template <typename Fn>
   uint32_t Feed(const uint8_t* data, size_t len, Fn&& on_request)
@@ -107,7 +113,7 @@ class Framer
   /// @param out 至少 kFrameCapacity 字节 / At least kFrameCapacity bytes.
   /// @return 帧的字节数 / Frame bytes.
   static size_t PackResponse(const uint8_t* dap, uint16_t len, uint64_t timestamp_us,
-                             uint8_t* out)
+                             uint8_t* out, bool control = false)
   {
     if (len > MaxPacket)
     {
@@ -117,7 +123,8 @@ class Framer
     LibXR::Topic::PackedDataHeader header;
     header.prefix = kPrefix;
     header.SetDataLen(payload);
-    header.topic_name_crc32 = TopicKey(kResponseTopicName);
+    header.topic_name_crc32 =
+        TopicKey(control ? kControlResponseTopicName : kResponseTopicName);
     header.SetTimestamp(LibXR::MicrosecondTimestamp(timestamp_us));
     header.version = kVersion;
     header.pack_header_crc8 =
@@ -206,7 +213,7 @@ class Framer
       if (n <= MaxPacket && n + 2U <= payload_len_)
       {
         ++handed;
-        on_request(payload + 2, static_cast<uint16_t>(n));
+        on_request(payload + 2, static_cast<uint16_t>(n), control_frame_);
       }
       const size_t rest = fill_ - total_;
       std::memmove(frame_, frame_ + total_, rest);
@@ -224,11 +231,14 @@ class Framer
       return false;
     }
     const uint32_t len = header.GetDataLen();
-    if (header.version != kVersion || header.topic_name_crc32 != request_topic_ ||
-        len < 2U || len > kPayloadCapacity)
+    const bool control = header.topic_name_crc32 == control_topic_;
+    if (header.version != kVersion ||
+        (header.topic_name_crc32 != request_topic_ && !control) || len < 2U ||
+        len > kPayloadCapacity)
     {
       return false;
     }
+    control_frame_ = control;
     payload_len_ = len;
     total_ = kHeaderSize + len + 1U;
     return true;
@@ -253,6 +263,8 @@ class Framer
   size_t total_ = 0U;
   uint32_t payload_len_ = 0U;
   uint32_t request_topic_ = TopicKey(kRequestTopicName);
+  uint32_t control_topic_ = TopicKey(kControlRequestTopicName);
+  bool control_frame_ = false;
 };
 
 }  // namespace XrDap::Serial

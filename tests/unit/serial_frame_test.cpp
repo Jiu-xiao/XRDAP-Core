@@ -27,9 +27,11 @@ const uint8_t kInfoFrame[] = {0x5A, 0x04, 0x00, 0x00, 0xC5, 0x09, 0x83,
 struct Sink
 {
   std::vector<std::vector<uint8_t>> requests;
-  void operator()(const uint8_t* dap, uint16_t len)
+  std::vector<bool> control;
+  void operator()(const uint8_t* dap, uint16_t len, bool is_control)
   {
     requests.emplace_back(dap, dap + len);
+    control.push_back(is_control);
   }
 };
 
@@ -225,4 +227,55 @@ TEST(PaddedStreamYieldsTheSameRequests)
   CHECK_EQ(sink.requests.size(), 4U);
   CHECK(sink.requests.size() == 4U && sink.requests[0].size() == 45U &&
         sink.requests[2].size() == 109U && sink.requests[3][0] == 45U);
+}
+
+namespace
+{
+// 按文档的布局打一个请求帧(topic 名可选)/ Pack a request frame by the documented layout
+// (any topic name).
+std::vector<uint8_t> RequestFrame(const char* topic, const std::vector<uint8_t>& data)
+{
+  const uint32_t payload = 2U + static_cast<uint32_t>(data.size());
+  LibXR::Topic::PackedDataHeader header;
+  header.prefix = kPrefix;
+  header.SetDataLen(payload);
+  header.topic_name_crc32 = TopicKey(topic);
+  header.SetTimestamp(LibXR::MicrosecondTimestamp(0));
+  header.version = kVersion;
+  header.pack_header_crc8 =
+      LibXR::CRC8::Calculate(&header, kHeaderSize - sizeof(header.pack_header_crc8));
+  std::vector<uint8_t> f(kHeaderSize);
+  std::memcpy(f.data(), &header, kHeaderSize);
+  f.push_back(static_cast<uint8_t>(data.size()));
+  f.push_back(static_cast<uint8_t>(data.size() >> 8));
+  f.insert(f.end(), data.begin(), data.end());
+  f.push_back(Crc8(f.data(), f.size()));
+  return f;
+}
+}  // namespace
+
+TEST(ControlRequestsAreMarkedAndKeepOrder)
+{
+  // ctrl_req 帧交给回调时 control 为真,与 dap_req 帧按顺序混在一起也不串 / A ctrl_req frame
+  // reaches the callback with control set, and mixed with dap_req frames the order and the flags
+  // hold.
+  Framer<1024> f;
+  Sink sink;
+  std::vector<uint8_t> in = RequestFrame(kRequestTopicName, {0x00, 0xFF});
+  const auto ctl = RequestFrame(kControlRequestTopicName, {0x01, 0x02, 0x03});
+  in.insert(in.end(), ctl.begin(), ctl.end());
+  const auto dap = RequestFrame(kRequestTopicName, {0x00, 0xFE});
+  in.insert(in.end(), dap.begin(), dap.end());
+  CHECK_EQ(f.Feed(in.data(), in.size(), sink), 3U);
+  CHECK_EQ(sink.requests.size(), 3U);
+  CHECK(sink.control == (std::vector<bool>{false, true, false}));
+  CHECK(sink.requests[1] == (std::vector<uint8_t>{0x01, 0x02, 0x03}));
+  // 响应用对应的 topic / The response uses the matching topic.
+  uint8_t out[Framer<1024>::kFrameCapacity];
+  const uint8_t body[] = {0x01, 0x00};
+  const size_t n = Framer<1024>::PackResponse(body, sizeof(body), 0, out, true);
+  LibXR::Topic::PackedDataHeader header;
+  std::memcpy(&header, out, kHeaderSize);
+  CHECK_EQ(header.topic_name_crc32, TopicKey(kControlResponseTopicName));
+  CHECK(n > kHeaderSize);
 }

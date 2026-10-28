@@ -356,6 +356,18 @@ Request: `86 02 A5` (the length must be 3 bytes; the third byte is the confirm b
 
 Response: `86 status`. With status 0x00 the credentials have been cleared, and about 0.5 seconds after the response is sent the probe restarts; Wi-Fi does not start after the restart.
 
+### 3.7.1 Control port
+
+Settings requests (for now only the Wi-Fi operations above) can also bypass DAP and use the probe's control port. A request is `op(1) + payload` and the answer `op(1) + status(1) + payload`; `op` and the payload are those of the matching DAP command, but the request has no `86` byte and the first byte of the answer is the `op`. The probe's execution context handles a control request one after the other with DAP commands; there is no connection, and the DAP connection and sampling are not affected. An operation the probe does not have answers status `0x02` (the control port's own "unsupported"), an empty request status `0x01`.
+
+| Link | How to send |
+|---|---|
+| USB | A vendor control transfer to the DAP interface: `bmRequestType 0x41 bRequest 0x01` sends the request (OUT data stage); `0xC1 / 0x02` takes the answer (IN; 0 bytes while it is not ready, retry later). One request at a time; sending another before the answer was taken is STALLed; a request cannot exceed the device's EP0 OUT buffer (64 bytes measured on the CH32; a longer SEND is STALLed), and the host must then use another way (a Wi-Fi save request that is longer falls back to `0x86`) |
+| Serial | The same frame with the topics `ctrl_req` (`0x3D2538F2`) and `ctrl_resp` (`0x31BDA5B6`) and the same payload layout (2-byte length + content); it does not renew the serial lease |
+| TCP | The same connection, frame type 3 for a control request and 4 for the answer, otherwise as section 2 |
+
+The firmware keeps `0x86`, and a new host prefers the control port on links that have one.
+
 ### 3.8 Byte examples
 
 The values below are examples only.
