@@ -2,25 +2,27 @@
 #pragma once
 
 // USB 上的控制口：EP0 的厂商控制传输，发给 DAP 接口。不增加接口，不占端点。
-//   SEND  bmRequestType 0x41（OUT，厂商，接口）bRequest 0x01，数据 = 控制请求（op + 载荷）
-//   RECV  bmRequestType 0xC1（IN，厂商，接口） bRequest 0x02，数据 = 控制应答（op + 状态 + 载荷）
+//   SEND  bmRequestType 0x41（OUT，厂商，接口）bRequest 0x01
+//         数据 = 控制请求（op + 载荷）
+//   RECV  bmRequestType 0xC1（IN，厂商，接口）bRequest 0x02
+//         数据 = 控制应答（op + 状态 + 载荷）
 // 请求和应答是两次传输：SEND 在 USB 上下文里把请求收进缓冲，叫醒执行上下文；执行上下文
 // 在 Executor::Run 里处理（和 DAP 命令一样一次一条）；主机再发 RECV 取应答。应答还没好时
 // RECV 返回 0 字节，主机稍后重试；一次只有一个请求在途，应答被取走前新的 SEND 会被拒绝
 // （STALL）以免丢掉应答，所以主机每次 SEND 之后要 RECV。
 //
-// The probe's control port over USB: vendor control transfers on EP0, addressed to the DAP
-// interface. No extra interface and no endpoint.
+// The probe's control port over USB: vendor control transfers on EP0, addressed to the
+// DAP interface. No extra interface and no endpoint.
 //   SEND  bmRequestType 0x41 (OUT, vendor, interface), bRequest 0x01, data = the control
 //         request (op + payload)
 //   RECV  bmRequestType 0xC1 (IN, vendor, interface), bRequest 0x02, data = the control
 //         answer (op + status + payload)
 // Request and answer are two transfers: SEND copies the request into a buffer in the USB
-// context and wakes the execution context, which handles it in Executor::Run (one at a time
-// like a DAP command); the host then sends RECV for the answer. While the answer is not ready
-// RECV returns 0 bytes and the host retries later. One request is in flight; a new SEND is
-// refused (STALL) until the answer has been taken, so an answer is not lost: the host sends a
-// RECV after every SEND.
+// context and wakes the execution context, which handles it in Executor::Run (one at a
+// time like a DAP command); the host then sends RECV for the answer. While the answer is
+// not ready RECV returns 0 bytes and the host retries later. One request is in flight; a
+// new SEND is refused (STALL) until the answer has been taken, so an answer is not lost:
+// the host sends a RECV after every SEND.
 
 #include <atomic>
 #include <cstdint>
@@ -35,9 +37,10 @@ namespace XrDap::Control
 inline constexpr uint8_t kUsbSend = 0x01U;
 inline constexpr uint8_t kUsbRecv = 0x02U;
 
-/// @tparam DapT libxr DAP 类，提供 VendorPort、SetVendorPort 和 WakeStep / libxr DAP class
-///         providing VendorPort, SetVendorPort and WakeStep.
-/// @tparam Cap 请求和应答缓冲各自的字节数 / Bytes of each of the request and answer buffers.
+/// @tparam DapT libxr DAP 类，提供 VendorPort、SetVendorPort 和 WakeStep / libxr DAP
+///         class providing VendorPort, SetVendorPort and WakeStep.
+/// @tparam Cap 请求和应答缓冲各自的字节数 / Bytes of each of the request and answer
+///         buffers.
 template <typename DapT, uint16_t Cap = 96>
 class UsbControl final : public DapT::VendorPort
 {
@@ -72,10 +75,10 @@ class UsbControl final : public DapT::VendorPort
       return {nullptr, 0U};
     }
     // 应答缓冲在被取走之前不会被改：状态到 kReady 之后只有这里会把它改回 kIdle，而下一个
-    // SEND 要等 kIdle。IN 数据阶段发完之前缓冲不动，所以这里直接把状态放回 kIdle 之前先
-    // 把数据拷到发送缓冲 / The answer buffer does not change until it has been taken: once
-    // in kReady only this function sets kIdle, and the next SEND waits for kIdle. The data
-    // is copied to the send buffer before the state goes back to kIdle.
+    // SEND 要等 kIdle。IN 数据阶段发完之前缓冲不动，所以这里直接把状态放回 kIdle 之前先把
+    // 数据拷到发送缓冲 / The answer buffer does not change until it has been taken: once
+    // in kReady only this function sets kIdle, and the next SEND waits for kIdle. The
+    // data is copied to the send buffer before the state goes back to kIdle.
     std::memcpy(send_, resp_, resp_len_);
     const uint16_t len = resp_len_;
     state_.store(kIdle, std::memory_order_release);

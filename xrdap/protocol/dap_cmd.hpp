@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// Core 用到的 CMSIS-DAP 命令号和状态值取自 libxr 的 CMSIS-DAP v2 定义，这里只补一个取字节的
-// 函数，不再重复定义数值。
+// Core 用到的 CMSIS-DAP 命令号和状态值取自 libxr 的 CMSIS-DAP v2 定义，这里只补一个取字节
+// 的函数，不再重复定义数值。
 //
 // The CMSIS-DAP command ids and status values Core uses come from libxr's CMSIS-DAP v2
 // definitions; this header only adds a function that yields the byte and defines no value
@@ -10,8 +10,8 @@
 
 #include <cstdint>
 
-// STM32 的设备头文件把 USB 定义成寄存器指针的宏，会破坏命名空间 LibXR::USB；这里暂时取消 /
-// The STM32 device headers define USB as a register-pointer macro, which breaks the
+// STM32 的设备头文件把 USB 定义成寄存器指针的宏，会破坏命名空间 LibXR::USB；这里暂时取消
+// / The STM32 device headers define USB as a register-pointer macro, which breaks the
 // namespace LibXR::USB; it is lifted for the lines that name it.
 #pragma push_macro("USB")
 #undef USB

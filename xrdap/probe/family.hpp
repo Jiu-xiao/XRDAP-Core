@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// XR-DAP 全系列共用的 USB 标识。所有探针都用 XRUSB 登记的 VID:PID 1D50:6199，靠序列号
-// 区分设备。Windows 按 VID、PID 和 bcdDevice 缓存设备描述符，所以每种自己做 USB 设备
-// 的板子的 bcdDevice 互不相同，都列在这里。传统 ESP32（板上 USB 转串口芯片）和 ESP32-C3
-// （芯片自带的 USB Serial/JTAG）没有自己的 USB 设备，经 `xrdap share usbip` 变成 USB 探针时用 kBcdUsbip。
+// XR-DAP 全系列共用的 USB 标识。所有探针都用 XRUSB 登记的 VID:PID 1D50:6199，靠序列号区分
+// 设备。Windows 按 VID、PID 和 bcdDevice 缓存设备描述符，所以每种自己做 USB 设备的板子的
+// bcdDevice 互不相同，都列在这里。传统 ESP32（板上 USB 转串口芯片）和 ESP32-C3（芯片自带
+// 的 USB Serial/JTAG）没有自己的 USB 设备，经 `xrdap share usbip` 变成 USB 探针时用
+// kBcdUsbip。
 //
 // USB identity shared by the whole XR-DAP family. Every probe uses the XRUSB-registered
 // VID:PID 1D50:6199 and is told apart by its serial. Windows caches device descriptors by

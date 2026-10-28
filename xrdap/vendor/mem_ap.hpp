@@ -7,8 +7,8 @@
 //
 // MEM-AP access over SWD: reads and writes target memory along pointer chains. It manages
 // SELECT, CSW and TAR itself, bypassing the DAP transfer pipeline. Every access is made
-// inside an Access; the end of the Access invalidates the SWD SELECT cache, so the host must
-// treat SELECT, CSW and TAR as unknown.
+// inside an Access; the end of the Access invalidates the SWD SELECT cache, so the host
+// must treat SELECT, CSW and TAR as unknown.
 
 #include <cstdint>
 
@@ -41,9 +41,9 @@ class MemAp
     bool written = false;
   };
 
-  /// 一次 SWD 访问的作用域：结束时让 SELECT 缓存失效。SWD 只在执行上下文里访问，所以不加锁 /
-  /// Scope of one SWD access: invalidates the SELECT cache at the end. SWD is accessed in the
-  /// execution context only, so there is no lock.
+  /// 一次 SWD 访问的作用域：结束时让 SELECT 缓存失效。SWD 只在执行上下文里访问，所以不加
+  /// 锁 / Scope of one SWD access: invalidates the SELECT cache at the end. SWD is
+  /// accessed in the execution context only, so there is no lock.
   class Access
   {
    public:
@@ -118,8 +118,8 @@ class MemAp
   /// @param ack 事务的 ack，按引用传入 / The transaction's ack, taken by reference.
   /// @note 实参 `swd_.Xxx(ack)` 和 `ack` 的求值顺序没有规定，传值时不开优化会先读到调用前
   ///       的 NO_ACK（V305-2）/ The evaluation order of `swd_.Xxx(ack)` and `ack` is
-  ///       unspecified; passed by value, an unoptimised build reads the NO_ACK from before
-  ///       the call (V305-2).
+  ///       unspecified; passed by value, an unoptimised build reads the NO_ACK from
+  ///       before the call (V305-2).
   bool TxnOk(LibXR::ErrorCode ec, const Ack& ack);
 
   bool SetSize(ApState& st, uint8_t size, bool increment = false);

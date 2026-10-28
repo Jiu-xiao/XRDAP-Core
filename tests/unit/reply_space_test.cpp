@@ -3,9 +3,8 @@
 // docs/protocol.md 3.2 和 3.4 的回复格式 / Reply space. Oracles: user decision B8 (one
 // check of the remaining space, 0x03 when short, no overrun with 1 byte left) and the
 // reply formats of docs/protocol.md 3.2 and 3.4.
-#include "xrdap/vendor/protocol.hpp"
-
 #include "check.hpp"
+#include "xrdap/vendor/protocol.hpp"
 
 using XrDap::Vendor::RequiredReply;
 using XrDap::Vendor::ReserveReply;

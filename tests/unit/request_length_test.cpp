@@ -7,11 +7,10 @@
 // specification ([0x7F, count, commands...], commands back to back with no length
 // field; the reference DAP_ProcessCommand returns the request length for vendor commands
 // too) and the request formats of docs/protocol.md 3.4 and 3.7.
-#include "xrdap/vendor/protocol.hpp"
-
 #include <vector>
 
 #include "check.hpp"
+#include "xrdap/vendor/protocol.hpp"
 
 using XrDap::Vendor::RequestLength;
 
@@ -65,7 +64,8 @@ TEST(IncompleteOrUnknownIsRejected)
 {
   CHECK_EQ(Len({0x84}), 0U);
   CHECK_EQ(Len({0x85, 0x00}), 0U);
-  CHECK_EQ(Len({0x86, 0x00}), 0U);  // 附加命令由平台算 / extra commands are the platform's
+  CHECK_EQ(Len({0x86, 0x00}),
+           0U);  // 附加命令由平台算 / extra commands are the platform's
   CHECK_EQ(Len({0x87}), 0U);
   CHECK_EQ(Len({0x00, 0x00}), 0U);  // 标准命令归 libxr / standard commands are libxr's
   std::vector<uint8_t> read = {0x81, 0x01};

@@ -77,7 +77,7 @@ class TickAccount
   /// @param period_us 周期 / Period.
   void OnDone(uint32_t count_after, uint32_t busy_us, uint32_t period_us);
 
-    /// @brief 下一个要采的节拍 / Next tick to sample.
+  /// @brief 下一个要采的节拍 / Next tick to sample.
   uint32_t Next() const { return next_; }
 
  private:
@@ -93,9 +93,9 @@ class TickAccount
 // 采样帧的环形缓冲。每帧前面有 2 字节小端长度，只按整帧取出。采样写、SUB_READ 读，都在
 // 同一个执行上下文里顺序进行，所以没有锁。
 //
-// Ring buffer of sample frames. Each frame is preceded by a 2-byte little-endian length and
-// is only taken out whole. Sampling writes and SUB_READ reads, both in the one execution
-// context and one after the other, so there is no lock.
+// Ring buffer of sample frames. Each frame is preceded by a 2-byte little-endian length
+// and is only taken out whole. Sampling writes and SUB_READ reads, both in the one
+// execution context and one after the other, so there is no lock.
 
 #include <cstdint>
 

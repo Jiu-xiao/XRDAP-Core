@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// XR 厂商扩展的线上格式和请求检查：命令号、状态码、条目、小端工具，DAP_ExecuteCommands
-// 里厂商命令的长度，回复放不放得下，SUB_START 请求的检查。协议见 docs/protocol.md 第 3 节。
+// XR 厂商扩展的线上格式和请求检查：命令号、状态码、条目、小端工具，DAP_ExecuteCommands里
+// 厂商命令的长度，回复放不放得下，SUB_START 请求的检查。协议见 docs/protocol.md 第 3 节。
 //
 // Wire format and request checks of the XR vendor extension: command bytes, status codes,
 // items, little-endian helpers, the length of a vendor command inside
@@ -45,8 +45,8 @@ constexpr uint8_t kVersion = 2;
 /// 功能位：READ | WRITE | 采样 | 8 字节访问 / Feature bits: READ | WRITE | sampling |
 /// 8-byte access.
 constexpr uint32_t kFeatures = 0x0F;
-/// 功能位 bit5:探针有控制口(docs/protocol.md 3.7.1)/ Feature bit 5: the probe has a control
-/// port (docs/protocol.md 3.7.1).
+/// 功能位 bit5:探针有控制口(docs/protocol.md 3.7.1)/ Feature bit 5: the probe has a
+/// control port (docs/protocol.md 3.7.1).
 constexpr uint32_t kFeatureControl = 1U << 5;
 /// 一条命令最多的条目数 / Maximum items per command.
 constexpr uint16_t kMaxItems = 32;
@@ -246,15 +246,16 @@ struct SubItemList
 
 // ===== Request length 请求长度 =====
 
-// 厂商命令请求的长度（docs/protocol.md 3.2）。DAP_ExecuteCommands 和 DAP_QueueCommands
-// 把多条命令首尾相接放在一个包里，没有长度字段，CMSIS-DAP 要求每条命令的长度能从它自己
-// 的内容得出。标准命令由 libxr 计算，0x80 到 0x85 由这里计算，平台挂的附加命令自己算，libxr 经长度钩子来问。
+// 厂商命令请求的长度（docs/protocol.md 3.2）。DAP_ExecuteCommands 和 DAP_QueueCommands把
+// 多条命令首尾相接放在一个包里，没有长度字段，CMSIS-DAP 要求每条命令的长度能从它自己的内
+// 容得出。标准命令由 libxr 计算，0x80 到 0x85 由这里计算，平台挂的附加命令自己算，libxr
+// 经长度钩子来问。
 //
 // Request length of vendor commands (docs/protocol.md 3.2). DAP_ExecuteCommands and
 // DAP_QueueCommands place several commands back to back in one packet with no length
-// field; CMSIS-DAP requires every command's length to follow from its own content.
-// libxr works out standard commands, this works out 0x80 to 0x85, a platform works out its
-// own extra command, and libxr asks through its length hook.
+// field; CMSIS-DAP requires every command's length to follow from its own content. libxr
+// works out standard commands, this works out 0x80 to 0x85, a platform works out its own
+// extra command, and libxr asks through its length hook.
 
 #include <cstdint>
 

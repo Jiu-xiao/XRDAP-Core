@@ -1,16 +1,16 @@
-// SPDX-License-Identifier: Apache-2.0
-// Exercise real MemAp/Sampler (single-loop policy) code against an ADIv5 posted-read model. A framing
-// failure must remain visible in the failed frame and recover on a later tick.
+// SPDX-License-Identifier: Apache-2.0 Exercise real MemAp/Sampler (single-loop policy)
+// code against an ADIv5 posted-read model. A framing failure must remain visible in the
+// failed frame and recover on a later tick.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
 
 #include "libxr_system.hpp"
+#include "model_swd.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/sampler.hpp"
-#include "model_swd.hpp"
 
 using namespace XrDap::Vendor;
 using LibXR::ErrorCode;
@@ -402,9 +402,9 @@ void OnlyActiveSamplingReusesCommandCsw()
 void ConnectFromTheSamplingLinkRestartsIt()
 {
   // 采样中上位机被强杀、没发 DAP_Disconnect：同一条链路上新的 DAP_Connect 结束旧的采样并
-  // 重新连接；别的链路的 DAP_Connect 仍被拒绝 / The host is killed while sampling and sends no
-  // DAP_Disconnect: a new DAP_Connect on the same link ends the old sampling and connects
-  // afresh; a DAP_Connect on another link is still refused.
+  // 重新连接；别的链路的 DAP_Connect 仍被拒绝 / The host is killed while sampling and
+  // sends no DAP_Disconnect: a new DAP_Connect on the same link ends the old sampling and
+  // connects afresh; a DAP_Connect on another link is still refused.
   ModelSwd swd;
   XrDap::DapVendor vendor(swd);
   Timer timer;

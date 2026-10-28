@@ -31,13 +31,12 @@ constexpr uint8_t kApIdr = 0x03U;
 // CTRL/STAT 的 STICKYORUN、STICKYERR、WDATAERR / CTRL/STAT STICKYORUN, STICKYERR,
 // WDATAERR.
 constexpr uint32_t kCtrlStatErrors = (1U << 1) | (1U << 5) | (1U << 7);
-// ABORT 的 STKCMPCLR、STKERRCLR、WDERRCLR、ORUNERRCLR，取 libxr 的位定义 / ABORT STKCMPCLR,
-// STKERRCLR, WDERRCLR, ORUNERRCLR, from libxr's bit definitions.
-constexpr uint32_t kAbortClearAll =
-    LibXR::Debug::SwdProtocol::DP_ABORT_STKCMPCLR |
-    LibXR::Debug::SwdProtocol::DP_ABORT_STKERRCLR |
-    LibXR::Debug::SwdProtocol::DP_ABORT_WDERRCLR |
-    LibXR::Debug::SwdProtocol::DP_ABORT_ORUNERRCLR;
+// ABORT 的 STKCMPCLR、STKERRCLR、WDERRCLR、ORUNERRCLR，取 libxr 的位定义 / ABORT
+// STKCMPCLR, STKERRCLR, WDERRCLR, ORUNERRCLR, from libxr's bit definitions.
+constexpr uint32_t kAbortClearAll = LibXR::Debug::SwdProtocol::DP_ABORT_STKCMPCLR |
+                                    LibXR::Debug::SwdProtocol::DP_ABORT_STKERRCLR |
+                                    LibXR::Debug::SwdProtocol::DP_ABORT_WDERRCLR |
+                                    LibXR::Debug::SwdProtocol::DP_ABORT_ORUNERRCLR;
 static_assert(kAbortClearAll == 0x1EU, "ABORT clear-all flags");
 
 uint8_t SizeCode(uint8_t size) { return (size == 1U) ? 0U : (size == 2U) ? 1U : 2U; }

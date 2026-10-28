@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// 串口链路的帧（docs/protocol.md 第 1 节，与 XRDAP-Host 的串口传输一致）。帧头和尾是 libxr
-// Topic 的打包格式（Topic::PackedDataHeader、PACKET_PREFIX、PACKET_VERSION，CRC 用
+// 串口链路的帧（docs/protocol.md 第 1 节，与 XRDAP-Host 的串口传输一致）。帧头和尾是
+// libxr Topic 的打包格式（Topic::PackedDataHeader、PACKET_PREFIX、PACKET_VERSION，CRC 用
 // LibXR::CRC8、CRC32），这里只有 payload 和流式重同步：
 //   0x5A + data_len(3) + topic_crc32(4) + timestamp_us(6) + version 1 + header_crc8 +
 //   payload + crc8，payload = n(2) + DAP 包(n)。
-// 请求的 topic 是 dap_req，响应的是 dap_resp；控制请求是 ctrl_req，响应是 ctrl_resp。帧头 CRC8 或尾 CRC8 错、版本或 topic 不对、
-// 长度不合法时丢掉当前候选帧，从缓冲里下一个 0x5A 重新开始。这里只拼帧、校验、打包，
-// 不碰串口，也不执行命令。
+// 请求的 topic 是 dap_req，响应的是 dap_resp；控制请求是 ctrl_req，响应是 ctrl_resp。帧头
+// CRC8 或尾 CRC8 错、版本或 topic 不对、长度不合法时丢掉当前候选帧，从缓冲里下一个 0x5A
+// 重新开始。这里只拼帧、校验、打包，不碰串口，也不执行命令。
 //
 // Frames of the serial link (docs/protocol.md section 1, matching the serial transport
 // of XRDAP-Host). The header and trailer are libxr's Topic packing format
@@ -16,10 +16,11 @@
 // CRC32); only the payload and the streaming resync live here:
 //   0x5A + data_len(3) + topic_crc32(4) + timestamp_us(6) + version 1 + header_crc8 +
 //   payload + crc8, with payload = n(2) + DAP packet(n).
-// Requests use topic dap_req, responses dap_resp; control requests use ctrl_req and responses ctrl_resp. A wrong header or trailing CRC8, a
-// wrong version or topic, or a bad length drops the current candidate and parsing
-// restarts at the next 0x5A in the buffer. This only assembles, checks and packs frames;
-// it touches no UART and runs no command.
+// Requests use topic dap_req, responses dap_resp; control requests use ctrl_req and
+// responses ctrl_resp. A wrong header or trailing CRC8, a wrong version or topic, or a
+// bad length drops the current candidate and parsing restarts at the next 0x5A in the
+// buffer. This only assembles, checks and packs frames; it touches no UART and runs no
+// command.
 
 #include <cstddef>
 #include <cstdint>
@@ -45,8 +46,8 @@ inline constexpr uint8_t kPad = 0x00U;
 inline constexpr char kRequestTopicName[] = "dap_req";
 /// 响应 topic 的名字 / Name of the response topic.
 inline constexpr char kResponseTopicName[] = "dap_resp";
-/// 控制请求 topic 的名字:探针自己的设置,不是 DAP 命令 / Name of the control request topic: the
-/// probe's own settings, not a DAP command.
+/// 控制请求 topic 的名字:探针自己的设置,不是 DAP 命令 / Name of the control request
+/// topic: the probe's own settings, not a DAP command.
 inline constexpr char kControlRequestTopicName[] = "ctrl_req";
 /// 控制响应 topic 的名字 / Name of the control response topic.
 inline constexpr char kControlResponseTopicName[] = "ctrl_resp";
@@ -73,8 +74,9 @@ class Framer
   static constexpr size_t kFrameCapacity = kHeaderSize + kPayloadCapacity + 1U;
 
   /// @brief 送入收到的字节；每拼出一个合法请求就调用一次 on_request(data, len, control)，
-  ///        control 为真表示它是控制请求 / Feed received bytes; on_request(data, len, control)
-  ///        is called for every valid request, control true for a control request.
+  ///        control 为真表示它是控制请求 / Feed received bytes; on_request(data, len,
+  ///        control) is called for every valid request, control true for a control
+  ///        request.
   /// @return 这次交出的请求数 / Requests handed out by this call.
   template <typename Fn>
   uint32_t Feed(const uint8_t* data, size_t len, Fn&& on_request)

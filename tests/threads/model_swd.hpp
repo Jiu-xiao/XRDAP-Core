@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// ADIv5 的 SWD 模型：两个 AP，带 posted 读，可以注入失步和故障。采样和执行器的线程测试共用 /
-// An ADIv5 SWD model: two APs with posted reads, with injectable desync and faults. Shared
-// by the sampling and the executor thread tests.
+// ADIv5 的 SWD 模型：两个 AP，带 posted 读，可以注入失步和故障。采样和执行器的线程测试共
+// 用 / An ADIv5 SWD model: two APs with posted reads, with injectable desync and faults.
+// Shared by the sampling and the executor thread tests.
 
 #include <cstdint>
 #include <cstdio>
@@ -13,12 +13,12 @@
 #include "libxr.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 
-#define MODEL_SWD_CHECK(x)                                   \
+#define MODEL_SWD_CHECK(x)                                 \
   do                                                       \
   {                                                        \
     if (!(x))                                              \
     {                                                      \
-      std::fprintf(stderr, "line %d: %s\n", __LINE__, #x);       \
+      std::fprintf(stderr, "line %d: %s\n", __LINE__, #x); \
       std::exit(1);                                        \
     }                                                      \
   } while (0)

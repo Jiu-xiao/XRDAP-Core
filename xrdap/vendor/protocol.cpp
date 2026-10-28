@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "xrdap/vendor/protocol.hpp"
 
-#include "xrdap/vendor/protocol.hpp"
-
 // ===== Request length 请求长度 =====
 
 namespace XrDap::Vendor

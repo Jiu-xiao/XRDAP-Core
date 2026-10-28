@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// 探针端周期采样（docs/protocol.md 3.5）。节拍定时器（TickTimer，平台实现）是唯一的
-// 时钟：它的中断调用 OnTickIsr()，把节拍计数加上实际跨过的周期数；执行上下文调用 Sample()
-// 时按 TickAccount 决定采哪一拍、跳过了几拍，时基只用来给帧打时间戳。每一拍在一个 MemAp::Access
-// 里完成：确认这次运行还在（代号没变）、读到期的条目、把帧放进缓冲，所以停止后换了配置也
-// 不会混进旧的帧。采样和命令在同一个执行上下文里一件一件做（executor.hpp），所以没有锁、
-// 没有让路、没有第二个任务；要不要叫醒执行上下文由平台给的 WakeFn 决定。
+// 探针端周期采样（docs/protocol.md 3.5）。节拍定时器（TickTimer，平台实现）是唯一的时钟：
+// 它的中断调用 OnTickIsr()，把节拍计数加上实际跨过的周期数；执行上下文调用 Sample()时按
+// TickAccount 决定采哪一拍、跳过了几拍，时基只用来给帧打时间戳。每一拍在一个
+// MemAp::Access里完成：确认这次运行还在（代号没变）、读到期的条目、把帧放进缓冲，所以停止
+// 后换了配置也不会混进旧的帧。采样和命令在同一个执行上下文里一件一件做（executor.hpp），
+// 所以没有锁、没有让路、没有第二个任务；要不要叫醒执行上下文由平台给的 WakeFn 决定。
 //
 // Probe-side periodic sampling (docs/protocol.md 3.5). The tick timer (TickTimer,
 // implemented by the platform) is the only clock: its interrupt calls OnTickIsr(), which
 // adds elapsed_ticks to the tick count. When the execution context calls Sample(),
 // TickAccount decides which tick to sample and how many were skipped; the time base only
-// stamps frames. Every tick completes inside one MemAp::Access: it checks the run is still current
-// (same generation), reads the due items and puts the frame into the buffer, so a frame of
-// an old run cannot land after a stop and a new configuration. Sampling and commands run
-// one after the other in the same execution context (executor.hpp), so there is no lock,
-// no yielding and no second task; whether the execution context is woken is up to the
-// WakeFn the platform supplies.
+// stamps frames. Every tick completes inside one MemAp::Access: it checks the run is
+// still current (same generation), reads the due items and puts the frame into the
+// buffer, so a frame of an old run cannot land after a stop and a new configuration.
+// Sampling and commands run one after the other in the same execution context
+// (executor.hpp), so there is no lock, no yielding and no second task; whether the
+// execution context is woken is up to the WakeFn the platform supplies.
 
 #include <atomic>
 #include <cstdint>
@@ -111,9 +111,9 @@ class SamplerCore
   TickAccount account_;
 
   /// @brief 停定时器（若开着）/ Stop the timer if it is on.
-  /// @note 不内联：平台的定时器类型对 Service 保持未知，调用不会被去虚化后展开进 Service /
-  ///       Out of line: the platform's timer type stays unknown to Service, so the calls are
-  ///       not devirtualised and expanded into it.
+  /// @note 不内联：平台的定时器类型对 Service 保持未知，调用不会被去虚化后展开进 Service
+  ///       / Out of line: the platform's timer type stays unknown to Service, so the
+  ///       calls are not devirtualised and expanded into it.
   void StopTimer(TickTimer& timer);
 
   /// 以 period_us_ 开定时器 / Start the timer with period_us_.
@@ -159,8 +159,8 @@ class SamplerCore
 using WakeFn = void (*)(void* ctx, bool in_isr);
 
 /// 采样配置、节拍和帧缓冲 / Sampling configuration, ticks and frame buffer.
-/// @note 除 OnTickIsr 外都只在执行上下文里调用 / Everything but OnTickIsr is called in the
-///       execution context only.
+/// @note 除 OnTickIsr 外都只在执行上下文里调用 / Everything but OnTickIsr is called in
+///       the execution context only.
 class Sampler : public SamplerCore
 {
  public:
@@ -188,7 +188,8 @@ class Sampler : public SamplerCore
     return kStatusOk;
   }
 
-  /// 停止采样；下一次 Sample() 停定时器 / Stop sampling; the next Sample() stops the timer.
+  /// 停止采样；下一次 Sample() 停定时器 / Stop sampling; the next Sample() stops the
+  /// timer.
   void Stop() { active_.store(0U, std::memory_order_relaxed); }
 
   /// @brief 是否正在采样 / Whether sampling is running.
@@ -205,17 +206,17 @@ class Sampler : public SamplerCore
     wake_ctx_ = ctx;
   }
 
-  /// @brief 节拍定时器中断调用：计数加 elapsed_ticks；设了 WakeFn 时，计数到达或越过要采的
-  ///        节拍就叫醒执行上下文一次 / Called by the tick timer interrupt: adds
-  ///        elapsed_ticks to the count; with a WakeFn set, wakes the execution context once
-  ///        when the count reaches or passes the next tick to sample.
-  /// @note 中断上下文。期限被消耗一次后，执行上下文重新装填前不会再唤醒：一帧很长时，反复的
-  ///       中断不能攒下唤醒 / Interrupt context. Once the deadline is consumed there is no
-  ///       further wake until the execution context rearms it: while a long frame runs,
-  ///       repeated interrupts must not accumulate wakes.
-  /// @note 加计数和读唤醒计数用 seq_cst，与 Arm 里装填唤醒计数和读计数配对：两边各写一个量
-  ///       再读对方的，seq_cst 的全序保证至少一边看得到对方，不会既没唤醒、又没发现计数已
-  ///       到 / Raising the count and reading the wake count are seq_cst, paired with
+  /// @brief 节拍定时器中断调用：计数加 elapsed_ticks；设了 WakeFn 时，计数到达或越过要采
+  ///        的节拍就叫醒执行上下文一次 / Called by the tick timer interrupt: adds
+  ///        elapsed_ticks to the count; with a WakeFn set, wakes the execution context
+  ///        once when the count reaches or passes the next tick to sample.
+  /// @note 中断上下文。期限被消耗一次后，执行上下文重新装填前不会再唤醒：一帧很长时，反复
+  ///       的中断不能攒下唤醒 / Interrupt context. Once the deadline is consumed there is
+  ///       no further wake until the execution context rearms it: while a long frame
+  ///       runs, repeated interrupts must not accumulate wakes.
+  /// @note 加计数和读唤醒计数用 seq_cst，与 Arm 里装填唤醒计数和读计数配对：两边各写一个
+  ///       量再读对方的，seq_cst 的全序保证至少一边看得到对方，不会既没唤醒、又没发现计数
+  ///       已到 / Raising the count and reading the wake count are seq_cst, paired with
   ///       rearming the wake count and reading the count in Arm: each side writes one
   ///       variable and then reads the other's, and the total order of seq_cst guarantees
   ///       at least one side sees the other, so a due tick cannot be both unwoken and
@@ -241,12 +242,12 @@ class Sampler : public SamplerCore
     }
   }
 
-  /// @brief 执行上下文每一轮调用：按需开关定时器，到了要采的节拍就采一帧，再定下一次唤醒的
-  ///        计数 / Called once per round of the execution context: start or stop the timer
-  ///        as needed, sample one frame when the tick to sample came, then set the count of
-  ///        the next wake.
-  /// @return true 时下一个要采的节拍已经到了，不等唤醒再来一次 / True when the next tick to
-  ///         sample has already come, to run again without waiting.
+  /// @brief 执行上下文每一轮调用：按需开关定时器，到了要采的节拍就采一帧，再定下一次唤醒
+  ///        的计数 / Called once per round of the execution context: start or stop the
+  ///        timer as needed, sample one frame when the tick to sample came, then set the
+  ///        count of the next wake.
+  /// @return true 时下一个要采的节拍已经到了，不等唤醒再来一次 / True when the next tick
+  ///         to sample has already come, to run again without waiting.
   bool Sample(TickTimer& timer)
   {
     MemAp::Access access(mem_);
@@ -288,8 +289,8 @@ class Sampler : public SamplerCore
   }
 
   /// 是否该进 Sample：新的一次采样要开定时器，停了的要关定时器，运行中的看节拍到了没有 /
-  /// Whether to enter Sample: a new run has to start the timer, a stopped one has to stop it,
-  /// a running one looks at whether its tick came.
+  /// Whether to enter Sample: a new run has to start the timer, a stopped one has to stop
+  /// it, a running one looks at whether its tick came.
   bool Due() const
   {
     if (!Active())
@@ -306,8 +307,8 @@ class Sampler : public SamplerCore
   /// @brief 定下中断下一次唤醒的计数，并告诉调用方要采的节拍是否已经到了 / Set the count
   ///        of the interrupt's next wake, and tell the caller whether the tick to sample
   ///        has already come.
-  /// @note 先装填、再读计数，都是 seq_cst，与 OnTickIsr 配对 / Rearm, then read the count,
-  ///       both seq_cst, paired with OnTickIsr.
+  /// @note 先装填、再读计数，都是 seq_cst，与 OnTickIsr 配对 / Rearm, then read the
+  ///       count, both seq_cst, paired with OnTickIsr.
   bool Arm(uint32_t next)
   {
     wake_at_.store(next, std::memory_order_seq_cst);
@@ -318,10 +319,15 @@ class Sampler : public SamplerCore
   /// reached in practice.
   static constexpr uint32_t kParkedTicks = 0x40000000U;
 
-  std::atomic<uint32_t> active_{0U};   ///< 在运行吗 / Running.
-  uint32_t gen_ = 0U;                  ///< 运行代号，Start 加一 / Run generation, +1 per Start.
-  std::atomic<uint32_t> ticks_{0U};    ///< 节拍计数：中断加，执行上下文读和清零 / Tick count: the interrupt adds, the execution context reads and clears.
-  std::atomic<uint32_t> wake_at_{0U};  ///< 中断唤醒的计数：执行上下文装填，中断消耗 / Interrupt wake count: armed by the execution context, consumed by the interrupt.
+  std::atomic<uint32_t> active_{0U};  ///< 在运行吗 / Running.
+  /// 运行代号，Start 加一 / Run generation, +1 per Start.
+  uint32_t gen_ = 0U;
+  /// 节拍计数：中断加，执行上下文读和清零 / Tick count: the interrupt adds, the execution
+  /// context reads and clears.
+  std::atomic<uint32_t> ticks_{0U};
+  /// 中断唤醒的计数：执行上下文装填，中断消耗 / Interrupt wake count: armed by the
+  /// execution context, consumed by the interrupt.
+  std::atomic<uint32_t> wake_at_{0U};
   WakeFn wake_ = nullptr;
   void* wake_ctx_ = nullptr;
 };

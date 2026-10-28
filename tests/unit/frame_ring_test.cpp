@@ -5,9 +5,8 @@
 // (SUB_READ returns whole frames only; bytes left exclude the length heads) and 3.5 (when
 // full, flags.bit0 drops the new frame or overwrites the oldest; lost frames count as
 // dropped). The test ring is 256 bytes; every frame takes 2 more bytes of length head.
-#include "xrdap/vendor/sampling.hpp"
-
 #include "check.hpp"
+#include "xrdap/vendor/sampling.hpp"
 
 using XrDap::Vendor::FrameRing;
 

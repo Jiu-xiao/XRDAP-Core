@@ -62,15 +62,15 @@ template <typename DapT>
 void SetProbeInfo(DapT& dap, const ProbeIdentity& id)
 {
   dap.SetInfoStrings({
-      kVendorName,            // 厂商 / vendor
-      id.product,             // 产品 / product
-      id.serial,              // 序列号 / serial
+      kVendorName,       // 厂商 / vendor
+      id.product,        // 产品 / product
+      id.serial,         // 序列号 / serial
       kProtocolVersion,  // CMSIS-DAP 协议版本 / CMSIS-DAP protocol version
-      nullptr,                // 目标芯片厂商（不固定）/ target device vendor (not fixed)
-      nullptr,                // 目标芯片名 / target device name
-      kVendorName,            // 板子厂商 / board vendor
-      id.board,               // 板子名 / board name
-      id.firmware,            // 探针固件版本 / probe firmware version
+      nullptr,           // 目标芯片厂商（不固定）/ target device vendor (not fixed)
+      nullptr,           // 目标芯片名 / target device name
+      kVendorName,       // 板子厂商 / board vendor
+      id.board,          // 板子名 / board name
+      id.firmware,       // 探针固件版本 / probe firmware version
   });
 }
 

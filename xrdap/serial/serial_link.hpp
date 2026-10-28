@@ -138,7 +138,8 @@ class SerialLink
     {
       return 0U;
     }
-    return framer_.Feed(data, len, [this](const uint8_t* req, uint16_t req_len, bool control)
+    return framer_.Feed(data, len,
+                        [this](const uint8_t* req, uint16_t req_len, bool control)
                         { OnRequest(req, req_len, control); });
   }
 
@@ -277,7 +278,8 @@ class SerialLink
   }
 
   /// @brief 把 tx_frame_ 里的一帧写出，等写端口有空位，最多等 kTxTimeoutMs / Write the
-  ///        frame in tx_frame_, waiting for room in the write port for up to kTxTimeoutMs.
+  ///        frame in tx_frame_, waiting for room in the write port for up to
+  ///        kTxTimeoutMs.
   /// @param len 帧长 / Frame length.
   /// @note 不带完成通知地写：返回 OK 时这一帧已复制进写端口的队列、一定会发出；FULL、
   ///       BUSY 时什么都没进队列，可以重试。阻塞写的 TIMEOUT 含义不定（可能已排队、也可能

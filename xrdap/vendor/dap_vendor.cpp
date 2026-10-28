@@ -6,8 +6,6 @@
 #include "timebase.hpp"
 #include "xrdap/protocol/dap_cmd.hpp"
 #include "xrdap/vendor/protocol.hpp"
-#include "xrdap/vendor/protocol.hpp"
-#include "xrdap/vendor/protocol.hpp"
 
 namespace XrDap
 {
@@ -27,7 +25,7 @@ uint8_t ToU8(Cmd c) { return static_cast<uint8_t>(c); }
 }  // namespace
 
 void DapVendor::SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler,
-                                    void* ctx, ExtraLength length)
+                                void* ctx, ExtraLength length)
 {
   extra_length_ = length;
   extra_cmd_ = cmd;
@@ -75,9 +73,8 @@ void DapVendor::Drop()
   epoch_.fetch_add(1U);
 }
 
-DapVendor::Result DapVendor::OnCommand(const uint8_t* req, uint16_t len,
-                                                    uint8_t* resp, uint16_t cap,
-                                                    uint16_t& out)
+DapVendor::Result DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t* resp,
+                                       uint16_t cap, uint16_t& out)
 {
   if (req == nullptr || resp == nullptr || len < 1U || cap < 1U)
   {
@@ -85,11 +82,11 @@ DapVendor::Result DapVendor::OnCommand(const uint8_t* req, uint16_t len,
   }
   const uint8_t cmd = req[0];
 
-  // 开始采样的那条链路又发来 DAP_Connect：它的上位机回来了（旧的没发 DAP_Disconnect 就没了，
-  // 例如被强杀），结束旧的连接和采样，重新连接。别的链路发来的 DAP_Connect 照旧被拒绝。
-  // A DAP_Connect from the link that started sampling means its host came back (the old one
-  // is gone without a DAP_Disconnect, for example killed): end the old connection and
-  // sampling and connect afresh. A DAP_Connect from another link is still refused.
+  // 开始采样的那条链路又发来 DAP_Connect：它的上位机回来了（旧的没发 DAP_Disconnect 就没
+  // 了，例如被强杀），结束旧的连接和采样，重新连接。别的链路发来的 DAP_Connect 照旧被拒
+  // 绝。A DAP_Connect from the link that started sampling means its host came back (the
+  // old one is gone without a DAP_Disconnect, for example killed): end the old connection
+  // and sampling and connect afresh. A DAP_Connect from another link is still refused.
   if (cmd == Byte(DapCmd::CONNECT) && sampler_.Active() &&
       ConnectedLink() == current_link_ && current_link_ != Transport::NONE)
   {
@@ -167,8 +164,8 @@ bool DapVendor::IsVendor(uint8_t cmd) const
          (extra_handler_ != nullptr && cmd == extra_cmd_);
 }
 
-bool DapVendor::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len,
-                                      uint8_t* resp, uint16_t cap, uint16_t& out)
+bool DapVendor::HandleVendor(uint8_t cmd, const uint8_t* req, uint16_t len, uint8_t* resp,
+                             uint16_t cap, uint16_t& out)
 {
   // 回复空间一处检查：附加命令只保证至少 2 字节，自己的回复长度由它自己检查。
   // One reply space check: the extra command is only guaranteed 2 bytes and checks the
@@ -221,8 +218,8 @@ bool DapVendor::CmdInfo(uint16_t len, uint8_t* resp, uint16_t& out)
   return true;
 }
 
-bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp,
-                            uint16_t& out, bool sampling)
+bool DapVendor::CmdRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out,
+                        bool sampling)
 {
   resp[0] = ToU8(Cmd::READ);
   if (len < 2U || req[1] == 0U)
@@ -335,7 +332,7 @@ bool DapVendor::CmdWrite(const uint8_t* req, uint16_t len, uint8_t* resp, uint16
 }
 
 bool DapVendor::CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp,
-                                     uint16_t& out)
+                            uint16_t& out)
 {
   resp[0] = ToU8(Cmd::SUB_START);
   if (sampler_.Active())
@@ -352,15 +349,15 @@ bool DapVendor::CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp,
   {
     return Reply(resp, kStatusNoTarget, out);
   }
-  // 采样随发起它的连接作废而停 / Sampling stops when the connection that started it lapses.
-  return Reply(resp,
-               sampler_.Start(start.items, start.period_us, start.stop_on_full,
-                              epoch_.load()),
-               out);
+  // 采样随发起它的连接作废而停 / Sampling stops when the connection that started it
+  // lapses.
+  return Reply(
+      resp,
+      sampler_.Start(start.items, start.period_us, start.stop_on_full, epoch_.load()),
+      out);
 }
 
-bool DapVendor::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp,
-                                    uint16_t& out)
+bool DapVendor::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
 {
   resp[0] = ToU8(Cmd::SUB_CTRL);
   if (len != 2U)
@@ -379,8 +376,8 @@ bool DapVendor::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp,
   return Reply(resp, kStatusArg, out);
 }
 
-bool DapVendor::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp,
-                                    uint16_t cap, uint16_t& out)
+bool DapVendor::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
+                           uint16_t& out)
 {
   resp[0] = ToU8(Cmd::SUB_READ);
   if (len != 3U)

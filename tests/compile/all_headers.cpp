@@ -3,6 +3,8 @@
 // on its own (built only by the libxr compile check).
 #include "daplink_v2.hpp"
 #include "xrdap/activity/dap_activity.hpp"
+#include "xrdap/control/control.hpp"
+#include "xrdap/control/usb_control.hpp"
 #include "xrdap/light/status_light.hpp"
 #include "xrdap/probe/family.hpp"
 #include "xrdap/probe/probe_identity.hpp"
@@ -11,15 +13,11 @@
 #include "xrdap/serial/serial_link.hpp"
 #include "xrdap/session/executor.hpp"
 #include "xrdap/session/transport.hpp"
-#include "xrdap/control/control.hpp"
-#include "xrdap/control/usb_control.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
-#include "xrdap/vendor/sampling.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/protocol.hpp"
 #include "xrdap/vendor/sampler.hpp"
 #include "xrdap/vendor/sampling.hpp"
-#include "xrdap/vendor/protocol.hpp"
 
 namespace
 {

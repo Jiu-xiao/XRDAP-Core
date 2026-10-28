@@ -4,14 +4,15 @@
 // XR 厂商扩展命令（0x80 到 0x85，协议版本 2）：多地址读写、指针链解引用、探针端周期采样。
 // 还可挂一条附加命令（SetExtraCommand，由平台挂上，例如 XRDAP-ESP 的 Wi-Fi 配置）。由
 // Executor 在执行上下文里调用，采样也在那里一帧一帧地做（Sample）。DAP_Connect 记下它来自
-// 哪条链路；连接在哪条链路上、链路丢了怎么办见 OnLinkLost。协议见 docs/protocol.md 第 3 节。
+// 哪条链路；连接在哪条链路上、链路丢了怎么办见 OnLinkLost。协议见 docs/protocol.md 第 3
+// 节。
 //
 // XR vendor extension commands (0x80 to 0x85, protocol version 2): multi-address
-// read/write, pointer-chain dereference and probe-side periodic sampling. One extra command
-// can be attached (SetExtraCommand, attached by the platform, e.g. XRDAP-ESP's Wi-Fi
-// configuration). Executor calls it in the execution context, where sampling is also done
-// one frame at a time (Sample). DAP_Connect notes the link it came from; which link the
-// connection is on and what happens when the link is lost: see OnLinkLost. See
+// read/write, pointer-chain dereference and probe-side periodic sampling. One extra
+// command can be attached (SetExtraCommand, attached by the platform, e.g. XRDAP-ESP's
+// Wi-Fi configuration). Executor calls it in the execution context, where sampling is
+// also done one frame at a time (Sample). DAP_Connect notes the link it came from; which
+// link the connection is on and what happens when the link is lost: see OnLinkLost. See
 // docs/protocol.md section 3.
 
 #include <atomic>
@@ -20,9 +21,9 @@
 #include "debug/swd.hpp"
 #include "xrdap/session/transport.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
+#include "xrdap/vendor/protocol.hpp"
 #include "xrdap/vendor/sampler.hpp"
 #include "xrdap/vendor/sampling.hpp"
-#include "xrdap/vendor/protocol.hpp"
 
 namespace XrDap
 {
@@ -55,8 +56,8 @@ class DapVendor
   /// @brief 挂一条附加命令，其 feature 并入 INFO 功能位 / Attach one extra command whose
   ///        feature bit is merged into INFO.
   /// @param cmd 命令字节，应在 0x85 之后 / Command byte, expected above 0x85.
-  /// @param length 算这条命令的请求字节数，DAP_ExecuteCommands / DAP_QueueCommands 里要用 /
-  ///        Works out the request bytes of this command, needed inside
+  /// @param length 算这条命令的请求字节数，DAP_ExecuteCommands / DAP_QueueCommands 里要用
+  ///        / Works out the request bytes of this command, needed inside
   ///        DAP_ExecuteCommands / DAP_QueueCommands.
   /// @param handler 至少有 2 字节回复空间时才被调用，回复不能超过给它的 cap /
   ///        Called only with at least 2 bytes of reply space; its reply must not exceed

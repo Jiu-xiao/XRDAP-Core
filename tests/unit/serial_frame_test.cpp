@@ -13,7 +13,10 @@ using namespace XrDap::Serial;
 
 namespace
 {
-uint8_t Crc8(const uint8_t* data, size_t len) { return LibXR::CRC8::Calculate(data, len); }
+uint8_t Crc8(const uint8_t* data, size_t len)
+{
+  return LibXR::CRC8::Calculate(data, len);
+}
 }  // namespace
 
 namespace
@@ -40,7 +43,8 @@ const uint8_t* Str(const char* s) { return reinterpret_cast<const uint8_t*>(s); 
 
 TEST(CrcCheckValues)
 {
-  // libxr 的 CRC 与文档第 1 节的参数一致 / libxr's CRCs match the parameters of section 1.
+  // libxr 的 CRC 与文档第 1 节的参数一致 / libxr's CRCs match the parameters of section
+  // 1.
   CHECK_EQ(LibXR::CRC32::Calculate(Str("123456789"), 9), 0x340BC6D9U);
   CHECK_EQ(TopicKey(kRequestTopicName), 0xDC8309C5U);
   CHECK_EQ(TopicKey(kResponseTopicName), 0x89E1A688U);
@@ -256,9 +260,9 @@ std::vector<uint8_t> RequestFrame(const char* topic, const std::vector<uint8_t>&
 
 TEST(ControlRequestsAreMarkedAndKeepOrder)
 {
-  // ctrl_req 帧交给回调时 control 为真,与 dap_req 帧按顺序混在一起也不串 / A ctrl_req frame
-  // reaches the callback with control set, and mixed with dap_req frames the order and the flags
-  // hold.
+  // ctrl_req 帧交给回调时 control 为真,与 dap_req 帧按顺序混在一起也不串 / A ctrl_req
+  // frame reaches the callback with control set, and mixed with dap_req frames the order
+  // and the flags hold.
   Framer<1024> f;
   Sink sink;
   std::vector<uint8_t> in = RequestFrame(kRequestTopicName, {0x00, 0xFF});

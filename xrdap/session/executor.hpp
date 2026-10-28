@@ -9,18 +9,20 @@
 // 一轮的顺序（决定 B9：命令最多被采样占一帧，跳拍照常计数）：
 //   1. 有 USB 命令：Step(0) 执行一条；否则邮箱里有请求：执行一条；
 //   2. 采样的节拍到了：采一帧（只采一帧，采完回头看有没有命令）；
-//   3. 什么都没做：在 WaitForWork 里等，USB 命令、别的链路的投递和节拍中断（WakeStep）都会叫醒。
+//   3. 什么都没做：在 WaitForWork 里等，USB 命令、别的链路的投递和节拍中断（WakeStep）都
+//   会叫醒。
 // 命令钩子先交给平台的转发器（例如 CH32 的无线），再交给厂商扩展，其余的标准命令由 libxr
 // 执行。执行过的命令记进 DapActivity。装钩子时也把厂商命令的长度函数交给 libxr
 // （SetCommandHook 的第三个参数），DAP_ExecuteCommands / DAP_QueueCommands 里因此可以放
 // 厂商命令。需要 libxr 的 WakeStep（候选分支 release/0.6-candidate）。
 //
 // The one execution context: every call into the libxr DAP instance on the probe (USB's
-// Step, ExecuteExternal for commands posted by other links) and sampling are done one after
-// the other in the loop Run(), so SWD, the DAP class and the vendor extension are accessed
-// by one thread only, without locks. The tasks of the other links (serial, TCP, radio) only
-// post a request and wait for the reply (Execute); on a single-loop board the main loop is
-// this loop. That the probe is used over one link at a time is up to the user.
+// Step, ExecuteExternal for commands posted by other links) and sampling are done one
+// after the other in the loop Run(), so SWD, the DAP class and the vendor extension are
+// accessed by one thread only, without locks. The tasks of the other links (serial, TCP,
+// radio) only post a request and wait for the reply (Execute); on a single-loop board the
+// main loop is this loop. That the probe is used over one link at a time is up to the
+// user.
 //
 // One round (this decides B9: a command loses at most one frame to sampling, skips are
 // counted as usual):
@@ -31,9 +33,9 @@
 // The command hook first offers the command to the platform's forwarder (for example the
 // CH32 radio), then to the vendor extension; libxr runs the remaining standard commands.
 // Commands that ran are recorded in DapActivity. The hook is installed together with the
-// vendor length function (the third argument of SetCommandHook), so vendor commands may sit
-// inside DAP_ExecuteCommands / DAP_QueueCommands. Needs libxr's WakeStep (candidate branch
-// release/0.6-candidate).
+// vendor length function (the third argument of SetCommandHook), so vendor commands may
+// sit inside DAP_ExecuteCommands / DAP_QueueCommands. Needs libxr's WakeStep (candidate
+// branch release/0.6-candidate).
 
 #include <atomic>
 #include <cstdint>
@@ -52,10 +54,10 @@ namespace XrDap
 {
 
 /// @brief 命令执行器 / Command executor.
-/// @tparam DapT libxr DAP 类（提供 WaitForWork、WakeStep、Step、ExecuteExternal、带长度
-///         钩子的 SetCommandHook 和 SetSessionResetGate）/ libxr DAP class (providing
-///         WaitForWork, WakeStep, Step, ExecuteExternal, SetCommandHook with the length hook
-///         and SetSessionResetGate).
+/// @tparam DapT libxr DAP 类（提供 WaitForWork、WakeStep、Step、ExecuteExternal、带长度钩
+///         子的 SetCommandHook 和 SetSessionResetGate）/ libxr DAP class (providing
+///         WaitForWork, WakeStep, Step, ExecuteExternal, SetCommandHook with the length
+///         hook and SetSessionResetGate).
 template <typename DapT>
 class Executor
 {
@@ -87,8 +89,8 @@ class Executor
     vendor_.AddFeature(handler != nullptr ? Vendor::kFeatureControl : 0U);
   }
 
-  /// @brief 设置执行上下文空闲时多做的一件事（USB 控制口的请求处理）/ Set one more piece of
-  ///        work the execution context does when idle (handling USB control requests).
+  /// @brief 设置执行上下文空闲时多做的一件事（USB 控制口的请求处理）/ Set one more piece
+  ///        of work the execution context does when idle (handling USB control requests).
   /// @param work 做了事返回 true / Returns true when it did something.
   /// @note 初始化时调用 / Call at initialisation.
   void SetExtraWork(bool (*work)(void* ctx), void* ctx)
@@ -108,8 +110,9 @@ class Executor
   /// @brief 执行上下文的一轮 / One round of the execution context.
   /// @param timer 采样用的节拍定时器 / The tick timer sampling uses.
   /// @param wait_ms 什么都没做时最长等多久 / Longest wait when nothing was done.
-  /// @note 只由执行上下文（平台的 DAP 线程，或单循环的主循环）循环调用 / Called in a loop by
-  ///       the execution context only (the platform's DAP thread, or the single main loop).
+  /// @note 只由执行上下文（平台的 DAP 线程，或单循环的主循环）循环调用 / Called in a loop
+  ///       by the execution context only (the platform's DAP thread, or the single main
+  ///       loop).
   void Run(Vendor::TickTimer& timer, uint32_t wait_ms)
   {
     bool worked = false;
@@ -134,12 +137,12 @@ class Executor
     }
     if (!worked && pending_.load(std::memory_order_acquire) == 0U)
     {
-      // 只有在等的时候节拍中断才需要叫醒：先声明在等，再看一遍有没有事，没有才等。中断先加
-      // 计数、再读 waiting_；这里先写 waiting_、再读计数，seq_cst 的全序保证至少一边看得到
-      // 对方 / The tick interrupt has to wake only while waiting: declare the wait, look once
-      // more for work, and wait only if there is none. The interrupt adds to the count and
-      // then reads waiting_; here waiting_ is written and then the count read, and the total
-      // order of seq_cst guarantees one side sees the other.
+      // 只有在等的时候节拍中断才需要叫醒：先声明在等，再看一遍有没有事，没有才等。中断先
+      // 加计数、再读 waiting_；这里先写 waiting_、再读计数，seq_cst 的全序保证至少一边看
+      // 得到对方 / The tick interrupt has to wake only while waiting: declare the wait,
+      // look once more for work, and wait only if there is none. The interrupt adds to
+      // the count and then reads waiting_; here waiting_ is written and then the count
+      // read, and the total order of seq_cst guarantees one side sees the other.
       waiting_.store(1U, std::memory_order_seq_cst);
       if (!vendor_.SampleDue() && pending_.load(std::memory_order_seq_cst) == 0U)
       {
@@ -151,20 +154,21 @@ class Executor
 
   /// @brief 别的链路：把一条命令交给执行上下文，等它执行完 / Other links: hand a command
   ///        to the execution context and wait until it has run.
-  /// @note 链路自己的任务里调用，不能在中断里，也不能在执行上下文里（那里用 ExecuteHere）；
-  ///       每条链路同时只有一条在途；执行上下文要在跑 Run() / Call from the link's own task,
-  ///       not from an interrupt and not from the execution context (use ExecuteHere there);
-  ///       one in flight per link; the execution context must be running Run().
+  /// @note 链路自己的任务里调用，不能在中断里，也不能在执行上下文里（那里用
+  ///       ExecuteHere）；每条链路同时只有一条在途；执行上下文要在跑 Run() / Call from
+  ///       the link's own task, not from an interrupt and not from the execution context
+  ///       (use ExecuteHere there); one in flight per link; the execution context must be
+  ///       running Run().
   void Execute(Transport t, const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                uint16_t& out)
   {
     Post(t, false, req, len, resp, cap, out);
   }
 
-  /// @brief 别的任务：把一个控制请求交给执行上下文，等它处理完 / Other tasks: hand a control
-  ///        request to the execution context and wait until it is handled.
-  /// @note 与 Execute 相同的限制；控制台用 Transport::CONSOLE / The same limits as Execute;
-  ///       the console uses Transport::CONSOLE.
+  /// @brief 别的任务：把一个控制请求交给执行上下文，等它处理完 / Other tasks: hand a
+  ///        control request to the execution context and wait until it is handled.
+  /// @note 与 Execute 相同的限制；控制台用 Transport::CONSOLE / The same limits as
+  ///       Execute; the console uses Transport::CONSOLE.
   void Control(Transport t, const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                uint16_t& out)
   {
@@ -179,8 +183,8 @@ class Executor
     out = HandleControl(req, len, resp, cap);
   }
 
-  /// @brief 别的任务：让执行上下文运行一个函数，等它运行完 / Other tasks: have the execution
-  ///        context run a function and wait until it has.
+  /// @brief 别的任务：让执行上下文运行一个函数，等它运行完 / Other tasks: have the
+  ///        execution context run a function and wait until it has.
   /// @note 用来让命令行之类的入口改探针的设置时与采样、DAP 命令串行；限制同 Execute /
   ///       lets an entry such as the console change the probe's settings serialised with
   ///       sampling and DAP commands; the same limits as Execute.
@@ -190,9 +194,9 @@ class Executor
     Post(t, false, nullptr, 0U, nullptr, 0U, unused, fn, ctx);
   }
 
-  /// @brief 在执行上下文里直接执行一条命令（单循环的探针里，链路在主循环里被轮询）/ Run one
-  ///        command directly in the execution context (on a single-loop probe, where the
-  ///        link is polled in the main loop).
+  /// @brief 在执行上下文里直接执行一条命令（单循环的探针里，链路在主循环里被轮询）/ Run
+  ///        one command directly in the execution context (on a single-loop probe, where
+  ///        the link is polled in the main loop).
   /// @note 只能在执行上下文里调用；别的任务用 Execute，在这里调用 Execute 会等不到应答 /
   ///       Call it in the execution context only; other tasks use Execute, and calling
   ///       Execute here would wait forever for a reply.
@@ -204,16 +208,16 @@ class Executor
     (void)dap_.ExecuteExternal(req, len, resp, cap, out);
   }
 
-  /// @brief 链路 t 丢了（TCP 客户端关闭、串口链路停止或太久没有请求、无线会话结束）：
-  ///        连接在 t 上时，连接和采样作废 / Link t is gone (TCP client closed, serial link
+  /// @brief 链路 t 丢了（TCP 客户端关闭、串口链路停止或太久没有请求、无线会话结束）：连接
+  ///        在 t 上时，连接和采样作废 / Link t is gone (TCP client closed, serial link
   ///        stopped or silent too long, radio session ended): when the connection is on
   ///        t, the connection and sampling lapse.
   /// @note 任何任务，不能在中断里 / Any task, not from an interrupt.
   void LinkLost(Transport t) { vendor_.OnLinkLost(t); }
 
  private:
-  /// 一条命令的执行范围：记下命令从哪条链路来 / The scope of one command's execution: notes
-  /// which link the command came from.
+  /// 一条命令的执行范围：记下命令从哪条链路来 / The scope of one command's execution:
+  /// notes which link the command came from.
   class Scope
   {
    public:
@@ -234,8 +238,10 @@ class Executor
   struct Slot
   {
     Transport t = Transport::NONE;
-    bool control = false;  ///< 控制请求，不是 DAP 命令 / A control request, not a DAP command.
-    void (*call)(void*) = nullptr;  ///< 要在执行上下文里跑的函数 / A function to run in the execution context.
+    /// 控制请求，不是 DAP 命令 / A control request, not a DAP command.
+    bool control = false;
+    /// 要在执行上下文里跑的函数 / A function to run in the execution context.
+    void (*call)(void*) = nullptr;
     void* call_ctx = nullptr;
     const uint8_t* req = nullptr;
     uint16_t len = 0U;
@@ -400,7 +406,8 @@ class Executor
   void* forwarder_ctx_ = nullptr;
   Slot slots_[kSlots];
   std::atomic<uint32_t> pending_{0U};
-  std::atomic<uint32_t> waiting_{0U};  ///< 执行上下文在 WaitForWork 里（或正要进去）/ In WaitForWork, or about to be.
+  /// 执行上下文在 WaitForWork 里（或正要进去）/ In WaitForWork, or about to be.
+  std::atomic<uint32_t> waiting_{0U};
   uint32_t next_ = 0U;
   bool (*extra_work_)(void*) = nullptr;
   void* extra_ctx_ = nullptr;

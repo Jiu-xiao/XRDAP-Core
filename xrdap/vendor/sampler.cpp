@@ -7,7 +7,10 @@
 
 namespace XrDap::Vendor
 {
-uint64_t SamplerNowUs() { return static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds()); }
+uint64_t SamplerNowUs()
+{
+  return static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds());
+}
 
 namespace
 {

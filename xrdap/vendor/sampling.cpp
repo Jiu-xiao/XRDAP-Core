@@ -137,9 +137,6 @@ FrameRing::Taken FrameRing::Take(uint8_t* dst, uint32_t limit)
   return t;
 }
 
-void FrameRing::AddSkipped(uint32_t n)
-{
-  skipped_ += n;
-}
+void FrameRing::AddSkipped(uint32_t n) { skipped_ += n; }
 
 }  // namespace XrDap::Vendor

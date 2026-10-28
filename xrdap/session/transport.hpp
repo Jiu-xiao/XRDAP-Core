@@ -14,11 +14,11 @@ namespace XrDap
 /// 驱动探针的链路 / Link that drives the probe.
 enum class Transport : uint8_t
 {
-  NONE = 0,    ///< 没有 / None.
-  USB = 1,     ///< USB 接口 / USB interface.
-  SERIAL = 2,  ///< 串口链路 / Serial link.
-  TCP = 3,     ///< TCP 连接 / TCP connection.
-  RADIO = 4,   ///< 无线对端（远端探针上）/ Radio peer (on the remote probe).
+  NONE = 0,     ///< 没有 / None.
+  USB = 1,      ///< USB 接口 / USB interface.
+  SERIAL = 2,   ///< 串口链路 / Serial link.
+  TCP = 3,      ///< TCP 连接 / TCP connection.
+  RADIO = 4,    ///< 无线对端（远端探针上）/ Radio peer (on the remote probe).
   CONSOLE = 5,  ///< 命令行（只发控制请求）/ Console (control requests only).
 };
 

@@ -15,15 +15,15 @@
 #include <thread>
 
 #include "libxr.hpp"
+#include "model_swd.hpp"
 #include "semaphore.hpp"
 #include "xrdap/activity/dap_activity.hpp"
+#include "xrdap/control/usb_control.hpp"
 #include "xrdap/protocol/dap_cmd.hpp"
 #include "xrdap/serial/serial_link.hpp"
 #include "xrdap/session/executor.hpp"
 #include "xrdap/session/transport.hpp"
 #include "xrdap/vendor/dap_vendor.hpp"
-#include "model_swd.hpp"
-#include "xrdap/control/usb_control.hpp"
 
 namespace
 {
@@ -223,8 +223,8 @@ struct NullTimer : XrDap::Vendor::TickTimer
   void Stop() override {}
 };
 
-// 执行上下文的线程照 ESP 的 DAP 线程那样循环 Run(timer, wait_ms) / The execution context's
-// thread loops Run(timer, wait_ms) like ESP's DAP thread.
+// 执行上下文的线程照 ESP 的 DAP 线程那样循环 Run(timer, wait_ms) / The execution
+// context's thread loops Run(timer, wait_ms) like ESP's DAP thread.
 class UsbThread
 {
  public:
@@ -274,17 +274,19 @@ void TcpAnsweredWhileUsbWaits()
 void SamplingSharesTheContextWithCommands()
 {
   // 采样（节拍中断每 2 ms 一次，由 OnTickIsr 叫醒）和 TCP、USB 的命令在同一个执行上下文里
-  // 一件一件做：命令一直得到回应，采样一直有帧产出，同一时刻只有一条命令在 DAP 类里 / Sampling
-  // (the tick interrupt every 2 ms, waking through OnTickIsr) and the commands of TCP and USB run
-  // one after the other in the same execution context: commands keep being answered, sampling
-  // keeps producing frames, and only one command is in the DAP class at a time.
+  // 一件一件做：命令一直得到回应，采样一直有帧产出，同一时刻只有一条命令在 DAP 类里 /
+  // Sampling (the tick interrupt every 2 ms, waking through OnTickIsr) and the commands
+  // of TCP and USB run one after the other in the same execution context: commands keep
+  // being answered, sampling keeps producing frames, and only one command is in the DAP
+  // class at a time.
   Probe p;
   p.dap.usb_cost_ms_ = 1U;
   UsbThread usb(p, 50U);
   (void)CommandOn(p, XrDap::Transport::TCP, Byte(DapCmd::CONNECT));
-  // SUB_START：周期 2000 us，一个条目（AP 0，u32，0x08000000）/ SUB_START: period 2000 us,
-  // one item (AP 0, u32 at 0x08000000).
-  const uint8_t start[] = {0x83U, 0xD0U, 0x07U, 0U, 0U, 0U, 1U, 0U, 0, 1, 0, 4, 0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0};
+  // SUB_START：周期 2000 us，一个条目（AP 0，u32，0x08000000）/ SUB_START: period 2000
+  // us, one item (AP 0, u32 at 0x08000000).
+  const uint8_t start[] = {0x83U, 0xD0U, 0x07U, 0U, 0U, 0U, 1U, 0U, 0, 1, 0, 4,
+                           0,     0,     0,     8,  0,  0,  0,  1,  0, 0, 0};
   uint8_t resp[128] = {};
   uint16_t out = 0U;
   p.exec.Execute(XrDap::Transport::TCP, start, sizeof(start), resp, sizeof(resp), out);
@@ -335,15 +337,15 @@ void SamplingSharesTheContextWithCommands()
 
 void ExecuteHereRunsInTheCallersContext()
 {
-  // 单循环探针：链路在主循环里被轮询，命令在调用者的上下文里直接执行，没有执行线程也不等 /
-  // Single-loop probe: the link is polled in the main loop and the command runs directly in the
-  // caller's context, without an execution thread and without waiting.
+  // 单循环探针：链路在主循环里被轮询，命令在调用者的上下文里直接执行，没有执行线程也不等
+  // / Single-loop probe: the link is polled in the main loop and the command runs
+  // directly in the caller's context, without an execution thread and without waiting.
   Probe p;
   const uint8_t connect[2] = {Byte(DapCmd::CONNECT), 0x01};
   uint8_t resp[64] = {};
   uint16_t out = 0U;
-  p.exec.ExecuteHere(XrDap::Transport::RADIO, connect, sizeof(connect), resp, sizeof(resp),
-                     out);
+  p.exec.ExecuteHere(XrDap::Transport::RADIO, connect, sizeof(connect), resp,
+                     sizeof(resp), out);
   EXPECT(out == 2U && resp[0] == Byte(DapCmd::CONNECT));
   EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::RADIO);
   std::printf("  ExecuteHereRunsInTheCallersContext: done\n");
@@ -351,17 +353,20 @@ void ExecuteHereRunsInTheCallersContext()
 
 void ControlRequestsRunInTheExecutionContext()
 {
-  // 控制请求和 DAP 命令一样在执行上下文里一次一条：处理函数里不会有第二个调用者；没有处理函数时
-  // 回“不支持” / Control requests run in the execution context one at a time like DAP commands: the
-  // handler never has a second caller; without a handler the answer is "unsupported".
+  // 控制请求和 DAP 命令一样在执行上下文里一次一条：处理函数里不会有第二个调用者；没有处理
+  // 函数时回“不支持” / Control requests run in the execution context one at a time like
+  // DAP commands: the handler never has a second caller; without a handler the answer is
+  // "unsupported".
   {
     Probe none;
     UsbThread usb(none, 5U);
     uint8_t resp[16] = {};
     uint16_t out = 0U;
     const uint8_t req[3] = {0x42U, 0x01U, 0x02U};
-    none.exec.Control(XrDap::Transport::CONSOLE, req, sizeof(req), resp, sizeof(resp), out);
-    EXPECT(out == 2U && resp[0] == 0x42U && resp[1] == XrDap::Control::kStatusUnsupported);
+    none.exec.Control(XrDap::Transport::CONSOLE, req, sizeof(req), resp, sizeof(resp),
+                      out);
+    EXPECT(out == 2U && resp[0] == 0x42U &&
+           resp[1] == XrDap::Control::kStatusUnsupported);
   }
   Probe p;
 
@@ -386,14 +391,15 @@ void ControlRequestsRunInTheExecutionContext()
       },
       nullptr);
   {
-    // 有控制口的探针在 INFO 里报功能位 5 / A probe with a control port reports feature bit 5
-    // in INFO.
+    // 有控制口的探针在 INFO 里报功能位 5 / A probe with a control port reports feature
+    // bit 5 in INFO.
     const uint8_t info[1] = {0x80U};
     uint8_t r[64] = {};
     uint16_t o = 0U;
     p.exec.ExecuteHere(XrDap::Transport::TCP, info, sizeof(info), r, sizeof(r), o);
     EXPECT(o >= 7U && r[1] == 0x00U);
-    const uint32_t features = r[3] | (r[4] << 8) | (r[5] << 16) | (static_cast<uint32_t>(r[6]) << 24);
+    const uint32_t features =
+        r[3] | (r[4] << 8) | (r[5] << 16) | (static_cast<uint32_t>(r[6]) << 24);
     EXPECT((features & (1U << 5)) != 0U);
   }
   UsbThread usb(p, 5U);
@@ -424,8 +430,8 @@ void ControlRequestsRunInTheExecutionContext()
   std::printf("  ControlRequestsRunInTheExecutionContext: done\n");
 }
 
-// 一次 USB 控制传输：SEND 一个请求，再 RECV 到应答 / One USB control exchange: SEND a request,
-// then RECV the answer.
+// 一次 USB 控制传输：SEND 一个请求，再 RECV 到应答 / One USB control exchange: SEND a
+// request, then RECV the answer.
 size_t UsbExchange(FakeDap& dap, const uint8_t* q, size_t n, uint8_t* a)
 {
   EXPECT(dap.port_->OnVendorOut(false, 1U, {q, n}) == ErrorCode::OK);
@@ -446,10 +452,10 @@ size_t UsbExchange(FakeDap& dap, const uint8_t* q, size_t n, uint8_t* a)
 
 void UsbControlTakesTwoTransfers()
 {
-  // USB 控制口：SEND 收进请求并叫醒执行上下文，处理后 RECV 取应答；没好时 RECV 取到 0 字节；
-  // 应答取走前新的 SEND 被拒绝 / USB control port: SEND copies the request and wakes the execution
-  // context, RECV takes the answer after it is handled; not ready, RECV gets 0 bytes; a new SEND is
-  // refused until the answer is taken.
+  // USB 控制口：SEND 收进请求并叫醒执行上下文，处理后 RECV 取应答；没好时 RECV 取到 0 字
+  // 节；应答取走前新的 SEND 被拒绝 / USB control port: SEND copies the request and wakes
+  // the execution context, RECV takes the answer after it is handled; not ready, RECV
+  // gets 0 bytes; a new SEND is refused until the answer is taken.
   const uint8_t req[3] = {0x21U, 0xAAU, 0xBBU};
   uint8_t ans[96] = {};
   {
@@ -487,8 +493,8 @@ void UsbControlTakesTwoTransfers()
 void CallRunsInTheExecutionContext()
 {
   // Call 让执行上下文运行一个函数:函数在执行线程里跑,与 DAP 命令不同时进行 / Call has the
-  // execution context run a function: it runs in the execution thread, never together with a DAP
-  // command.
+  // execution context run a function: it runs in the execution thread, never together
+  // with a DAP command.
   Probe p;
   p.dap.usb_cost_ms_ = 1U;
   UsbThread usb(p, 5U);
@@ -534,9 +540,9 @@ void CallRunsInTheExecutionContext()
 
 void ConnectionFollowsTheLink()
 {
-  // DAP_Connect 记下它来自哪条链路；别的链路丢了不影响，这条丢了或 DAP_Disconnect 才作废 /
-  // DAP_Connect notes the link it came from; another link being lost changes nothing, this
-  // one being lost or DAP_Disconnect makes it lapse.
+  // DAP_Connect 记下它来自哪条链路；别的链路丢了不影响，这条丢了或 DAP_Disconnect 才作废
+  // / DAP_Connect notes the link it came from; another link being lost changes nothing,
+  // this one being lost or DAP_Disconnect makes it lapse.
   Probe p;
   UsbThread usb(p, 5U);
   EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::NONE);
@@ -558,8 +564,9 @@ void ConnectionFollowsTheLink()
 
 void UsbResetEndsAUsbConnectionOnly()
 {
-  // 连接在 USB 上时总线复位使它作废；连接在别的链路上时 USB 复位不影响 / A bus reset makes
-  // a connection on USB lapse; with the connection on another link it changes nothing.
+  // 连接在 USB 上时总线复位使它作废；连接在别的链路上时 USB 复位不影响 / A bus reset
+  // makes a connection on USB lapse; with the connection on another link it changes
+  // nothing.
   Probe p;
   UsbThread usb(p, 5U);
   static std::atomic<uint32_t> resets{0U};
@@ -630,10 +637,10 @@ void LinksNeverRunTwoCommandsAtOnce()
 void UsbRebindLeavesAnotherLinksSwdAlone()
 {
   // USB 绑定或解绑时：连接在别的链路上不复位 SWD，连接在 USB 上或没有连接时照常复位（CH32
-  // 上开关一次 USB 曾让无线连接的 DP 读一直回 ACK 7）/ On a USB bind or unbind: SWD is not
-  // reset while the connection is on another link, and is as usual when it is on USB or
-  // there is none (opening and closing USB once on the CH32 used to make every DP read of
-  // the radio connection answer ACK 7).
+  // 上开关一次 USB 曾让无线连接的 DP 读一直回 ACK 7）/ On a USB bind or unbind: SWD is
+  // not reset while the connection is on another link, and is as usual when it is on USB
+  // or there is none (opening and closing USB once on the CH32 used to make every DP read
+  // of the radio connection answer ACK 7).
   Probe p;
   UsbThread usb(p, 5U);
   (void)CommandOn(p, XrDap::Transport::RADIO, Byte(DapCmd::CONNECT));
