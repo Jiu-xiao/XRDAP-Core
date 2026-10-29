@@ -67,10 +67,12 @@ class SamplerCore
   void ClearFrames() { ring_.Reset(); }
 
   /// @brief 取出整帧（SUB_READ）/ Take whole frames (SUB_READ).
+  /// @param compact 编成紧凑帧（docs/protocol.md 3.5），limit 按编码后的字节算 / Encode
+  ///        as compact frames (docs/protocol.md 3.5); limit counts the encoded bytes.
   /// @note DAP 执行上下文 / DAP execution context.
-  FrameRing::Taken TakeFrames(uint8_t* dst, uint32_t limit)
+  FrameRing::Taken TakeFrames(uint8_t* dst, uint32_t limit, bool compact)
   {
-    return ring_.Take(dst, limit);
+    return compact ? TakeCompact(dst, limit) : ring_.Take(dst, limit);
   }
 
  protected:
@@ -94,6 +96,10 @@ class SamplerCore
   ///       里调用 / Frame = tick u32 + timestamp u48 + status bitmap + the due items'
   ///       values; called inside a MemAp::Access.
   void SampleTick(const TickAccount::Step& step);
+
+  /// 节拍 tick 的帧的位图字节数 / Bitmap bytes of the frame of tick `tick`.
+  uint16_t BitmapLen(uint32_t tick) const;
+  FrameRing::Taken TakeCompact(uint8_t* dst, uint32_t limit);
 
   MemAp& mem_;
   KeepFn keep_;

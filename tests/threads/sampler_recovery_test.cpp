@@ -72,7 +72,7 @@ void SamplerRecovery()
   uint8_t frame[32] = {};
   auto take = [&]()
   {
-    const auto got = sampler.TakeFrames(frame, sizeof(frame));
+    const auto got = sampler.TakeFrames(frame, sizeof(frame), false);
     CHECK_RECOVERY(got.frames == 1 && got.bytes == 15);
     CHECK_RECOVERY(got.skipped == 0 && got.dropped == 0);
   };
@@ -212,7 +212,7 @@ void SamplerMergedTicksAndBatches()
     if (kind == 7U) swd.parity_rdbuff = true;
     sampler.Sample(timer);
     uint8_t frame[64] = {};
-    auto got = sampler.TakeFrames(frame, sizeof(frame));
+    auto got = sampler.TakeFrames(frame, sizeof(frame), false);
     CHECK_RECOVERY(got.frames == 1U && Get32(frame) == 0U);
     // Observe bus traffic: contiguous words need one TAR write; wrap, a gap,
     // another AP or a halfword need two. The pointer case adds a third read.
@@ -235,12 +235,12 @@ void SamplerMergedTicksAndBatches()
     swd.parity_rdbuff = false;
     sampler.OnTickIsr(4U);  // Ticks 1..3 were missed; only frame 4 is produced.
     sampler.Sample(timer);
-    got = sampler.TakeFrames(frame, sizeof(frame));
+    got = sampler.TakeFrames(frame, sizeof(frame), false);
     CHECK_RECOVERY(got.frames == 1U && Get32(frame) == 4U);
     CHECK_RECOVERY(got.skipped == 3U && got.dropped == 0U);
     sampler.OnTickIsr(0U);
     sampler.Sample(timer);
-    CHECK_RECOVERY(sampler.TakeFrames(frame, sizeof(frame)).frames == 0U);
+    CHECK_RECOVERY(sampler.TakeFrames(frame, sizeof(frame), false).frames == 0U);
     sampler.Stop();
   }
 }
@@ -288,6 +288,146 @@ void StandardInfoDoesNotParkSampler()
   const uint8_t stop[] = {0x84U, 0U};
   CHECK_RECOVERY(vendor.OnCommand(stop, sizeof(stop), response, sizeof(response),
                                   length) == XrDap::DapVendor::Result::HANDLED);
+}
+
+// 紧凑帧（docs/protocol.md 3.5）：解码出的节拍号、失败位和值与采到的一致；每个回复的第 1
+// 帧都是原帧；max_bytes 按编码后的字节算 / Compact frames (docs/protocol.md 3.5): the
+// decoded ticks, failure bits and values match what was sampled; the first frame of every
+// reply is a plain frame; max_bytes counts encoded bytes.
+struct Decoded
+{
+  uint32_t tick;
+  uint64_t stamp;
+  uint8_t bitmap;
+  std::vector<uint32_t> values;
+};
+
+uint64_t GetVarint(const uint8_t*& p)
+{
+  uint64_t v = 0U;
+  for (int shift = 0;; shift += 7)
+  {
+    const uint8_t b = *p++;
+    v |= static_cast<uint64_t>(b & 0x7FU) << shift;
+    if ((b & 0x80U) == 0U) return v;
+  }
+}
+
+// 条目 a 每拍到期，b 在偶数拍到期 / Item a is due every tick, b on even ticks.
+std::vector<Decoded> DecodeCompact(const uint8_t* p, uint16_t frames)
+{
+  std::vector<Decoded> out;
+  for (uint16_t i = 0; i < frames; ++i)
+  {
+    Decoded d{};
+    if (i == 0U)
+    {
+      d.tick = Get32(p);
+      d.stamp = Get48(p + 4);
+      d.bitmap = p[10];
+      p += 11;
+    }
+    else
+    {
+      const uint64_t h = GetVarint(p);
+      d.tick = out.back().tick + static_cast<uint32_t>(h >> 1);
+      d.stamp = out.back().stamp + GetVarint(p);
+      d.bitmap = (h & 1U) != 0U ? *p++ : 0U;
+    }
+    const unsigned due = d.tick % 2U == 0U ? 2U : 1U;
+    for (unsigned k = 0; k < due; ++k, p += 4) d.values.push_back(Get32(p));
+    out.push_back(d);
+  }
+  return out;
+}
+
+void CompactSubRead()
+{
+  ModelSwd swd;
+  XrDap::DapVendor vendor(swd);
+  vendor.SetCurrentLink(XrDap::Transport::USB);
+  Timer timer;
+  uint8_t response[256] = {};
+  uint16_t length = 0U;
+  auto command = [&](const std::vector<uint8_t>& request)
+  {
+    return vendor.OnCommand(request.data(), request.size(), response, sizeof(response),
+                            length);
+  };
+  CHECK_RECOVERY(command({0x80U}) == XrDap::DapVendor::Result::HANDLED);
+  CHECK_RECOVERY((Get32(response + 3) & kFeatureCompactFrames) != 0U);
+  CHECK_RECOVERY(command({0x02U, 0x01U}) == XrDap::DapVendor::Result::PASS);
+  Item a;
+  a.ap = 0U;
+  a.size = 4U;
+  a.base = 0x08000000U;
+  Item b = a;
+  b.base += 4U;
+  auto entries = Entries({a, b});
+  entries[26] = 2U;  // b: div 2
+  std::vector<uint8_t> start = {0x83U, 0xE8U, 0x03U, 0U, 0U, 0x02U, 2U, 0U};
+  start.insert(start.end(), entries.begin(), entries.end());
+  CHECK_RECOVERY(command(start) == XrDap::DapVendor::Result::HANDLED);
+  CHECK_RECOVERY(response[1] == kStatusOk);
+  vendor.Sample(timer);  // tick 0: a, b
+  vendor.OnTickIsr();
+  vendor.Sample(timer);  // tick 1: a
+  swd.missing = true;
+  vendor.OnTickIsr();
+  vendor.Sample(timer);  // tick 2: a, b, both failed
+  swd.missing = false;
+  vendor.OnTickIsr(3U);
+  vendor.Sample(timer);  // tick 5: a (3 and 4 skipped)
+
+  // 只放得下第 1 帧（原帧 19 字节）/ Room for the first frame only (19 plain bytes).
+  CHECK_RECOVERY(command({0x85U, 19U, 0U}) == XrDap::DapVendor::Result::HANDLED);
+  CHECK_RECOVERY(Get16(response + 22) == 1U && length == kSubReadHeaderLen + 19U);
+  CHECK_RECOVERY(Get32(response + kSubReadHeaderLen) == 0U);
+  const uint32_t a_value = a.base ^ 0x12340000U;
+  const uint32_t b_value = b.base ^ 0x12340000U;
+  CHECK_RECOVERY(Get32(response + kSubReadHeaderLen + 11U) == a_value);
+  CHECK_RECOVERY(Get32(response + kSubReadHeaderLen + 15U) == b_value);
+
+  // 其余三帧：第 1 帧（节拍 1）又是原帧 / The other three: the first (tick 1) is plain
+  // again.
+  CHECK_RECOVERY(command({0x85U, 0xFFU, 0U}) == XrDap::DapVendor::Result::HANDLED);
+  const uint16_t frames = Get16(response + 22);
+  CHECK_RECOVERY(frames == 3U && Get32(response + 10) == 0U);
+  CHECK_RECOVERY(Get32(response + 18) == 2U);  // skipped: ticks 3, 4
+  const auto got = DecodeCompact(response + kSubReadHeaderLen, frames);
+  // 解码用掉的字节正好是回复里的帧字节 / Decoding consumes exactly the reply's frame
+  // bytes.
+  const uint8_t* end = response + kSubReadHeaderLen;
+  for (uint16_t i = 0; i < frames; ++i)
+  {
+    if (i == 0U)
+    {
+      end += 15U;
+      continue;
+    }
+    const uint64_t h = GetVarint(end);
+    (void)GetVarint(end);
+    end += ((h & 1U) != 0U ? 1U : 0U) + 4U * ((got[i].tick % 2U == 0U) ? 2U : 1U);
+  }
+  CHECK_RECOVERY(end == response + length);
+  CHECK_RECOVERY(got[0].tick == 1U && got[0].bitmap == 0U && got[0].values[0] == a_value);
+  CHECK_RECOVERY(got[1].tick == 2U && got[1].bitmap == 3U);
+  CHECK_RECOVERY(got[1].values[0] == 0U && got[1].values[1] == 0U);
+  CHECK_RECOVERY(got[2].tick == 5U && got[2].bitmap == 0U && got[2].values[0] == a_value);
+  CHECK_RECOVERY(got[0].stamp <= got[1].stamp && got[1].stamp <= got[2].stamp);
+  CHECK_RECOVERY(command({0x84U, 0U}) == XrDap::DapVendor::Result::HANDLED);
+
+  // 下一次 SUB_START 不带 bit1：回到原帧 / The next SUB_START without bit1: plain frames
+  // again.
+  start[5] = 0U;
+  CHECK_RECOVERY(command(start) == XrDap::DapVendor::Result::HANDLED);
+  vendor.Sample(timer);
+  vendor.OnTickIsr();
+  vendor.Sample(timer);
+  CHECK_RECOVERY(command({0x85U, 0xFFU, 0U}) == XrDap::DapVendor::Result::HANDLED);
+  CHECK_RECOVERY(Get16(response + 22) == 2U && length == kSubReadHeaderLen + 19U + 15U);
+  CHECK_RECOVERY(Get32(response + kSubReadHeaderLen + 19U) == 1U);
+  CHECK_RECOVERY(command({0x84U, 0U}) == XrDap::DapVendor::Result::HANDLED);
 }
 
 void ReuseCswKeepsDataFreshAndInvalidatesOnFailure()
@@ -454,6 +594,7 @@ int main()
   BurstReadAndFailure();
   SamplerMergedTicksAndBatches();
   StandardInfoDoesNotParkSampler();
+  CompactSubRead();
   ReuseCswKeepsDataFreshAndInvalidatesOnFailure();
   OnlyActiveSamplingReusesCommandCsw();
   ConnectFromTheSamplingLinkRestartsIt();

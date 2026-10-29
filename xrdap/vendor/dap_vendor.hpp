@@ -161,6 +161,9 @@ class DapVendor
   ResetCountFn usb_reset_fn_ = nullptr;
   void* usb_reset_ctx_ = nullptr;
   uint32_t usb_reset_base_ = 0U;
+  /// 最近一次成功的 SUB_START 要的是紧凑帧 / The last successful SUB_START asked for
+  /// compact frames.
+  bool compact_frames_ = false;
 
   uint8_t extra_cmd_ = 0U;
   uint32_t extra_feature_ = 0U;

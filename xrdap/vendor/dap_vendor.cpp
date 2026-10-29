@@ -351,10 +351,13 @@ bool DapVendor::CmdSubStart(const uint8_t* req, uint16_t len, uint8_t* resp,
   }
   // 采样随发起它的连接作废而停 / Sampling stops when the connection that started it
   // lapses.
-  return Reply(
-      resp,
-      sampler_.Start(start.items, start.period_us, start.stop_on_full, epoch_.load()),
-      out);
+  const uint8_t status =
+      sampler_.Start(start.items, start.period_us, start.stop_on_full, epoch_.load());
+  if (status == kStatusOk)
+  {
+    compact_frames_ = start.compact;
+  }
+  return Reply(resp, status, out);
 }
 
 bool DapVendor::CmdSubCtrl(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t& out)
@@ -386,8 +389,8 @@ bool DapVendor::CmdSubRead(const uint8_t* req, uint16_t len, uint8_t* resp, uint
   }
   const uint32_t want = Get16(req + 1);
   const uint32_t room = cap - kSubReadHeaderLen;
-  const FrameRing::Taken t =
-      sampler_.TakeFrames(resp + kSubReadHeaderLen, (want < room) ? want : room);
+  const FrameRing::Taken t = sampler_.TakeFrames(
+      resp + kSubReadHeaderLen, (want < room) ? want : room, compact_frames_);
 
   // 采样已停时状态为 0x02，帧照常回 / Status is 0x02 once sampling stopped; frames
   // still go out.

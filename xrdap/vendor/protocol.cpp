@@ -211,7 +211,9 @@ uint8_t ParseSubStart(const uint8_t* req, uint16_t len, SubStartRequest& out)
   const uint32_t period = Get32(&req[1]);
   const uint8_t flags = req[5];
   const uint16_t count = Get16(&req[6]);
-  if (period == 0U || (flags & 0xFEU) != 0U || count == 0U)
+  // flags: bit0 缓冲满时丢新帧，bit1 紧凑帧 / bit0 drop new frames when full, bit1
+  // compact frames.
+  if (period == 0U || (flags & 0xFCU) != 0U || count == 0U)
   {
     return kStatusArg;
   }
@@ -262,6 +264,7 @@ uint8_t ParseSubStart(const uint8_t* req, uint16_t len, SubStartRequest& out)
   }
   out.period_us = period;
   out.stop_on_full = (flags & 1U) != 0U;
+  out.compact = (flags & 2U) != 0U;
   out.items = SubItemList{req + kHeadLen, end, count};
   return kStatusOk;
 }

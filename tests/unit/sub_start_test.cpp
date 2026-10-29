@@ -62,7 +62,20 @@ TEST(ValidRequest)
   CHECK_EQ(Parse(r, req), kStatusOk);
   CHECK_EQ(req.period_us, 1000U);
   CHECK(req.stop_on_full);
+  CHECK(!req.compact);
   CHECK_EQ(req.items.count, 2U);
+}
+
+// flags bit1 选紧凑帧（docs/protocol.md 3.4、3.5）/ flags bit1 selects compact frames
+// (docs/protocol.md 3.4, 3.5).
+TEST(CompactFlag)
+{
+  auto r = Head(1000, 0x02, 1);
+  AddItem(r, 0, 4);
+  SubStartRequest req;
+  CHECK_EQ(Parse(r, req), kStatusOk);
+  CHECK(req.compact);
+  CHECK(!req.stop_on_full);
 }
 
 TEST(BadFieldsAreArgumentErrors)
@@ -71,7 +84,7 @@ TEST(BadFieldsAreArgumentErrors)
   auto zero_period = Head(0, 0, 1);
   AddItem(zero_period, 0, 4);
   CHECK_EQ(Parse(zero_period, req), kStatusArg);
-  auto reserved_flag = Head(1000, 0x02, 1);
+  auto reserved_flag = Head(1000, 0x04, 1);
   AddItem(reserved_flag, 0, 4);
   CHECK_EQ(Parse(reserved_flag, req), kStatusArg);
   CHECK_EQ(Parse(Head(1000, 0, 0), req), kStatusArg);  // 计数为 0 / count 0

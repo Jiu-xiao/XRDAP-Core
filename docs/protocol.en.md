@@ -185,7 +185,7 @@ The response is always 22 bytes:
 | 0 | 1 | 0x80 |
 | 1 | 1 | Overall status |
 | 2 | 1 | Protocol version, currently 2 |
-| 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86), bit5 control port (3.7.1); 0x3F on XRDAP-ESP (0x1F on older firmware), 0x0F on the others |
+| 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86), bit5 control port (3.7.1), bit6 compact frames (3.5); 0x7F on XRDAP-ESP, 0x6F on the radio XRDAP-CH32V307 (wdap), 0x4F on the others (older firmware without compact frames: 0x3F or 0x1F, 0x2F, 0x0F) |
 | 7 | 2 | Maximum items per request or sampling run: 32 |
 | 9 | 1 | Maximum dereference depth: 8 |
 | 10 | 4 | Ring buffer size in bytes: 16384 on XRDAP-ESP, 4096 on XRDAP-F103C8 and XRDAP-CH32V307 |
@@ -212,7 +212,7 @@ One command carries the whole configuration, and sampling starts once it passes 
 Request: `83 period_us(4) flags(1) count(2) (item div(2) phase(2))…`
 
 - period_us: tick period, greater than 0.
-- flags: bit0 = 0 overwrites the oldest frame when the buffer is full, bit0 = 1 drops the new frame; the other bits must be 0.
+- flags: bit0 = 0 overwrites the oldest frame when the buffer is full, bit0 = 1 drops the new frame; bit1 = 1 makes SUB_READ use compact frames (section 3.5; only when the probe's INFO feature bit6 is set, a probe without it answers 0x01); the other bits must be 0.
 - count: 1 to 32.
 
 Response: `83 status`
@@ -250,7 +250,7 @@ A 24-byte response head, followed by frames:
 | 22 | 2 | Number of frames returned |
 | 24 | … | Frames |
 
-Only whole frames are returned; their total length does not exceed `min(max_bytes, reply space - 24)`. The frame count is 0 when the buffer is empty. With status 0x02 the response still carries the full head and frames: the host learns that sampling has stopped (for example because its session ended) and keeps reading until no bytes are left. Both counters are cleared on a successful SUB_START and on op 2.
+Only whole frames are returned; their total length does not exceed `min(max_bytes, reply space - 24)`, counted after encoding for compact frames. The frame count is 0 when the buffer is empty. With status 0x02 the response still carries the full head and frames: the host learns that sampling has stopped (for example because its session ended) and keeps reading until no bytes are left. Both counters are cleared on a successful SUB_START and on op 2.
 
 ### 3.5 Sampling
 
@@ -272,6 +272,23 @@ Only whole frames are returned; their total length does not exceed `min(max_byte
 
 The items due are derived from k and each item's div and phase, so they are not listed in the frame.
 
+#### Compact frames
+
+When flags bit1 of SUB_START is 1, SUB_READ encodes its frames compactly until the next SUB_START. Only the encoding in the reply changes: the buffer still keeps the full frames above, and the buffer size, overwriting and dropping, and the bytes left (counted in full frames) are unchanged.
+
+- The first frame of every reply is a full frame as above. Every reply decodes on its own, without the previous reply.
+- Every later frame:
+
+| Field | Size | Contents |
+|---|---|---|
+| h | variable | `(Δk << 1) \| f`: Δk is this frame's tick index minus the previous frame's in the reply (at least 1; more after skipped ticks or dropped frames); f = 1 when a due item failed |
+| Δt | variable | This frame's timestamp minus the previous frame's, µs, wrapping at 48 bits |
+| Bitmap | ceil(m/8) | Only when f = 1, as in a full frame; f = 0 means every due item succeeded |
+| Values | … | As in a full frame |
+
+- Variable fields are unsigned LEB128: 7 bits per byte, low bits first; the top bit is 1 when more bytes follow.
+- Sampling every tick with no failure at a 1 ms period, the head is 3 bytes (11 in a full frame): a frame of one 4-byte item drops from 15 to 7 bytes, eight items from 43 to 35, 32 items from 142 to 134.
+
 - The timestamp comes from libxr's Timebase: the probe's monotonic microsecond time, 48 bits, the same clock as the probe time in INFO and SUB_READ. The time axis is not reset when sampling starts; the tick index restarts from 0. After a probe restart the time axis starts from 0.
 - Items in one frame are read one after another, so variables in the same frame are not sampled at the same instant.
 - Aligning to the host clock: record the host time before and after an INFO or SUB_READ request, pair the midpoint with the probe time in the response, and take the offset; the error is about half a round trip. Every SUB_READ can refresh the offset.
@@ -288,7 +305,7 @@ The items due are derived from k and each item's div and phase, so they are not 
 
 Frames are first written to the ring buffer (its size is in INFO; each frame takes another 2 bytes for its length). When the buffer is full, the oldest frame is overwritten or the new frame is dropped according to flags.bit0; the number of frames overwritten or dropped accumulates in the dropped frame count, and gaps in the tick index also show which ticks were lost. When the unread byte count is not 0, the host should read again immediately.
 
-Each tick takes 10 + bitmap + the sizes of the due items; averaged over div and compared with the real link speed, this estimates whether the bandwidth is enough.
+Each tick takes 10 + bitmap + the sizes of the due items (usually 3 + the sizes for compact frames); averaged over div and compared with the real link speed, this estimates whether the bandwidth is enough.
 
 The host judges keeping up from these three values and gives advice:
 
@@ -432,6 +449,13 @@ A response with two frames: at k = 6 only item 1 is due, at k = 7 both items are
 0200                       2 frames
 06000000 B0590F000000 00 07000000              k=6, timestamp 1 006 000 µs, bitmap 00, item 1 value 7
 07000000 985D0F000000 00 08000000 3412         k=7, timestamp 1 007 000 µs, bitmap 00, item 1 value 8, item 2 value 0x1234
+```
+
+The same two frames as compact frames (SUB_START flags 02): the first frame is unchanged, the second is `h = 02` (Δk 1, no failure), `Δt = E8 07` (1000 µs) and the two values.
+
+```
+06000000 B0590F000000 00 07000000              first frame: full
+02 E807 08000000 3412                          k=7, timestamp 1 007 000 µs, item 1 value 8, item 2 value 0x1234
 ```
 
 #### Stop

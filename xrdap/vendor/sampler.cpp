@@ -79,6 +79,51 @@ const SamplerCore::ApCsw* SamplerCore::FindCsw(uint8_t ap) const
   return nullptr;
 }
 
+uint16_t SamplerCore::BitmapLen(uint32_t tick) const
+{
+  uint16_t due = 0U;
+  for (uint16_t i = 0; i < count_; ++i)
+  {
+    if ((tick + items_[i].phase) % items_[i].div == 0U)
+    {
+      ++due;
+    }
+  }
+  return static_cast<uint16_t>((due + 7U) / 8U);
+}
+
+FrameRing::Taken SamplerCore::TakeCompact(uint8_t* dst, uint32_t limit)
+{
+  CompactEncoder encoder;
+  uint32_t bytes = 0U;
+  uint16_t frames = 0U;
+  for (uint16_t len = ring_.FrontLen(); len != 0U; len = ring_.FrontLen())
+  {
+    // 一帧至少有节拍号、时间戳、位图和一个值，所以帧头部分一定在帧里 / A frame holds at
+    // least the tick, the timestamp, the bitmap and one value, so its head is inside it.
+    uint8_t raw[CompactEncoder::kMaxRawHead];
+    ring_.CopyFront(0U, raw, len < sizeof(raw) ? len : sizeof(raw));
+    uint8_t head[CompactEncoder::kMaxHead];
+    uint16_t skip = 0U;
+    const uint16_t head_len = encoder.Head(raw, BitmapLen(Get32(raw)), head, skip);
+    const uint32_t size = head_len + len - skip;
+    if (bytes + size > limit)
+    {
+      break;
+    }
+    std::memcpy(dst + bytes, head, head_len);
+    ring_.CopyFront(skip, dst + bytes + head_len, len - skip);
+    encoder.Accept(raw);
+    ring_.DropFront();
+    bytes += size;
+    ++frames;
+  }
+  FrameRing::Taken t = ring_.Status();
+  t.bytes = bytes;
+  t.frames = frames;
+  return t;
+}
+
 // 每帧都跑：入口对齐到 16 字节，免得别处代码长度一变，它在取指要等待的 Flash 上（例如
 // STM32F1 的 64 位预取行）落到行的后半、每帧慢几微秒。-Os 下 GCC 不管 -falign-functions。
 // Runs every frame: the entry is aligned to 16 bytes so that a change in code size

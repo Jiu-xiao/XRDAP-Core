@@ -42,9 +42,12 @@ constexpr uint8_t kLastCmd = static_cast<uint8_t>(Cmd::SUB_READ);
 
 /// 协议版本 / Protocol version.
 constexpr uint8_t kVersion = 2;
-/// 功能位：READ | WRITE | 采样 | 8 字节访问 / Feature bits: READ | WRITE | sampling |
-/// 8-byte access.
-constexpr uint32_t kFeatures = 0x0F;
+/// 功能位 bit6：支持紧凑帧(docs/protocol.md 3.5)/ Feature bit 6: compact frames are
+/// supported (docs/protocol.md 3.5).
+constexpr uint32_t kFeatureCompactFrames = 1U << 6;
+/// 功能位：READ | WRITE | 采样 | 8 字节访问 | 紧凑帧 / Feature bits: READ | WRITE |
+/// sampling | 8-byte access | compact frames.
+constexpr uint32_t kFeatures = 0x0FU | kFeatureCompactFrames;
 /// 功能位 bit5:探针有控制口(docs/protocol.md 3.7.1)/ Feature bit 5: the probe has a
 /// control port (docs/protocol.md 3.7.1).
 constexpr uint32_t kFeatureControl = 1U << 5;
@@ -152,6 +155,11 @@ inline uint32_t Get32(const uint8_t* p)
 {
   return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
          (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+}
+
+inline uint64_t Get48(const uint8_t* p)
+{
+  return static_cast<uint64_t>(Get32(p)) | (static_cast<uint64_t>(Get16(p + 4)) << 32);
 }
 
 /// @brief 填只有状态的回复（resp[0] 已是命令号）/ Fill a status-only reply (resp[0]
@@ -333,6 +341,7 @@ struct SubStartRequest
 {
   uint32_t period_us = 0U;    ///< 周期 / Period.
   bool stop_on_full = false;  ///< 缓冲满时丢新帧 / Drop new frames when full.
+  bool compact = false;       ///< SUB_READ 用紧凑帧 / SUB_READ uses compact frames.
   SubItemList items{nullptr, nullptr, 0U};  ///< 条目，仍在请求字节里 / Items, still in
                                             ///< the request bytes.
 };

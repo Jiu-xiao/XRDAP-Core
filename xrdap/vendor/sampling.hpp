@@ -139,6 +139,17 @@ class FrameRing
   /// 记下跳过的节拍 / Count skipped ticks.
   void AddSkipped(uint32_t n);
 
+  /// 最旧一帧的长度，缓冲为空时 0 / Length of the oldest frame; 0 when empty.
+  uint16_t FrontLen() const;
+  /// 从最旧一帧的 offset 处拷出 len 字节 / Copy len bytes of the oldest frame from
+  /// offset on.
+  void CopyFront(uint32_t offset, uint8_t* dst, uint32_t len) const;
+  /// 丢掉最旧一帧（已经取走）/ Drop the oldest frame (it was taken).
+  void DropFront();
+  /// 剩余字节数和两个计数，bytes 和 frames 为 0 / Bytes left and the two counters;
+  /// bytes and frames are 0.
+  Taken Status() const;
+
  private:
   uint16_t FrameLen(uint32_t pos) const;
   void CopyIn(uint32_t at, const uint8_t* src, uint32_t len);
@@ -151,6 +162,60 @@ class FrameRing
   uint32_t payload_ = 0U;
   uint32_t dropped_ = 0U;
   uint32_t skipped_ = 0U;
+};
+
+}  // namespace XrDap::Vendor
+
+// ===== Compact frames 紧凑帧 =====
+
+// SUB_READ 的紧凑帧（docs/protocol.md 3.5）：一次回复里第 1 帧原样，之后每帧的帧头换成
+// h = (Δk << 1) | 有失败、Δt（µs），都是无符号 LEB128；只有有失败时才带位图；值原样。
+// Δk、Δt 相对回复里的上一帧。缓冲里存的仍是原帧，编码只在取帧时做。
+//
+// Compact frames of SUB_READ (docs/protocol.md 3.5): the first frame of a reply goes as
+// it is; every later frame's head becomes h = (Δk << 1) | failed and Δt (µs), both
+// unsigned LEB128; the bitmap follows only when an item failed; the values are unchanged.
+// Δk and Δt are relative to the previous frame of the reply. The ring keeps the plain
+// frames; encoding happens only when frames are taken.
+
+namespace XrDap::Vendor
+{
+
+/// 紧凑帧编码器，一次 SUB_READ 回复用一个 / Compact frame encoder, one per SUB_READ
+/// reply.
+class CompactEncoder
+{
+ public:
+  /// 位图最长的字节数 / Longest bitmap in bytes.
+  static constexpr uint16_t kMaxBitmap = (kMaxItems + 7U) / 8U;
+  /// 原帧开头要给 Head() 的字节数上限：节拍号 4 + 时间戳 6 + 位图 / Most bytes of a
+  /// plain frame's start Head() needs: tick 4 + timestamp 6 + bitmap.
+  static constexpr uint16_t kMaxRawHead = 10U + kMaxBitmap;
+  /// 最长的紧凑帧头：h 5 + Δt 7 + 位图 / Longest compact head: h 5 + Δt 7 + bitmap.
+  static constexpr uint16_t kMaxHead = 5U + 7U + kMaxBitmap;
+
+  /// @brief 编出一帧的帧头，不改编码器的状态 / Encode one frame's head without changing
+  ///        the encoder's state.
+  /// @param raw 原帧开头的 10 + bitmap_len 字节 / The first 10 + bitmap_len bytes of the
+  ///        plain frame.
+  /// @param bitmap_len 这一帧的位图字节数 / Bitmap bytes of this frame.
+  /// @param head 至少 kMaxHead 字节 / At least kMaxHead bytes.
+  /// @param raw_skip 原帧里被帧头取代的字节数，原帧其余部分原样跟在帧头后面 / Bytes of
+  ///        the plain frame the head replaces; the rest of the plain frame follows the
+  ///        head unchanged.
+  /// @return 帧头字节数；回复的第 1 帧为 0（整帧原样）/ Bytes of the head; 0 for the
+  ///         first frame of a reply (the whole frame as it is).
+  uint16_t Head(const uint8_t* raw, uint16_t bitmap_len, uint8_t* head,
+                uint16_t& raw_skip) const;
+
+  /// @brief 这一帧放进了回复，后面的帧相对它编码 / This frame went into the reply; later
+  ///        frames are encoded relative to it.
+  void Accept(const uint8_t* raw);
+
+ private:
+  bool first_ = true;
+  uint32_t tick_ = 0U;
+  uint64_t stamp_ = 0U;
 };
 
 }  // namespace XrDap::Vendor
