@@ -92,7 +92,12 @@ void FrameRing::CopyIn(uint32_t at, const uint8_t* src, uint32_t len)
 
 void FrameRing::CopyOut(uint32_t at, uint8_t* dst, uint32_t len) const
 {
-  const uint32_t first = (at + len <= kRingBytes) ? len : kRingBytes - at;
+  if (at + len <= kRingBytes)
+  {
+    std::memcpy(dst, buf_ + at, len);
+    return;
+  }
+  const uint32_t first = kRingBytes - at;
   std::memcpy(dst, buf_ + at, first);
   std::memcpy(dst + first, buf_, len - first);
 }
@@ -182,7 +187,10 @@ FrameRing::Taken FrameRing::TakeCompact(uint8_t* dst, uint32_t limit)
     {
       break;
     }
-    std::memcpy(dst + t.bytes, head, head_len);
+    for (uint16_t i = 0; i < head_len; ++i)
+    {
+      dst[t.bytes + i] = head[i];
+    }
     CopyOut((body + skip) & kMask, dst + t.bytes + head_len, flen - skip);
     encoder.Accept(raw);
     Pop(pos, flen);
