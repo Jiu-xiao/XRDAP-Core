@@ -90,12 +90,16 @@ class TickAccount
 
 // ===== Frame ring 帧缓冲 =====
 
-// 采样帧的环形缓冲。每帧前面有 2 字节小端长度，只按整帧取出。采样写、SUB_READ 读，都在
-// 同一个执行上下文里顺序进行，所以没有锁。
+// 采样帧的环形缓冲。每帧前面有 2 字节小端长度头，只按整帧取出：低 12 位是帧长，高 4 位
+// 记下紧凑帧要用的位图字节数（3 位）和是否有条目失败（1 位），采样时就知道，取帧时不必
+// 再推算。采样写、SUB_READ 读，都在同一个执行上下文里顺序进行，所以没有锁。
 //
 // Ring buffer of sample frames. Each frame is preceded by a 2-byte little-endian length
-// and is only taken out whole. Sampling writes and SUB_READ reads, both in the one
-// execution context and one after the other, so there is no lock.
+// head and is only taken out whole: the low 12 bits are the frame length, the high 4 bits
+// keep what compact frames need, the bitmap bytes (3 bits) and whether an item failed (1
+// bit), known when sampling so that taking need not work them out again. Sampling writes
+// and SUB_READ reads, both in the one execution context and one after the other, so there
+// is no lock.
 
 #include <cstdint>
 
@@ -132,26 +136,27 @@ class FrameRing
   /// @brief 放入一帧 / Put one frame in.
   /// @param stop_on_full 缓冲满时丢新帧；否则丢最旧的帧 / When full, drop the new frame;
   ///        otherwise drop the oldest frames.
-  void Push(const uint8_t* frame, uint16_t len, bool stop_on_full);
+  /// @param bitmap_len 帧里位图的字节数（紧凑帧用）/ Bitmap bytes in the frame (for
+  ///        compact frames).
+  /// @param failed 位图里有失败的条目（紧凑帧用）/ The bitmap marks a failed item (for
+  ///        compact frames).
+  void Push(const uint8_t* frame, uint16_t len, bool stop_on_full,
+            uint8_t bitmap_len = 0U, bool failed = false);
   /// 取出不超过 limit 字节的整帧，帧之间不留长度头 / Take whole frames, at most limit
   /// bytes, without the length headers.
   Taken Take(uint8_t* dst, uint32_t limit);
+  /// @brief 同 Take，但编成紧凑帧（docs/protocol.md 3.5），limit 按编码后的字节算 / As
+  ///        Take, but encoded as compact frames (docs/protocol.md 3.5); limit counts the
+  ///        encoded bytes.
+  Taken TakeCompact(uint8_t* dst, uint32_t limit);
   /// 记下跳过的节拍 / Count skipped ticks.
   void AddSkipped(uint32_t n);
 
-  /// 最旧一帧的长度，缓冲为空时 0 / Length of the oldest frame; 0 when empty.
-  uint16_t FrontLen() const;
-  /// 从最旧一帧的 offset 处拷出 len 字节 / Copy len bytes of the oldest frame from
-  /// offset on.
-  void CopyFront(uint32_t offset, uint8_t* dst, uint32_t len) const;
-  /// 丢掉最旧一帧（已经取走）/ Drop the oldest frame (it was taken).
-  void DropFront();
-  /// 剩余字节数和两个计数，bytes 和 frames 为 0 / Bytes left and the two counters;
-  /// bytes and frames are 0.
-  Taken Status() const;
-
  private:
+  uint16_t Header(uint32_t pos) const;
   uint16_t FrameLen(uint32_t pos) const;
+  void Pop(uint32_t& pos, uint16_t flen);
+  void Fill(Taken& t) const;
   void CopyIn(uint32_t at, const uint8_t* src, uint32_t len);
   void CopyOut(uint32_t at, uint8_t* dst, uint32_t len) const;
 
@@ -199,20 +204,62 @@ class CompactEncoder
   /// @param raw 原帧开头的 10 + bitmap_len 字节 / The first 10 + bitmap_len bytes of the
   ///        plain frame.
   /// @param bitmap_len 这一帧的位图字节数 / Bitmap bytes of this frame.
+  /// @param failed 位图里有失败的条目 / The bitmap marks a failed item.
   /// @param head 至少 kMaxHead 字节 / At least kMaxHead bytes.
   /// @param raw_skip 原帧里被帧头取代的字节数，原帧其余部分原样跟在帧头后面 / Bytes of
   ///        the plain frame the head replaces; the rest of the plain frame follows the
   ///        head unchanged.
   /// @return 帧头字节数；回复的第 1 帧为 0（整帧原样）/ Bytes of the head; 0 for the
   ///         first frame of a reply (the whole frame as it is).
-  uint16_t Head(const uint8_t* raw, uint16_t bitmap_len, uint8_t* head,
-                uint16_t& raw_skip) const;
+  uint16_t Head(const uint8_t* raw, uint16_t bitmap_len, bool failed, uint8_t* head,
+                uint16_t& raw_skip) const
+  {
+    if (first_)
+    {
+      raw_skip = 0U;
+      return 0U;
+    }
+    const uint32_t dk = Get32(raw) - tick_;
+    const uint64_t dt = (Get48(raw + 4) - stamp_) & kStampMask;
+    uint16_t n = PutVarint(head, (static_cast<uint64_t>(dk) << 1) | (failed ? 1U : 0U));
+    n = static_cast<uint16_t>(n + PutVarint(head + n, dt));
+    if (failed)
+    {
+      for (uint16_t i = 0; i < bitmap_len; ++i)
+      {
+        head[n++] = raw[10U + i];
+      }
+    }
+    raw_skip = static_cast<uint16_t>(10U + bitmap_len);
+    return n;
+  }
 
   /// @brief 这一帧放进了回复，后面的帧相对它编码 / This frame went into the reply; later
   ///        frames are encoded relative to it.
-  void Accept(const uint8_t* raw);
+  void Accept(const uint8_t* raw)
+  {
+    first_ = false;
+    tick_ = Get32(raw);
+    stamp_ = Get48(raw + 4);
+  }
 
  private:
+  static constexpr uint64_t kStampMask = (uint64_t{1} << 48) - 1U;
+
+  // 无符号 LEB128：每字节低 7 位，高位为 1 表示还有下一字节 / Unsigned LEB128: 7 bits
+  // per byte, the high bit set when another byte follows.
+  static uint16_t PutVarint(uint8_t* p, uint64_t v)
+  {
+    uint16_t n = 0U;
+    while (v >= 0x80U)
+    {
+      p[n++] = static_cast<uint8_t>(v | 0x80U);
+      v >>= 7;
+    }
+    p[n++] = static_cast<uint8_t>(v);
+    return n;
+  }
+
   bool first_ = true;
   uint32_t tick_ = 0U;
   uint64_t stamp_ = 0U;

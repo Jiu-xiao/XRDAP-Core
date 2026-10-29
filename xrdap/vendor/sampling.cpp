@@ -70,10 +70,18 @@ void FrameRing::Reset()
   skipped_ = 0U;
 }
 
-uint16_t FrameRing::FrameLen(uint32_t pos) const
+// 长度头：低 12 位帧长，bit12..14 位图字节数，bit15 有失败 / Length head: low 12 bits
+// the frame length, bits 12..14 the bitmap bytes, bit 15 an item failed.
+constexpr uint16_t kLenMask = 0x0FFFU;
+static_assert(kMaxFrameBytes <= kLenMask, "frame length must fit 12 bits");
+static_assert(CompactEncoder::kMaxBitmap <= 7U, "bitmap bytes must fit 3 bits");
+
+uint16_t FrameRing::Header(uint32_t pos) const
 {
   return static_cast<uint16_t>(buf_[pos] | (buf_[(pos + 1U) & kMask] << 8));
 }
+
+uint16_t FrameRing::FrameLen(uint32_t pos) const { return Header(pos) & kLenMask; }
 
 void FrameRing::CopyIn(uint32_t at, const uint8_t* src, uint32_t len)
 {
@@ -89,7 +97,8 @@ void FrameRing::CopyOut(uint32_t at, uint8_t* dst, uint32_t len) const
   std::memcpy(dst + first, buf_, len - first);
 }
 
-void FrameRing::Push(const uint8_t* frame, uint16_t len, bool stop_on_full)
+void FrameRing::Push(const uint8_t* frame, uint16_t len, bool stop_on_full,
+                     uint8_t bitmap_len, bool failed)
 {
   while (used_ + len + 2U > kRingBytes)
   {
@@ -104,12 +113,28 @@ void FrameRing::Push(const uint8_t* frame, uint16_t len, bool stop_on_full)
     payload_ -= old;
     ++dropped_;
   }
-  const uint8_t hdr[2] = {static_cast<uint8_t>(len), static_cast<uint8_t>(len >> 8)};
+  const uint16_t head =
+      static_cast<uint16_t>(len | (bitmap_len << 12) | (failed ? 0x8000U : 0U));
+  const uint8_t hdr[2] = {static_cast<uint8_t>(head), static_cast<uint8_t>(head >> 8)};
   CopyIn(head_, hdr, 2U);
   CopyIn((head_ + 2U) & kMask, frame, len);
   head_ = (head_ + 2U + len) & kMask;
   used_ += 2U + len;
   payload_ += len;
+}
+
+void FrameRing::Pop(uint32_t& pos, uint16_t flen)
+{
+  pos = (pos + 2U + flen) & kMask;
+  used_ -= 2U + flen;
+  payload_ -= flen;
+}
+
+void FrameRing::Fill(Taken& t) const
+{
+  t.remaining = payload_;
+  t.dropped = dropped_;
+  t.skipped = skipped_;
 }
 
 FrameRing::Taken FrameRing::Take(uint8_t* dst, uint32_t limit)
@@ -124,101 +149,51 @@ FrameRing::Taken FrameRing::Take(uint8_t* dst, uint32_t limit)
       break;
     }
     CopyOut((pos + 2U) & kMask, dst + t.bytes, flen);
-    pos = (pos + 2U + flen) & kMask;
+    Pop(pos, flen);
     t.bytes += flen;
     ++t.frames;
-    used_ -= 2U + flen;
-    payload_ -= flen;
   }
   tail_ = pos;
-  t.remaining = payload_;
-  t.dropped = dropped_;
-  t.skipped = skipped_;
+  Fill(t);
+  return t;
+}
+
+FrameRing::Taken FrameRing::TakeCompact(uint8_t* dst, uint32_t limit)
+{
+  Taken t;
+  CompactEncoder encoder;
+  uint32_t pos = tail_;
+  while (used_ != 0U)
+  {
+    const uint16_t header = Header(pos);
+    const uint16_t flen = header & kLenMask;
+    const uint8_t bitmap_len = static_cast<uint8_t>((header >> 12) & 7U);
+    const bool failed = (header & 0x8000U) != 0U;
+    const uint32_t body = (pos + 2U) & kMask;
+    // 一帧至少有节拍号、时间戳、位图和一个值 / A frame holds at least the tick, the
+    // timestamp, the bitmap and one value.
+    uint8_t raw[CompactEncoder::kMaxRawHead];
+    CopyOut(body, raw, 10U + bitmap_len);
+    uint8_t head[CompactEncoder::kMaxHead];
+    uint16_t skip = 0U;
+    const uint16_t head_len = encoder.Head(raw, bitmap_len, failed, head, skip);
+    const uint32_t size = head_len + flen - skip;
+    if (t.bytes + size > limit)
+    {
+      break;
+    }
+    std::memcpy(dst + t.bytes, head, head_len);
+    CopyOut((body + skip) & kMask, dst + t.bytes + head_len, flen - skip);
+    encoder.Accept(raw);
+    Pop(pos, flen);
+    t.bytes += size;
+    ++t.frames;
+  }
+  tail_ = pos;
+  Fill(t);
   return t;
 }
 
 void FrameRing::AddSkipped(uint32_t n) { skipped_ += n; }
-
-uint16_t FrameRing::FrontLen() const { return used_ == 0U ? 0U : FrameLen(tail_); }
-
-void FrameRing::CopyFront(uint32_t offset, uint8_t* dst, uint32_t len) const
-{
-  CopyOut((tail_ + 2U + offset) & kMask, dst, len);
-}
-
-void FrameRing::DropFront()
-{
-  const uint16_t flen = FrameLen(tail_);
-  tail_ = (tail_ + 2U + flen) & kMask;
-  used_ -= 2U + flen;
-  payload_ -= flen;
-}
-
-FrameRing::Taken FrameRing::Status() const
-{
-  Taken t;
-  t.remaining = payload_;
-  t.dropped = dropped_;
-  t.skipped = skipped_;
-  return t;
-}
-
-}  // namespace XrDap::Vendor
-
-// ===== Compact frames 紧凑帧 =====
-
-namespace XrDap::Vendor
-{
-namespace
-{
-// 无符号 LEB128：每字节低 7 位，高位为 1 表示还有下一字节 / Unsigned LEB128: 7 bits per
-// byte, the high bit set when another byte follows.
-uint16_t PutVarint(uint8_t* p, uint64_t v)
-{
-  uint16_t n = 0U;
-  while (v >= 0x80U)
-  {
-    p[n++] = static_cast<uint8_t>(v | 0x80U);
-    v >>= 7;
-  }
-  p[n++] = static_cast<uint8_t>(v);
-  return n;
-}
-
-constexpr uint64_t kStampMask = (uint64_t{1} << 48) - 1U;
-}  // namespace
-
-uint16_t CompactEncoder::Head(const uint8_t* raw, uint16_t bitmap_len, uint8_t* head,
-                              uint16_t& raw_skip) const
-{
-  if (first_)
-  {
-    raw_skip = 0U;
-    return 0U;
-  }
-  const uint32_t dk = Get32(raw) - tick_;
-  const uint64_t dt = (Get48(raw + 4) - stamp_) & kStampMask;
-  bool failed = false;
-  for (uint16_t i = 0; i < bitmap_len; ++i)
-  {
-    failed = failed || raw[10U + i] != 0U;
-  }
-  uint16_t n = PutVarint(head, (static_cast<uint64_t>(dk) << 1) | (failed ? 1U : 0U));
-  n = static_cast<uint16_t>(n + PutVarint(head + n, dt));
-  if (failed)
-  {
-    std::memcpy(head + n, raw + 10, bitmap_len);
-    n = static_cast<uint16_t>(n + bitmap_len);
-  }
-  raw_skip = static_cast<uint16_t>(10U + bitmap_len);
-  return n;
-}
-
-void CompactEncoder::Accept(const uint8_t* raw)
-{
-  first_ = false;
-  tick_ = Get32(raw);
-  stamp_ = Get48(raw + 4);
-}
 
 }  // namespace XrDap::Vendor

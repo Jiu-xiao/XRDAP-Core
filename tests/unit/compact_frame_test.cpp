@@ -31,7 +31,7 @@ std::vector<uint8_t> Encode(CompactEncoder& e, const std::vector<uint8_t>& raw)
 {
   uint8_t head[CompactEncoder::kMaxHead];
   uint16_t skip = 0;
-  const uint16_t n = e.Head(raw.data(), 1, head, skip);
+  const uint16_t n = e.Head(raw.data(), 1, raw[10] != 0U, head, skip);
   std::vector<uint8_t> out(head, head + n);
   out.insert(out.end(), raw.begin() + skip, raw.end());
   e.Accept(raw.data());
@@ -89,23 +89,47 @@ TEST(HugeDeltasStillEncode)
   CHECK_EQ(out.size(), 16U);
 }
 
-TEST(RingTakesFramesOneByOne)
+// 缓冲按长度头里记下的位图字节数和失败位编码；limit 按编码后的字节算，放不下的帧留到
+// 下一次，下一次的第 1 帧又是原帧 / The ring encodes with the bitmap bytes and failure
+// bit kept in the length head; limit counts encoded bytes, a frame that does not fit
+// waits for the next take, whose first frame is a plain frame again.
+TEST(RingTakesCompactFrames)
 {
   FrameRing r;
   r.Reset();
-  const auto a = Frame(1, 10, 0, 0xA);
-  const auto b = Frame(2, 20, 0, 0xB);
-  r.Push(a.data(), static_cast<uint16_t>(a.size()), false);
-  r.Push(b.data(), static_cast<uint16_t>(b.size()), false);
-  CHECK_EQ(r.FrontLen(), 15U);
-  uint8_t got[15];
-  r.CopyFront(11, got, 4);
-  CHECK_EQ(Get32(got), 0xAU);
-  r.DropFront();
-  CHECK_EQ(r.Status().remaining, 15U);
-  r.CopyFront(0, got, 15);
-  CHECK_EQ(Get32(got), 2U);
-  r.DropFront();
-  CHECK_EQ(r.FrontLen(), 0U);
-  CHECK_EQ(r.Status().remaining, 0U);
+  const auto a = Frame(1, 1000, 0, 0xA);
+  const auto b = Frame(2, 2000, 0, 0xB);
+  const auto c = Frame(3, 3000, 0x01, 0);
+  r.Push(a.data(), 15, false, 1, false);
+  r.Push(b.data(), 15, false, 1, false);
+  r.Push(c.data(), 15, false, 1, true);
+  uint8_t out[64] = {};
+  // 原帧 15 + 紧凑帧 7（02 E8 07 值）= 22；第 3 帧（03 E8 07 01 值 = 8）放不下 / Plain 15
+  // + compact 7 = 22; the third (8 bytes) does not fit.
+  auto t = r.TakeCompact(out, 29);
+  CHECK_EQ(t.frames, 2U);
+  CHECK_EQ(t.bytes, 22U);
+  CHECK_EQ(t.remaining, 15U);
+  CHECK(std::vector<uint8_t>(out, out + 15) == a);
+  CHECK(std::vector<uint8_t>(out + 15, out + 22) ==
+        (std::vector<uint8_t>{0x02, 0xE8, 0x07, 0x0B, 0, 0, 0}));
+  t = r.TakeCompact(out, sizeof(out));
+  CHECK_EQ(t.frames, 1U);
+  CHECK(std::vector<uint8_t>(out, out + 15) == c);
+  CHECK_EQ(t.remaining, 0U);
+}
+
+// 长度头的高位不影响原帧的取出 / The high bits of the length head do not affect plain
+// takes.
+TEST(PlainTakeIgnoresTheMetadata)
+{
+  FrameRing r;
+  r.Reset();
+  const auto c = Frame(3, 3000, 0x01, 0x55);
+  r.Push(c.data(), 15, false, 1, true);
+  uint8_t out[32] = {};
+  const auto t = r.Take(out, sizeof(out));
+  CHECK_EQ(t.frames, 1U);
+  CHECK_EQ(t.bytes, 15U);
+  CHECK(std::vector<uint8_t>(out, out + 15) == c);
 }
