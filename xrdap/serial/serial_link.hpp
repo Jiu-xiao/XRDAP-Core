@@ -129,9 +129,9 @@ class SerialLink
   /// @brief 送入已收到的字节，整帧在这里执行并回复 / Feed received bytes; whole frames
   ///        run and are answered here.
   /// @return 这次执行的请求数 / Requests run by this call.
-  /// @note 工作线程用它；没有线程时在非中断上下文里调用，同一时间只能有一个调用者 / The
-  ///       worker uses it; without a worker call it outside an interrupt, one caller at a
-  ///       time.
+  /// @note 工作线程用它；没有线程时在非中断上下文里调用，同一时间只能有一个调用者；这样
+  ///       用时还要定期调用 CheckLease() / The worker uses it; without a worker call it
+  ///       outside an interrupt, one caller at a time, and call CheckLease() regularly.
   uint32_t Feed(const uint8_t* data, size_t len)
   {
     if (data == nullptr || len == 0U)
@@ -219,6 +219,28 @@ class SerialLink
     return TxStep::FAILED;
   }
 
+  /// @brief 检查租期：串口没有连接和断开，kLeaseMs 内没有请求就当链路丢了，由它发起的
+  ///        采样随之停止 / Check the lease: a serial port has no connect or disconnect,
+  ///        so no request within kLeaseMs counts as the link being lost, and the sampling
+  ///        it started stops.
+  /// @note Poll() 每次都调用；不用 Poll()、自己读串口再 Feed() 的调用者要定期调用（比请求
+  ///       间隔短得多即可）/ Poll() calls it every pass; a caller that reads the port
+  ///       itself and uses Feed() instead of Poll() calls it regularly (much more often
+  ///       than kLeaseMs).
+  void CheckLease()
+  {
+    if (active_.load() == 0U)
+    {
+      return;
+    }
+    const auto now = static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds());
+    if (now - last_request_ms_.load() > kLeaseMs)
+    {
+      active_.store(0U);
+      exec_.LinkLost(Transport::SERIAL);
+    }
+  }
+
   /// 串口多久没有请求就当链路丢了；上位机至少每 kLeaseMs 发一个请求（SUB_READ 即可）/
   /// How long without a request before the serial link counts as lost; the host sends a
   /// request (SUB_READ will do) at least every kLeaseMs.
@@ -238,22 +260,6 @@ class SerialLink
     {
     }
     self->exited_.Post();
-  }
-
-  // 串口没有连接和断开：kLeaseMs 内没有请求就当链路丢了 / A serial port has no connect or
-  // disconnect: no request within kLeaseMs counts as the link being lost.
-  void CheckLease()
-  {
-    if (active_.load() == 0U)
-    {
-      return;
-    }
-    const auto now = static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds());
-    if (now - last_request_ms_.load() > kLeaseMs)
-    {
-      active_.store(0U);
-      exec_.LinkLost(Transport::SERIAL);
-    }
   }
 
   void OnRequest(const uint8_t* req, uint16_t len, bool control)
