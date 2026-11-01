@@ -108,7 +108,7 @@ def vnd_args(ctx):
         base = Item(t.at(t.V_U32), 4)
         vendor.stop()
         for name, period, flags, items, want in (
-                ("period 0", 0, 0, [base], ARG), ("flags reserved", 2000, 2, [base], ARG),
+                ("period 0", 0, 0, [base], ARG), ("flags reserved", 2000, 4, [base], ARG),
                 ("count 0", 2000, 0, [], ARG), ("div 0", 2000, 0, [Item(base.base, div=0)], ARG),
                 ("phase >= div", 2000, 0, [Item(base.base, div=10, phase=10)], ARG),
                 ("size 3", 2000, 0, [Item(base.base, size=3)], ARG),
