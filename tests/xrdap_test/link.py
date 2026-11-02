@@ -6,7 +6,7 @@ for one request and its response. Link specs:
 
     usb                 the only XR-DAP on USB
     usb:SERIAL          by USB serial number (full string or a unique suffix)
-    serial:PORT[@BAUD][,keep]   keep = leave DTR/RTS alone (ESP32-C3 USB Serial/JTAG)
+    serial:PORT[@BAUD][,keep]   keep = hold DTR/RTS released (ESP32-C3 USB Serial/JTAG)
     tcp:HOST[:PORT]     default port 3241
     usbip:HOST[:PORT]   default port 3240, bus id 1-1
 """
@@ -251,7 +251,12 @@ class SerialLink(Link):
         self.ser.port = port
         self.ser.baudrate = baud
         self.ser.timeout = 0.005
-        if not keep_lines:
+        if keep_lines:
+            # pyserial asserts both lines by default, and the C3 USB Serial/JTAG resets the chip
+            # when they drop on close; with both released nothing changes on open or close.
+            self.ser.dtr = False
+            self.ser.rts = False
+        else:
             # Run state of the ESP32 auto-reset circuit: DTR asserted, RTS released.
             self.ser.dtr = True
             self.ser.rts = False

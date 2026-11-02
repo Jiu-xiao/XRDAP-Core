@@ -33,7 +33,7 @@ Notation of `--link`:
 | Notation | Link |
 |---|---|
 | `usb`, `usb:SERIAL` | USB; SERIAL can be the last few characters of the serial number |
-| `serial:PORT`, `serial:PORT@921600`, `serial:PORT,keep` | Serial frames; default 4000000 baud; `keep` leaves DTR/RTS unchanged (USB port of the ESP32-C3) |
+| `serial:PORT`, `serial:PORT@921600`, `serial:PORT,keep` | Serial frames; default 4000000 baud; `keep` holds DTR/RTS released, so opening or closing the port does not reset (USB port of the ESP32-C3) |
 | `tcp:HOST`, `tcp:xrdap-xxxxxx.local:3241` | TCP frames, default port 3241 |
 | `usbip:HOST` | USB/IP, default port 3240 |
 

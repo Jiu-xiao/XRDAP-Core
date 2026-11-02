@@ -33,7 +33,7 @@ python -m xrdap_test run --link usb:SERIAL --target my-target.toml
 | 写法 | 链路 |
 |---|---|
 | `usb`、`usb:SERIAL` | USB；SERIAL 可以是序列号的末尾几位 |
-| `serial:PORT`、`serial:PORT@921600`、`serial:PORT,keep` | 串口帧；默认 4000000 波特；`keep` 不改 DTR/RTS（ESP32-C3 的 USB 口） |
+| `serial:PORT`、`serial:PORT@921600`、`serial:PORT,keep` | 串口帧；默认 4000000 波特；`keep` 让 DTR/RTS 保持释放，开关串口都不复位（ESP32-C3 的 USB 口） |
 | `tcp:HOST`、`tcp:xrdap-xxxxxx.local:3241` | TCP 帧，默认端口 3241 |
 | `usbip:HOST` | USB/IP，默认端口 3240 |
 
