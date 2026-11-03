@@ -9,6 +9,7 @@
 #include "xrdap/probe/family.hpp"
 #include "xrdap/probe/probe_identity.hpp"
 #include "xrdap/protocol/dap_cmd.hpp"
+#include "xrdap/radio/channel.hpp"
 #include "xrdap/radio/forwarding.hpp"
 #include "xrdap/radio/identity.hpp"
 #include "xrdap/radio/packet.hpp"

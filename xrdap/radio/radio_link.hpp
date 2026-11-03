@@ -18,6 +18,12 @@
 // 配对：RequestPairing()（例如按住按键 3 s）让探针配对至多 10 s，见 identity.hpp。配对
 // 结束后设置重新生效，配对期间 USB 命令在本地执行。
 //
+// 信道（channel.hpp）：配对和建立会话都在控制信道 F 上。主机在 F 上找到对方后选一个数据
+// 信道（锁定的、或扫描里最好的；第一次建立时先扫一遍），在 F 上发 CHANNEL，收到
+// CHANNEL_ACK 后双方一起换过去，再 PING 一次确认。只有主机扫描；远端在数据信道上 2.5 s
+// 没听到主机，或会话结束时，自己回到 F。会话中重发率过高或接收机“聋了”时，主机拉黑这个
+// 信道，换到下一个最好的点；不成就回 F 重新建立。
+//
 // 上下文：所有成员只在执行上下文（单循环探针的主循环）里调用。Service() 每轮调用一次；
 // 远端的应答在 Service() 里逐包发出，不阻塞主循环；主机转发一条命令时阻塞到应答到达或
 // 超时。
@@ -46,6 +52,15 @@
 // to 10 s, see identity.hpp. The settings apply again afterwards; USB commands run
 // locally meanwhile.
 //
+// Channels (channel.hpp): pairing and opening a session happen on the control channel
+// F. Once the host has reached its peer on F it picks a data channel (the locked one, or
+// the best of a scan; the first session scans first), sends CHANNEL on F, and on
+// CHANNEL_ACK both move there and confirm with a PING. Only the host scans; the remote
+// returns to F on its own after 2.5 s on a data channel without hearing the host, and
+// when a session ends. When a session sees too many resends or a deaf receiver, the host
+// bans the channel and moves to the next best point, or opens the session on F again
+// when that fails.
+//
 // Context: every member is called in the execution context only (the main loop of a
 // single-loop probe). Service() is called once per round; the remote's answer goes out
 // packet by packet from Service() without blocking the main loop; the host blocks while
@@ -70,9 +85,10 @@ namespace XrDap::Radio
 /// @brief 无线 DAP 会话 / DAP sessions over the radio.
 /// @tparam RadioT 收发器驱动，接口同 xrobot-org/SX1281：Config（modulation、
 ///         frequency_hz、sync_word、crc_seed）、Start、MaxPayload、PrepareSend、Send、
-///         Sending、Poll、Receive / Transceiver driver with the interface of
-///         xrobot-org/SX1281: Config (modulation, frequency_hz, sync_word, crc_seed),
-///         Start, MaxPayload, PrepareSend, Send, Sending, Poll, Receive.
+///         Sending、Poll、Receive、Tune、RssiInstant 和收发计数 / Transceiver driver with
+///         the interface of xrobot-org/SX1281: Config (modulation, frequency_hz,
+///         sync_word, crc_seed), Start, MaxPayload, PrepareSend, Send, Sending, Poll,
+///         Receive, Tune, RssiInstant and the packet counters.
 /// @tparam ExecT 命令执行器（Executor<DapT>）/ Command executor (Executor<DapT>).
 template <typename RadioT, typename ExecT>
 class RadioLink
@@ -174,7 +190,7 @@ class RadioLink
       return false;
     }
     const uint8_t op = req[0];
-    if (cap < sizeof(SettingsAnswer))
+    if (cap < sizeof(StatsAnswer))
     {
       out = Control::StatusOnly(op, Control::kStatusBadRequest, resp, cap);
       return true;
@@ -247,6 +263,30 @@ class RadioLink
   static constexpr uint32_t kPingWaitUs = 3'000;
   static constexpr uint32_t kPingBudgetUs = 30'000;
   static constexpr uint32_t kPingOnceUs = 0;
+  // 在 F 上找对方：DAP_Connect 和回退重建给这么久。F 忙碌 40% 时，3 ms 一次的 PING 在
+  // 这段时间里全部失败的可能可以忽略。
+  // Reaching the peer on F: DAP_Connect and a fallback get this long. With F busy 40% of
+  // the time, a PING every 3 ms practically never fails for this long.
+  static constexpr uint32_t kRendezvousUs = 300'000;
+  // 换信道：CHANNEL 至多重发这么久；每 kSwitchProbe 次没有 ACK，就到目标信道上 PING
+  // 一次（对方可能已经换过去，只是 ACK 丢了）。
+  // Changing channel: CHANNEL is sent again for up to this long; after every
+  // kSwitchProbe sends without an ACK the host pings on the target channel once (the peer
+  // may have moved and only the ACK was lost).
+  static constexpr uint32_t kSwitchUs = 100'000;
+  static constexpr uint32_t kSwitchProbe = 4;
+  // 远端在数据信道上这么久没听到主机就回 F：长于心跳（1 s）加一次扫描，短于租期（3 s），
+  // 所以回 F 不结束会话。
+  // The remote returns to F after this long on a data channel without hearing the host:
+  // longer than the heartbeat (1 s) plus a scan, shorter than the lease (3 s), so that
+  // returning to F does not end the session.
+  static constexpr uint32_t kChannelSilenceUs = 2'500'000;
+  // 扫描：每 2 个索引（1 MHz）测一个点，每点先等 kSettleUs 再读 kDwellUs，一遍约 0.4 s。
+  // Scan: one point every 2 indices (1 MHz), each read for kDwellUs after kSettleUs; a
+  // pass takes about 0.4 s.
+  static constexpr uint32_t kSettleUs = 300;
+  static constexpr uint32_t kDwellUs = 5'000;
+  static constexpr uint8_t kScanStep = 2;
   // 有线会话这么久没有命令就结束，探针重新服务无线（工具退出时没发 DAP_Disconnect）。
   // A wired session without a command for this long ends, and the probe serves the
   // radio again (a tool that quit without DAP_Disconnect).
@@ -270,9 +310,9 @@ class RadioLink
 
   static bool IsOwnOp(uint8_t op)
   {
-    return op == Op::kRole || op == Op::kSettings || op == Op::kSetRole ||
-           op == Op::kSetModulation || op == Op::kUnpair || op == Op::kPair ||
-           op == Op::kForward;
+    return op == Op::kRole || op == Op::kStats || op == Op::kSettings ||
+           op == Op::kSetRole || op == Op::kSetModulation || op == Op::kUnpair ||
+           op == Op::kScan || op == Op::kChannel || op == Op::kPair || op == Op::kForward;
   }
 
   uint8_t Fragment() const { return static_cast<uint8_t>(radio_.MaxPayload() - kHeader); }
@@ -293,6 +333,30 @@ class RadioLink
     // 启动失败时，射频驱动在静默超时后自己复位重试。 / A failed start recovers in the
     // driver, which resets the radio after its silence timeout.
     (void)radio_.Start(radio_config_);
+    channel_ = kControlChannel;
+  }
+
+  // 复位射频，留在当前信道。 / Reset the radio and stay on the current channel.
+  void RestartRadio()
+  {
+    radio_config_.frequency_hz = ChannelHz(channel_);
+    (void)radio_.Start(radio_config_);
+  }
+
+  void TuneTo(uint8_t channel)
+  {
+    if (channel == channel_)
+    {
+      return;
+    }
+    if (!running_ && !pairing_)
+    {
+      channel_ = channel;  // 射频没在用，下次启动在 F / radio off; it starts on F
+      return;
+    }
+    FinishSending();
+    (void)radio_.Tune(ChannelHz(channel));
+    channel_ = channel;
   }
 
   // 应用设置（或 Op::kRole 临时指定的角色）：未配对、LOCAL 或安全模式时不用无线（R4：
@@ -391,6 +455,176 @@ class RadioLink
     return false;
   }
 
+  // 主机：wait_us 内等一个 kind 类型、序号为 sequence 的包，收到时它在 rx_ 里。
+  // Host: wait up to wait_us for a packet of `kind` with `sequence`; it is in rx_ then.
+  int AwaitReply(uint8_t kind, uint8_t sequence, uint32_t wait_us)
+  {
+    const uint32_t deadline = NowUs() + wait_us;
+    while (static_cast<int32_t>(deadline - NowUs()) > 0)
+    {
+      radio_.Poll();
+      const int n = radio_.Receive(rx_);
+      if (n >= kHeader && rx_[0] == kind && rx_[1] == sequence)
+      {
+        return n;
+      }
+    }
+    return 0;
+  }
+
+  // 主机：从 start 起每 step 个索引测一个点，共 count 个，记进 channels_；完了回到原
+  // 信道。
+  // Host: measure count points from `start`, every `step` indices, into channels_; back
+  // on the original channel afterwards.
+  void ScanRange(uint8_t start, uint8_t count, uint8_t step, uint32_t dwell_us)
+  {
+    const uint8_t back = channel_;
+    for (uint8_t i = 0; i < count; ++i)
+    {
+      const auto channel = static_cast<uint8_t>(start + i * step);
+      if (!IsChannel(channel))
+      {
+        break;
+      }
+      TuneTo(channel);
+      LibXR::Timebase::DelayMicroseconds(kSettleUs);
+      RssiMeter meter;
+      const uint32_t begin = NowUs();
+      do
+      {
+        meter.Add(radio_.RssiInstant());
+      } while (NowUs() - begin < dwell_us);
+      channels_.Record(channel, meter.Result());
+    }
+    TuneTo(back);
+  }
+
+  void ScanAll()
+  {
+    ScanRange(0, kChannels / kScanStep, kScanStep, kDwellUs);
+    ++stats_.scans;
+  }
+
+  uint8_t LockedChannel() const
+  {
+    return settings_.channel_lock != 0U && settings_.channel_lock <= kChannels
+               ? static_cast<uint8_t>(settings_.channel_lock - 1U)
+               : kNoChannel;
+  }
+
+  // 主机：该用的数据信道：锁定的，0x19 指定的一次，或扫描里最好的；都没有时为 F。
+  // Host: the data channel to use: the locked one, the one 0x19 asked for once, or the
+  // best of the scan; F when there is none.
+  uint8_t ChooseChannel()
+  {
+    const uint8_t locked = LockedChannel();
+    if (locked != kNoChannel)
+    {
+      return locked;
+    }
+    if (requested_ != kNoChannel)
+    {
+      const uint8_t channel = requested_;
+      requested_ = kNoChannel;
+      return channel;
+    }
+    const uint8_t best = channels_.Best(NowUs());
+    return best != kNoChannel ? best : kControlChannel;
+  }
+
+  // 主机：在当前信道上让对方换到 target，双方都换过去并 PING 通时为 true。失败时主机留在
+  // 当前信道或 F 上，对方可能已在 target 上，它沉默超时后会回 F。
+  // Host: make the peer move to `target` from the current channel; true once both are
+  // there and a PING went through. On failure the host stays on the current channel or
+  // F; the peer may be on `target` already and returns to F after its silence timeout.
+  bool SwitchTo(uint8_t target)
+  {
+    if (target == channel_)
+    {
+      return true;
+    }
+    const uint16_t session = host_.Session();
+    const uint8_t from = channel_;
+    const uint32_t begin = NowUs();
+    for (uint32_t sends = 1; NowUs() - begin < kSwitchUs; ++sends)
+    {
+      const uint8_t sequence = ++host_sequence_;
+      Transmit(tx_, BuildChannel(kChannel, sequence, session, target, tx_));
+      FinishSending();
+      uint16_t echoed = 0;
+      uint8_t channel = kNoChannel;
+      const int n = AwaitReply(kChannelAck, sequence, kPingWaitUs);
+      const bool acked = n > 0 && ParseChannel(rx_, n, echoed, channel) &&
+                         echoed == session && channel == target;
+      if (!acked && sends % kSwitchProbe != 0U)
+      {
+        continue;
+      }
+      TuneTo(target);
+      if (Ping(session, acked ? kPingBudgetUs : kPingOnceUs))
+      {
+        return true;
+      }
+      TuneTo(from);
+      if (acked)
+      {
+        return false;  // 对方换过去了却不通 / the peer moved but does not answer
+      }
+    }
+    return false;
+  }
+
+  // 主机：在 F 上找到对方（第一次先扫描），再换到数据信道。对方在时为 true，换信道失败
+  // 时留在 F 上。
+  // Host: reach the peer on F (scanning first the first time), then move to the data
+  // channel. True when the peer is there; a failed change of channel stays on F.
+  bool Rendezvous()
+  {
+    TuneTo(kControlChannel);
+    if (!Ping(host_.Session(), kRendezvousUs))
+    {
+      return false;
+    }
+    if (LockedChannel() == kNoChannel && !channels_.Scanned())
+    {
+      ScanAll();
+    }
+    const uint8_t target = ChooseChannel();
+    if (!SwitchTo(target))
+    {
+      channels_.Ban(target, NowUs());
+      TuneTo(kControlChannel);
+      return Ping(host_.Session(), kRendezvousUs);
+    }
+    return true;
+  }
+
+  // 主机：会话中当前数据信道变差：拉黑它，换到下一个最好的点（没有备选时先重扫）；不成就
+  // 回 F，下一条命令在 F 上重新建立。
+  // Host: the data channel turned bad during a session: ban it and move to the next best
+  // point (scanning again when there is none); when that fails, return to F, and the
+  // next command opens the session there again.
+  void Reselect()
+  {
+    channels_.Ban(channel_, NowUs());
+    retries_.Reset();
+    if (LockedChannel() != kNoChannel)
+    {
+      return;  // 锁定时不换 / a locked channel stays
+    }
+    if (channels_.Best(NowUs()) == kNoChannel)
+    {
+      ScanAll();
+    }
+    const uint8_t target = ChooseChannel();
+    if (!SwitchTo(target))
+    {
+      channels_.Ban(target, NowUs());
+      TuneTo(kControlChannel);
+      peer_lost_ = true;
+    }
+  }
+
   // 主机：转发一条命令并等应答；1 s 加 execution_us 内收到完整应答时为 true。more 表示
   // 之后还有命令，应答到达后射频提前准备发射。
   // Host: forward one command and wait for its answer; true with a complete answer
@@ -404,6 +638,7 @@ class RadioLink
       return false;
     }
     const uint8_t sequence = ++host_sequence_;
+    ++stats_.commands;
     const uint32_t budget = kBudgetUs + execution_us;
     Reassembler answers(resp, cap);
     uint32_t wait = kFirstWaitUs + execution_us;
@@ -437,18 +672,54 @@ class RadioLink
             radio_.PrepareSend();
           }
           out = answers.Size();
+          stats_.retries += sends - 1U;
+          stats_.last_rtt_us = NowUs() - begin;
+          if (stats_.last_rtt_us > stats_.max_rtt_us)
+          {
+            stats_.max_rtt_us = stats_.last_rtt_us;
+          }
+          reselect_ = retries_.Add(sends > 1U) || reselect_;
           return true;
         }
         deadline = NowUs() + kFragmentWaitUs;
       }
       if (!reset && sends >= kDeafSends && NowUs() - heard >= kDeafUs)
       {
-        (void)radio_.Start(radio_config_);
+        // 数据信道上先换信道（必要时回 F 重新建立），F 上才复位射频。 / On a data
+        // channel, change channel first (opening again on F if needed); reset the radio
+        // only on F.
         reset = true;
+        if (channel_ != kControlChannel)
+        {
+          Reselect();
+          if (peer_lost_ && Rendezvous())
+          {
+            peer_lost_ = false;
+          }
+        }
+        else
+        {
+          RestartRadio();
+        }
+        heard = NowUs();
       }
       wait = wait * 2U < kMaxWaitUs ? wait * 2U : kMaxWaitUs;
     }
+    stats_.retries += sends - 1U;
+    ++stats_.failures;
+    reselect_ = retries_.Add(true) || reselect_;
     return false;
+  }
+
+  // 主机：结束会话（PING 0，H3）并回 F。在数据信道上重发到对方应答，免得它留在那里
+  // 等沉默超时；F 上发一次。
+  // Host: end the session (PING 0, H3) and return to F. On a data channel it is sent
+  // until the peer answers, so that the peer does not stay there until its silence
+  // timeout; on F it is sent once.
+  void EndHostSession()
+  {
+    (void)Ping(0, channel_ != kControlChannel ? kPingBudgetUs : kPingOnceUs);
+    TuneTo(kControlChannel);
   }
 
   void ResetSessions()
@@ -458,7 +729,11 @@ class RadioLink
     peer_lost_ = false;
     if (host_.OnDisconnect())
     {
-      (void)Ping(0, kPingOnceUs);
+      EndHostSession();
+    }
+    else if (running_)
+    {
+      TuneTo(kControlChannel);
     }
   }
 
@@ -470,7 +745,10 @@ class RadioLink
     const bool fresh = host_.OnCommand(now);
     if (fresh || peer_lost_ || now - heard_peer_us_ >= kQuietUs)
     {
-      if (!Ping(host_.Session(), kPingBudgetUs))
+      // 新会话在 F 上建立；会话中先在当前信道上 PING（可能只丢了一个包），不通再回 F。
+      // A new session opens on F; within a session ping on the current channel first (a
+      // single packet may have been lost), and return to F only when that fails.
+      if (!(!fresh && Ping(host_.Session(), kPingBudgetUs)) && !Rendezvous())
       {
         return false;
       }
@@ -518,7 +796,12 @@ class RadioLink
     host_.OnSent(heard_peer_us_);
     if (disconnect && host_.OnDisconnect())
     {
-      (void)Ping(0, kPingOnceUs);  // H3
+      EndHostSession();  // H3
+    }
+    else if (reselect_)
+    {
+      reselect_ = false;
+      Reselect();
     }
     return true;
   }
@@ -618,7 +901,7 @@ class RadioLink
         }
         break;
       case HostSession::Action::END:  // H3
-        (void)Ping(0, kPingOnceUs);
+        EndHostSession();
         break;
       case HostSession::Action::NONE:
       default:
@@ -635,6 +918,7 @@ class RadioLink
     commands_.Reset();
     cache_.Clear();
     exec_.LinkLost(Transport::RADIO);
+    TuneTo(kControlChannel);
   }
 
   void EndRemoteSession()
@@ -759,9 +1043,28 @@ class RadioLink
       {
         EndSession();
       }
+      if (channel_ != kControlChannel && now - heard_host_us_ >= kChannelSilenceUs)
+      {
+        TuneTo(kControlChannel);  // 主机不在这个信道上了 / the host left this channel
+      }
       return;
     }
+    heard_host_us_ = now;
     const uint8_t sequence = rx_[1];
+    if (rx_[0] == kChannel)
+    {
+      uint16_t session = 0;
+      uint8_t channel = kNoChannel;
+      if (!ParseChannel(rx_, n, session, channel) || !IsChannel(channel) ||
+          session != lease_.Session() || !lease_.OnCommand(now))
+      {
+        return;
+      }
+      Transmit(tx_, BuildChannel(kChannelAck, sequence, session, channel, tx_));
+      FinishSending();
+      TuneTo(channel);
+      return;
+    }
     if (rx_[0] == kPing)
     {
       uint16_t session = 0;
@@ -769,11 +1072,14 @@ class RadioLink
       {
         return;
       }
-      if (lease_.OnPing(session, now) != RemoteLease::Event::NONE)
+      const bool changed = lease_.OnPing(session, now) != RemoteLease::Event::NONE;
+      // 先在 PING 来的信道上应答，再结束会话（结束时回 F）。 / Answer on the channel
+      // the PING came on first, then end the session (which returns to F).
+      SendPing(kPong, sequence, lease_.Session());
+      if (changed)
       {
         EndSession();
       }
-      SendPing(kPong, sequence, lease_.Session());
       return;
     }
     const bool control = rx_[0] == kControl;
@@ -789,6 +1095,7 @@ class RadioLink
     {
       // 主机没收到应答：重发缓存，不再执行一次。 / The host did not get the answer:
       // send it again instead of executing twice.
+      ++stats_.duplicates;
       StartAnswer(commands_.Sequence());
       return;
     }
@@ -985,6 +1292,12 @@ class RadioLink
       case Op::kPair:
         RequestPairing();
         return Reply(resp, op, Status::kOk, cap);
+      case Op::kStats:
+        return StatsReply(resp);
+      case Op::kScan:
+        return ScanReply(req, len, resp, cap);
+      case Op::kChannel:
+        return ChannelReply(req, len, resp, cap);
       case Op::kForward:
       default:
       {
@@ -1008,6 +1321,104 @@ class RadioLink
     }
   }
 
+  uint16_t StatsReply(uint8_t* resp)
+  {
+    StatsAnswer answer{};
+    answer.op = Op::kStats;
+    answer.status = Status::kOk;
+    answer.count = 12;
+    answer.radio_tx = radio_.TxPackets();
+    answer.radio_rx = radio_.RxPackets();
+    answer.crc_errors = radio_.RxErrors();
+    answer.tx_timeouts = radio_.TxErrors();
+    answer.commands = stats_.commands;
+    answer.retries = stats_.retries;
+    answer.failures = stats_.failures;
+    answer.duplicates = stats_.duplicates;
+    answer.last_rtt_us = stats_.last_rtt_us;
+    answer.max_rtt_us = stats_.max_rtt_us;
+    answer.channel = channel_;
+    answer.scans = stats_.scans;
+    std::memcpy(resp, &answer, sizeof(answer));
+    return sizeof(answer);
+  }
+
+  uint16_t ScanReply(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap)
+  {
+    constexpr uint8_t kMaxPoints = 20;
+    constexpr uint8_t kMaxDwellMs = 20;
+    if (len < 4U || !IsChannel(req[1]) || req[2] == 0U || req[2] > kMaxPoints ||
+        req[1] + req[2] > kChannels || req[3] == 0U || req[3] > kMaxDwellMs ||
+        cap < 3U + 2U * kMaxPoints)
+    {
+      return Reply(resp, Op::kScan, Status::kBadRequest, cap);
+    }
+    if (!running_)
+    {
+      return Reply(resp, Op::kScan, Status::kNotPaired, cap);
+    }
+    ScanRange(req[1], req[2], 1, req[3] * 1000U);
+    resp[0] = Op::kScan;
+    resp[1] = Status::kOk;
+    resp[2] = req[2];
+    for (uint8_t i = 0; i < req[2]; ++i)
+    {
+      const ChannelSample sample = channels_.Sample(static_cast<uint8_t>(req[1] + i));
+      resp[3 + 2 * i] = sample.busy;
+      resp[4 + 2 * i] = static_cast<uint8_t>(sample.mean_dbm);
+    }
+    return static_cast<uint16_t>(3U + 2U * req[2]);
+  }
+
+  uint16_t ChannelReply(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap)
+  {
+    if (len >= 3U)
+    {
+      const uint8_t mode = req[1];
+      const uint8_t channel = req[2];
+      if (mode > 2U || (mode != 0U && !IsChannel(channel)))
+      {
+        return Reply(resp, Op::kChannel, Status::kBadRequest, cap);
+      }
+      if (mode == 2U)
+      {
+        // 会话在无线上时立即换，否则用于下一个会话。 / Change at once while a session
+        // runs over the radio, otherwise for the next session.
+        requested_ = channel;
+        if (session_wireless_ && !peer_lost_ && !SwitchTo(ChooseChannel()))
+        {
+          TuneTo(kControlChannel);
+          peer_lost_ = true;
+        }
+      }
+      else
+      {
+        // 只存锁定，不重新应用设置：下次选信道时生效。 / Store the lock only, without
+        // applying the settings again: it takes effect at the next choice of channel.
+        Settings settings = settings_;
+        settings.channel_lock = mode == 0U ? 0U : static_cast<uint16_t>(channel + 1U);
+        if (!store_.Save(settings))
+        {
+          return Reply(resp, Op::kChannel, Status::kError, cap);
+        }
+        settings_ = settings;
+      }
+    }
+    else if (len != 1U)
+    {
+      return Reply(resp, Op::kChannel, Status::kBadRequest, cap);
+    }
+    ChannelAnswer answer{};
+    answer.op = Op::kChannel;
+    answer.status = Status::kOk;
+    answer.channel = channel_;
+    answer.control = kControlChannel;
+    answer.lock = LockedChannel();
+    answer.best = channels_.Best(NowUs());
+    std::memcpy(resp, &answer, sizeof(answer));
+    return sizeof(answer);
+  }
+
   RadioT& radio_;
   ExecT& exec_;
   Store& store_;
@@ -1021,6 +1432,23 @@ class RadioLink
   bool running_ = false;
   Role override_role_ = Role::LOCAL;
   bool role_override_pending_ = false;
+
+  // 信道 / Channels.
+  uint8_t channel_ = kControlChannel;  // 射频现在所在的信道 / the channel the radio is on
+  uint8_t requested_ = kNoChannel;     // 0x19 指定的一次 / asked for once by 0x19
+  bool reselect_ = false;              // 重发率过高，命令之后换信道 / too many resends
+  ChannelTable channels_;
+  RetryWindow retries_;
+  struct
+  {
+    uint32_t commands = 0;
+    uint32_t retries = 0;
+    uint32_t failures = 0;
+    uint32_t duplicates = 0;
+    uint32_t last_rtt_us = 0;
+    uint32_t max_rtt_us = 0;
+    uint32_t scans = 0;
+  } stats_;
 
   uint8_t tx_[256] = {};
   uint8_t rx_[256] = {};
@@ -1043,6 +1471,7 @@ class RadioLink
   Reassembler commands_{command_, sizeof(command_)};
   RemoteLease lease_;
   AnswerCache cache_;
+  uint32_t heard_host_us_ = 0;  // 上一个主机的包 / last packet from the host
   bool executing_ = false;
   bool apply_pending_ = false;
   bool answering_ = false;

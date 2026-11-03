@@ -21,7 +21,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 | `session/` | `Executor`：所有进入 libxr DAP 实例的调用都经过它，`Run()` 循环把 USB 命令、别的链路投来的请求和采样一件一件做，没有锁；`Transport` 只是命令来源的标签 |
 | `vendor/` | `DapVendor`（命令 0x80 到 0x85，以及平台挂上的一条附加命令，例如 XRDAP-ESP 的 0x86 Wi-Fi 配置）、`MemAp`（经 SWD 沿指针链访问 MEM-AP）、`Sampler`、`TickAccount`、`FrameRing`（探针端采样）、请求检查和回复空间 |
 | `serial/` | `Framer`（串口帧：帧头和 CRC 用 libxr Topic 的打包格式，这里只做 payload 和流式重同步）、`SerialLink`（串口收发线程） |
-| `radio/` | `RadioLink`：两块配对探针之间经 SX1281 的 DAP 会话（转发、远端执行、会话租期、配对和控制口操作），射频驱动以模板参数传入；包格式、会话规则、配对身份和转发用的命令估计是纯逻辑（docs/protocol.md 第 8 节） |
+| `radio/` | `RadioLink`：两块配对探针之间经 SX1281 的 DAP 会话（转发、远端执行、会话租期、配对、信道选择和控制口操作），射频驱动以模板参数传入；包格式、会话规则、配对身份、信道表和转发用的命令估计是纯逻辑（docs/protocol.md 第 8 节） |
 | `activity/` | `DapActivity`：DAP 活动和 DAP_HostStatus 报告的上位机状态 |
 | `control/` | 控制口：设置类请求（Wi-Fi、射频）与 DAP 无关；`op + 载荷` 的请求、`op + 状态 + 载荷` 的应答，由 `Executor::Control` 交给执行上下文一次处理一条 |
 | `light/` | `StatusLight`：由连接、设置和 DAP 活动算出每一刻的灯色和亮度 |
