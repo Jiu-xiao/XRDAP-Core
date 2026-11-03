@@ -325,9 +325,9 @@ MC-01 (protocol section 2, TCP): after client A connects and starts sampling, cl
 
 On the `radio` link, the cases marked `all` in section 3 are all executed over the radio, and throughput and round-trip time are the wireless performance.
 
-RAD-01: read the diagnostic statistics of the wireless firmware (command 0x9F 0x11), run 5 passes of 4 KiB block read/write, then read the statistics again. Retransmissions / commands, failure count and maximum round-trip time are recorded. Pass: data matches and the failure count is 0.
+RAD-01: read the radio statistics through the control port (operation 0x11), run 5 passes of 4 KiB block read/write, then read the statistics again. Retransmissions / commands, failure count and maximum round-trip time are recorded. Pass: data matches and the failure count is 0.
 
-RAD-02 (assisted): read the pairing settings (0x9F 0x13), power both boards off and on again, then read again. Pass: still paired, and the link id is unchanged.
+RAD-02 (assisted): read the pairing settings through the control port (0x13), power both boards off and on again, then read again. Pass: still paired, and the link id is unchanged.
 
 RAD-04 (manual, decision B6): after sampling is started over the radio, in turn have the host change the session number (reopen the session), send session number 0, and unplug the host board for more than 3 s, and read frames through the remote side each time. Pass: in all three cases the remote side ends the session and stops sampling, and the cached response is cleared. The tool becomes automatic once the wireless firmware publishes how to read the session number.
 
@@ -341,7 +341,7 @@ RES-02 (manual): on F103 and CH32, fill the stack with a fixed value at boot, an
 
 RES-03 (manual): the debug firmware toggles an idle GPIO before and after DAP command handling and the sampling tick, and a logic analyser measures the duty cycle during PERF-02 and during minimum-period sampling.
 
-RES-04 (manual): update the firmware by the normal route of each probe (ESP web flashing or `esptool write_flash 0x0 merged.bin`; CH32 `tools/dfu_update.py`; F103 SWD flashing of the release image); the time from start to a DAP_Info response is recorded, and the retention of settings is confirmed: on ESP the Wi-Fi credentials (0x86 op 0 shows the same hotspot name), and the clear source and the reset reason can be read (decision A4); on CH32 the pairing and role (0x9F 0x13). The boot time itself is measured by STAB-07.
+RES-04 (manual): update the firmware by the normal route of each probe (ESP web flashing or `esptool write_flash 0x0 merged.bin`; CH32 `tools/dfu_update.py`; F103 SWD flashing of the release image); the time from start to a DAP_Info response is recorded, and the retention of settings is confirmed: on ESP the Wi-Fi credentials (0x86 op 0 shows the same hotspot name), and the clear source and the reset reason can be read (decision A4); on CH32 the pairing and role (control port 0x13). The boot time itself is measured by STAB-07.
 
 RES-05 (manual): a USB ammeter in series with the probe records the current when idle, during PERF-02 and during minimum-period sampling; after PERF-02 has looped for 10 minutes, the hottest point on the board and the room temperature are recorded.
 
