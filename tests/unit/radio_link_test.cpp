@@ -60,18 +60,41 @@ class FakeRadio
   void PrepareSend() {}
   LibXR::ErrorCode Send(const uint8_t* data, uint8_t size)
   {
+    if (sending_)
+    {
+      if (on_air_ > 0U)
+      {
+        --on_air_;
+        return LibXR::ErrorCode::BUSY;
+      }
+      sending_ = false;  // 上一包发完，不回接收 / previous one done, no receive between
+    }
     ++sent;
     // 双方身份相同时才收得到 / Delivered only when both use the same identity.
     if (peer != nullptr && (drop == nullptr || !drop(sent)) && SameIdentity(*peer))
     {
       peer->rx_.emplace_back(data, data + size);
     }
+    sending_ = air > 0U;
+    on_air_ = air;
     return LibXR::ErrorCode::OK;
   }
-  bool Sending() const { return false; }
+  bool Sending() const { return sending_; }
   // 主机等应答时让对方跑一轮 / Lets the peer run a round while the host waits.
   void Poll()
   {
+    if (sending_)
+    {
+      if (on_air_ > 0U)
+      {
+        --on_air_;
+      }
+      else
+      {
+        sending_ = false;
+        ++receive_entries;
+      }
+    }
     if (on_poll)
     {
       on_poll();
@@ -102,8 +125,14 @@ class FakeRadio
   std::function<bool(uint32_t)> drop;  // 第 n 次发送丢掉时为 true / true drops send n
   uint32_t sent = 0;
   uint32_t starts = 0;
+  // 每包在空中停留的 Send / Poll 调用次数，0 为立即发完 / Send / Poll calls each packet
+  // stays on air, 0 for at once.
+  uint32_t air = 0;
+  uint32_t receive_entries = 0;  // 发完转回接收的次数 / Returns to receive after sending
 
  private:
+  bool sending_ = false;
+  uint32_t on_air_ = 0;
   Config config_{};
   std::deque<std::vector<uint8_t>> rx_;
 };
@@ -283,6 +312,26 @@ TEST(radio_link_resend)
   const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
   CHECK(p.exec_a.Usb(c) == Expected(c));
   CHECK_EQ(p.exec_b.executed, before + 1U);
+}
+
+// 多包的命令和应答连续发出，整条消息发完才转回接收一次 / The packets of a long command
+// and of its answer go out back to back, returning to receive once per message.
+TEST(radio_link_back_to_back)
+{
+  Pair p(true);
+  p.radio_a.air = 2;
+  p.radio_b.air = 2;
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  const uint32_t sent_a = p.radio_a.sent;
+  const uint32_t sent_b = p.radio_b.sent;
+  const uint32_t entries_a = p.radio_a.receive_entries;
+  const uint32_t entries_b = p.radio_b.receive_entries;
+  const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
+  CHECK(p.exec_a.Usb(c) == Expected(c));
+  (void)p.b.Service();
+  CHECK(p.radio_a.sent - sent_a > 1U && p.radio_b.sent - sent_b > 1U);
+  CHECK_EQ(p.radio_a.receive_entries - entries_a, 1U);
+  CHECK_EQ(p.radio_b.receive_entries - entries_b, 1U);
 }
 
 // 未配对的探针不用无线：命令在本地执行，对方不执行无线命令 / An unpaired probe does not
