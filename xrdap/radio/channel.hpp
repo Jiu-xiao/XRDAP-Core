@@ -10,7 +10,8 @@
 // F（kControlChannel，2448.5 MHz，Wi‑Fi 6 与 11 信道之间）是所有探针共用的控制信道：
 // 配对、建立会话和协商数据信道都在 F 上，不同的对靠同步字和 CRC 初值分开。数据信道由
 // 主机扫描后选出：每个点测一段时间，记下 RSSI 超过 -85 dBm 的时间占比（忙碌）和平均
-// RSSI，选忙碌最低的点，相同时选平均 RSSI 低的。会话中变差的点拉黑 10 分钟。
+// RSSI；Wi-Fi 是突发的，扫几遍、每个点留最差的一遍。选忙碌最低的点，相同时选平均 RSSI
+// 低的。会话中变差的点拉黑 10 分钟。
 //
 // Radio channels: frequency indices, noise measurement, scan results and the choice of a
 // channel. Pure logic.
@@ -24,9 +25,10 @@
 // all probes share: pairing, opening a session and agreeing on the data channel happen
 // on F, and the sync word and CRC seed keep pairs apart. The host picks the data channel
 // from a scan: each point is measured for a while, recording the share of time the RSSI
-// is above -85 dBm (busy) and the mean RSSI; the point with the lowest busy share wins,
-// the lower mean breaks a tie. A point that turns bad during a session is banned for 10
-// minutes.
+// is above -85 dBm (busy) and the mean RSSI; Wi-Fi comes in bursts, so the scan makes
+// several passes and keeps the worst pass of each point. The point with the lowest busy
+// share wins, the lower mean breaks a tie. A point that turns bad during a session is
+// banned for 10 minutes.
 
 #include <cstdint>
 
@@ -83,6 +85,12 @@ class ChannelTable
  public:
   /// 记下一个点的测量 / Record the measurement of a point.
   void Record(uint8_t index, ChannelSample sample);
+  /// @brief 再测一遍：留较差的（忙碌和平均 RSSI 各取大）；没测过时同 Record / Add
+  ///        another pass: keep the worse (the larger busy share and mean RSSI each); like
+  ///        Record for a point not measured yet.
+  void Merge(uint8_t index, ChannelSample sample);
+  /// 忘掉测量，黑名单不变 / Forget the measurements; the bans stay.
+  void ClearSamples();
   /// 这个点测过 / Whether the point was measured.
   bool Measured(uint8_t index) const;
   /// 这个点的测量 / The measurement of a point.

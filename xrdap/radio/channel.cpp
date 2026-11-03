@@ -33,6 +33,25 @@ void ChannelTable::Record(uint8_t index, ChannelSample sample)
   measured_[index / 8] |= static_cast<uint8_t>(1U << (index % 8));
 }
 
+void ChannelTable::Merge(uint8_t index, ChannelSample sample)
+{
+  if (Measured(index))
+  {
+    const ChannelSample old = samples_[index];
+    sample.busy = sample.busy > old.busy ? sample.busy : old.busy;
+    sample.mean_dbm = sample.mean_dbm > old.mean_dbm ? sample.mean_dbm : old.mean_dbm;
+  }
+  Record(index, sample);
+}
+
+void ChannelTable::ClearSamples()
+{
+  for (uint8_t& byte : measured_)
+  {
+    byte = 0;
+  }
+}
+
 bool ChannelTable::Measured(uint8_t index) const
 {
   return IsChannel(index) && (measured_[index / 8] & (1U << (index % 8))) != 0U;
