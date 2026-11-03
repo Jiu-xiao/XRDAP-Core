@@ -19,7 +19,7 @@
 // 结束后设置重新生效，配对期间 USB 命令在本地执行。
 //
 // 信道（channel.hpp）：配对和建立会话都在控制信道 F 上。主机在 F 上找到对方后选一个数据
-// 信道（锁定的、或扫描里最好的；第一次建立时先扫一遍），在 F 上发 CHANNEL，收到
+// 信道（锁定的、或扫描里最好的；第一次建立时先扫描），在 F 上发 CHANNEL，收到
 // CHANNEL_ACK 后双方一起换过去，再 PING 一次确认。只有主机扫描；远端在数据信道上 2.5 s
 // 没听到主机，或会话结束时，自己回到 F。会话中重发率过高或接收机“聋了”时，主机拉黑这个
 // 信道，换到下一个最好的点；不成就回 F 重新建立。
@@ -85,10 +85,10 @@ namespace XrDap::Radio
 /// @brief 无线 DAP 会话 / DAP sessions over the radio.
 /// @tparam RadioT 收发器驱动，接口同 xrobot-org/SX1281：Config（modulation、
 ///         frequency_hz、sync_word、crc_seed）、Start、MaxPayload、PrepareSend、Send、
-///         Sending、Poll、Receive、Tune、RssiInstant 和收发计数 / Transceiver driver with
+///         Sending、Poll、Receive、Tune、RssiInstant 和计数 / Transceiver driver with
 ///         the interface of xrobot-org/SX1281: Config (modulation, frequency_hz,
 ///         sync_word, crc_seed), Start, MaxPayload, PrepareSend, Send, Sending, Poll,
-///         Receive, Tune, RssiInstant and the packet counters.
+///         Receive, Tune, RssiInstant and the counters.
 /// @tparam ExecT 命令执行器（Executor<DapT>）/ Command executor (Executor<DapT>).
 template <typename RadioT, typename ExecT>
 class RadioLink
@@ -281,12 +281,17 @@ class RadioLink
   // longer than the heartbeat (1 s) plus a scan, shorter than the lease (3 s), so that
   // returning to F does not end the session.
   static constexpr uint32_t kChannelSilenceUs = 2'500'000;
-  // 扫描：每 2 个索引（1 MHz）测一个点，每点先等 kSettleUs 再读 kDwellUs，一遍约 0.4 s。
-  // Scan: one point every 2 indices (1 MHz), each read for kDwellUs after kSettleUs; a
-  // pass takes about 0.4 s.
+  // 扫描：每 2 个索引（1 MHz）测一个点，每点先等 kSettleUs 再读 kDwellUs；扫 kScanPasses
+  // 遍，每个点留最差的一遍，共约 0.6 s。首次扫描在 DAP_Connect 里，要短于工具的 USB 超时
+  // （OpenOCD 1 s）。
+  // Scan: one point every 2 indices (1 MHz), each read for kDwellUs after kSettleUs;
+  // kScanPasses passes, keeping the worst pass of each point, about 0.6 s in all. The
+  // first scan runs inside DAP_Connect and must stay below the tools' USB timeout
+  // (OpenOCD: 1 s).
   static constexpr uint32_t kSettleUs = 300;
-  static constexpr uint32_t kDwellUs = 5'000;
+  static constexpr uint32_t kDwellUs = 1'500;
   static constexpr uint8_t kScanStep = 2;
+  static constexpr uint8_t kScanPasses = 4;
   // 有线会话这么久没有命令就结束，探针重新服务无线（工具退出时没发 DAP_Disconnect）。
   // A wired session without a command for this long ends, and the probe serves the
   // radio again (a tool that quit without DAP_Disconnect).
@@ -476,7 +481,8 @@ class RadioLink
   // 信道。
   // Host: measure count points from `start`, every `step` indices, into channels_; back
   // on the original channel afterwards.
-  void ScanRange(uint8_t start, uint8_t count, uint8_t step, uint32_t dwell_us)
+  void ScanRange(uint8_t start, uint8_t count, uint8_t step, uint32_t dwell_us,
+                 bool merge = false)
   {
     const uint8_t back = channel_;
     for (uint8_t i = 0; i < count; ++i)
@@ -494,14 +500,25 @@ class RadioLink
       {
         meter.Add(radio_.RssiInstant());
       } while (NowUs() - begin < dwell_us);
-      channels_.Record(channel, meter.Result());
+      if (merge)
+      {
+        channels_.Merge(channel, meter.Result());
+      }
+      else
+      {
+        channels_.Record(channel, meter.Result());
+      }
     }
     TuneTo(back);
   }
 
   void ScanAll()
   {
-    ScanRange(0, kChannels / kScanStep, kScanStep, kDwellUs);
+    channels_.ClearSamples();
+    for (uint8_t pass = 0; pass < kScanPasses; ++pass)
+    {
+      ScanRange(0, kChannels / kScanStep, kScanStep, kDwellUs, true);
+    }
     ++stats_.scans;
   }
 
@@ -1326,7 +1343,7 @@ class RadioLink
     StatsAnswer answer{};
     answer.op = Op::kStats;
     answer.status = Status::kOk;
-    answer.count = 12;
+    answer.count = 14;
     answer.radio_tx = radio_.TxPackets();
     answer.radio_rx = radio_.RxPackets();
     answer.crc_errors = radio_.RxErrors();
@@ -1339,6 +1356,8 @@ class RadioLink
     answer.max_rtt_us = stats_.max_rtt_us;
     answer.channel = channel_;
     answer.scans = stats_.scans;
+    answer.rearms = radio_.Rearms();
+    answer.restarts = radio_.Restarts();
     std::memcpy(resp, &answer, sizeof(answer));
     return sizeof(answer);
   }
