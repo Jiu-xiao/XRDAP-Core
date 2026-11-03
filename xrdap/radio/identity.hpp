@@ -3,25 +3,28 @@
 
 // 一对探针的射频身份和配对包。纯逻辑。
 //
-// 身份是频点、CRC 初值和 GFSK 同步字，靠它把一对探针与别的对分开。未配对的探针用默认
-// 身份；配对后两块探针由各自的芯片 UID 算出同一个链路号，再由链路号算出身份。FLRC 不用
-// 身份里的同步字，固定为 "XRDP"（勘误 16.4 对编码率 1 没有公布要避开的值）。
+// 身份是频点、CRC 初值和 GFSK 同步字。频点总是控制信道 F（channel.hpp），数据信道另外
+// 协商；CRC 初值和同步字把一对探针与别的对分开。未配对的探针用默认身份；配对后两块探针由
+// 各自的芯片 UID 算出同一个链路号，再由链路号算出身份。FLRC 不用身份里的同步字，固定为
+// "XRDP"（勘误 16.4 对编码率 1 没有公布要避开的值）。
 //
-// 配对：两块都在配对中的探针用默认身份（GFSK），每 20 ms 左右发一个 HELLO 包：
+// 配对：两块都在配对中的探针在 F 上用默认身份（GFSK），每 20 ms 左右发一个 HELLO 包：
 //   [0] 5（packet.hpp）  [1..12] 自己的芯片 UID  [13..24] 目前听到的对方 UID，没有为 0
 // 听到点了自己名字的 HELLO 的探针配对完成，它再应答 1 s，让对方也听到自己的 UID。同样
 // 两块探针再次配对得到同一个身份。
 //
 // Radio identity of a pair of probes, and the pairing packet. Pure logic.
 //
-// The identity is the frequency, the CRC seed and the GFSK sync word; it tells a pair
-// apart from other pairs. Unpaired probes use the default identity; once paired, both
-// probes compute the same link id from their two chip UIDs and the identity from the
-// link id. FLRC does not use the identity's sync word and keeps "XRDP" (errata 16.4
-// publishes no values to avoid at coding rate 1).
+// The identity is the frequency, the CRC seed and the GFSK sync word. The frequency is
+// always the control channel F (channel.hpp), and the data channel is agreed on
+// separately; the CRC seed and the sync word tell a pair apart from other pairs.
+// Unpaired probes use the default identity; once paired, both probes compute the same
+// link id from their two chip UIDs and the identity from the link id. FLRC does not use
+// the identity's sync word and keeps "XRDP" (errata 16.4 publishes no values to avoid at
+// coding rate 1).
 //
-// Pairing: two probes in pairing both use the default identity (GFSK) and send a HELLO
-// packet every 20 ms or so:
+// Pairing: two probes in pairing both use the default identity (GFSK) on F and send a
+// HELLO packet every 20 ms or so:
 //   [0] 5 (packet.hpp)  [1..12] own chip UID  [13..24] the UID of the peer heard so
 //   far, or zeros
 // A probe that hears a HELLO naming itself is done; it keeps answering for another second

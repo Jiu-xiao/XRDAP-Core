@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// 无线链路的纯逻辑。判据：packet.hpp、session.hpp、identity.hpp、forwarding.hpp 里的规范
-// 和 docs/protocol.md 第 8 节 / Pure logic of the radio link. Oracle: the specifications
-// in packet.hpp, session.hpp, identity.hpp and forwarding.hpp, and docs/protocol.md
-// section 8.
+// 无线链路的纯逻辑。判据：packet.hpp、session.hpp、identity.hpp、forwarding.hpp、
+// channel.hpp 里的规范和 docs/protocol.md 第 8 节 / Pure logic of the radio link. Oracle:
+// the specifications in packet.hpp, session.hpp, identity.hpp, forwarding.hpp and
+// channel.hpp, and docs/protocol.md section 8.
 #include <cstring>
 #include <vector>
 
 #include "check.hpp"
+#include "xrdap/radio/channel.hpp"
 #include "xrdap/radio/forwarding.hpp"
 #include "xrdap/radio/identity.hpp"
 #include "xrdap/radio/packet.hpp"
@@ -215,7 +216,7 @@ TEST(radio_pair_identity)
   for (uint32_t id = 1; id < 5000; id = id * 3 + 1)
   {
     const Identity x = PairIdentity(id);
-    CHECK(x.frequency_hz >= 2'403'000'000U && x.frequency_hz <= 2'479'000'000U);
+    CHECK_EQ(x.frequency_hz, ChannelHz(kControlChannel));
     const uint32_t word = static_cast<uint32_t>(x.sync_word[0]) << 24 |
                           static_cast<uint32_t>(x.sync_word[1]) << 16 |
                           static_cast<uint32_t>(x.sync_word[2]) << 8 | x.sync_word[3];
@@ -258,4 +259,71 @@ TEST(radio_settings_replay)
         replay.Data(0)[1] == 2);  // 保留最后一条 / last kept
   CHECK_EQ(replay.Size(1), sizeof(config));
   CHECK_EQ(replay.Size(2), 0);
+}
+
+TEST(radio_channel_packet)
+{
+  uint8_t packet[16];
+  CHECK_EQ(BuildChannel(kChannel, 7, 0x1234, 150, packet), kHeader + kChannelPayload);
+  uint16_t session = 0;
+  uint8_t channel = 0;
+  CHECK(ParseChannel(packet, kHeader + kChannelPayload, session, channel));
+  CHECK(packet[0] == kChannel && packet[1] == 7 && session == 0x1234 && channel == 150);
+  CHECK(!ParseChannel(packet, kHeader + kChannelPayload - 1, session, channel));
+}
+
+// 频点：0.5 MHz 一格，2402.0–2481.5 MHz，越界落到 F；F 是 2448.5 MHz / Frequencies:
+// 0.5 MHz steps over 2402.0–2481.5 MHz, out of range maps to F; F is 2448.5 MHz.
+TEST(radio_channel_plan)
+{
+  CHECK_EQ(ChannelHz(0), 2'402'000'000U);
+  CHECK_EQ(ChannelHz(kChannels - 1), 2'481'500'000U);
+  CHECK_EQ(ChannelHz(kControlChannel), 2'448'500'000U);
+  CHECK_EQ(ChannelHz(kChannels), ChannelHz(kControlChannel));
+  CHECK_EQ(ChannelHz(kNoChannel), ChannelHz(kControlChannel));
+  CHECK_EQ(DefaultIdentity().frequency_hz, ChannelHz(kControlChannel));
+  CHECK_EQ(PairIdentity(0x12345678).frequency_hz, ChannelHz(kControlChannel));
+}
+
+// 测量与选点：忙碌低者胜，平均 RSSI 破平局；拉黑的点不选；没有测量时没有最好的点 /
+// Measurement and choice: lower busy wins, lower mean breaks a tie; banned points are
+// skipped; no measurement means no best point.
+TEST(radio_channel_table)
+{
+  RssiMeter meter;
+  CHECK_EQ(meter.Result().busy, 200);
+  meter.Add(-200);  // -100 dBm
+  meter.Add(-160);  // -80 dBm，忙 / busy
+  CHECK(meter.Result().busy == 100 && meter.Result().mean_dbm == -90);
+
+  ChannelTable table;
+  CHECK(!table.Scanned() && table.Best(0) == kNoChannel);
+  table.Record(10, {20, -90});
+  table.Record(30, {5, -80});
+  table.Record(31, {5, -95});
+  table.Record(kChannels, {0, -100});  // 越界忽略 / out of range ignored
+  CHECK(table.Scanned() && table.Measured(30) && !table.Measured(11));
+  CHECK_EQ(table.Best(0), 31);
+  table.Ban(31, 1000);
+  CHECK(table.Banned(31, 1000) && table.Best(1000) == 30);
+  CHECK(!table.Banned(31, 1000 + kBanUs) && table.Best(1000 + kBanUs) == 31);
+  for (uint8_t i = 0; i < 9; ++i)
+  {
+    table.Ban(i, 0);  // 8 项，最早的被挤掉 / 8 entries, the oldest drops out
+  }
+  CHECK(!table.Banned(0, 1) && table.Banned(8, 1));
+}
+
+TEST(radio_retry_window)
+{
+  RetryWindow window;
+  for (uint16_t i = 0; i < RetryWindow::kWindow - 1U; ++i)
+  {
+    CHECK(!window.Add(i < RetryWindow::kLimit + 1U));
+  }
+  CHECK(window.Add(false));  // 11 次重发 / 11 retried
+  for (uint16_t i = 0; i < RetryWindow::kWindow; ++i)
+  {
+    CHECK(!window.Add(i < RetryWindow::kLimit));  // 10 次不算差 / 10 is not bad
+  }
 }

@@ -72,6 +72,27 @@ bool ParsePing(const uint8_t* packet, int size, uint16_t& session)
   return true;
 }
 
+uint8_t BuildChannel(uint8_t kind, uint8_t sequence, uint16_t session, uint8_t channel,
+                     uint8_t* out)
+{
+  PutHeader(out, kind, sequence, 0, 1, kChannelPayload);
+  out[kHeader] = static_cast<uint8_t>(session);
+  out[kHeader + 1] = static_cast<uint8_t>(session >> 8);
+  out[kHeader + 2] = channel;
+  return kHeader + kChannelPayload;
+}
+
+bool ParseChannel(const uint8_t* packet, int size, uint16_t& session, uint8_t& channel)
+{
+  if (size != kHeader + kChannelPayload || packet[3] != 1U)
+  {
+    return false;
+  }
+  session = static_cast<uint16_t>(packet[kHeader] | packet[kHeader + 1] << 8);
+  channel = packet[kHeader + 2];
+  return true;
+}
+
 Reassembler::Result Reassembler::Add(const uint8_t* packet, int size, uint8_t fragment)
 {
   if (size < kHeader || fragment == 0U)

@@ -14,6 +14,9 @@
 //   5 HELLO    配对（identity.hpp；自有布局，没有包头）
 //   6 CONTROL  控制请求（op + 载荷），主机 -> 远端；像 COMMAND 一样以同序号的 ANSWER
 //              应答，经过同样的会话规则
+//   7 CHANNEL  主机 -> 远端，换数据信道；载荷：会话号 u16 小端，信道索引 u8
+//              （channel.hpp）
+//   8 CHANNEL_ACK  远端 -> 主机；序号相同，载荷同 CHANNEL；发完它远端就换信道
 // 总长 total（至多 kMaxMessage）的消息分成 count = max(1, ceil(total / fragment)) 片；
 // 第 i 片载有 [i * fragment, min(total, (i + 1) * fragment)) 字节。接收方只接受同一
 // (序号, 片数, 总长) 的所有分片都到齐、且每片恰好是应有长度的消息，其余丢弃。
@@ -33,6 +36,10 @@
 //   5 HELLO    pairing (identity.hpp; its own layout, no header)
 //   6 CONTROL  a control request (op + payload), host -> remote; answered by an ANSWER
 //              with the same sequence like a COMMAND, under the same session rules
+//   7 CHANNEL  host -> remote, change the data channel; payload: session id u16 little
+//              endian, channel index u8 (channel.hpp)
+//   8 CHANNEL_ACK  remote -> host; same sequence and payload as the CHANNEL; the remote
+//              changes channel once it is sent
 // A message of `total` bytes (at most kMaxMessage) travels as count = max(1,
 // ceil(total / fragment)) fragments; fragment i carries bytes [i * fragment,
 // min(total, (i + 1) * fragment)). A receiver accepts a message only when every fragment
@@ -53,6 +60,8 @@ enum Kind : uint8_t
   kPong = 4,
   kHello = 5,
   kControl = 6,
+  kChannel = 7,
+  kChannelAck = 8,
 };
 
 /// 包头字节数 / Header size.
@@ -66,6 +75,8 @@ inline constexpr uint8_t kMaxFragments =
 static_assert(kMaxFragments <= 16, "the fragment mask has 16 bits");
 /// PING、PONG 的载荷字节数 / Payload size of PING and PONG.
 inline constexpr uint8_t kPingPayload = 2;
+/// CHANNEL、CHANNEL_ACK 的载荷字节数 / Payload size of CHANNEL and CHANNEL_ACK.
+inline constexpr uint8_t kChannelPayload = 3;
 
 /// @brief total 字节的消息分成几片 / Number of fragments of a `total`-byte message.
 uint8_t FragmentCount(uint16_t total, uint8_t fragment);
@@ -81,6 +92,14 @@ uint8_t BuildPing(uint8_t kind, uint8_t sequence, uint16_t session, uint8_t* out
 
 /// @brief 解析 PING 或 PONG 的会话号 / Parse the session id of a PING or PONG.
 bool ParsePing(const uint8_t* packet, int size, uint16_t& session);
+
+/// @brief 写出 CHANNEL 或 CHANNEL_ACK，返回包长 / Write a CHANNEL or CHANNEL_ACK and
+///        return its size.
+uint8_t BuildChannel(uint8_t kind, uint8_t sequence, uint16_t session, uint8_t channel,
+                     uint8_t* out);
+
+/// @brief 解析 CHANNEL 或 CHANNEL_ACK / Parse a CHANNEL or CHANNEL_ACK.
+bool ParseChannel(const uint8_t* packet, int size, uint16_t& session, uint8_t& channel);
 
 /// @brief 把分片拼回消息 / Reassembles fragments into a message.
 class Reassembler
