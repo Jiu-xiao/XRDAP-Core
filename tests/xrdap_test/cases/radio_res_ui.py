@@ -7,16 +7,24 @@ from .. import runner as R
 from .link_perf import block_rates
 
 RADIO = ("radio",)
-# Diagnostic command 0x9F of the wireless (SX1281) firmware: 0x11 statistics, 0x13 settings.
+# Control port operations of a radio probe (protocol 8.3): 0x11 statistics, 0x13 settings.
 RADIO_FIELDS = ["radio_tx", "radio_rx", "crc_errors", "tx_timeouts", "commands", "retries",
-                "failures", "duplicates", "last_rtt_us", "max_rtt_us"]
+                "failures", "duplicates", "last_rtt_us", "max_rtt_us", "channel", "scans"]
+
+
+def radio_control(lk, request, what):
+    try:
+        r = lk.control(request)
+    except (NotImplementedError, TimeoutError) as exc:
+        raise R.NotApplicable(f"no radio {what} (control {request.hex(' ')}): {exc}")
+    if len(r) < 3 or r[1] != 0:
+        raise R.NotApplicable(f"no radio {what} (control {request.hex(' ')} -> {r.hex(' ')})")
+    return r
 
 
 def radio_stats(lk):
-    r = lk.xfer(b"\x9F\x11")
-    if len(r) < 3 or r[1] != 0:
-        raise R.NotApplicable(f"no radio statistics command (0x9F 0x11 -> {r.hex(' ')})")
-    count = min(len(RADIO_FIELDS), (len(r) - 3) // 4)
+    r = radio_control(lk, b"\x11", "statistics")
+    count = min(len(RADIO_FIELDS), r[2], (len(r) - 3) // 4)
     return dict(zip(RADIO_FIELDS, struct.unpack_from(f"<{count}I", r, 3)))
 
 
@@ -27,12 +35,14 @@ def rad_load(ctx):
         before = radio_stats(lk)
         rates = block_rates(ctx, lk, dap, t.at(t.BLOCK), 4096, passes=5)
         after = radio_stats(lk)
-        delta = {k: after[k] - before[k] for k in before if k not in ("last_rtt_us", "max_rtt_us")}
+        delta = {k: after[k] - before[k] for k in before
+                 if k not in ("last_rtt_us", "max_rtt_us", "channel")}
         cmds = max(1, delta["commands"])
         ctx.metric("block", rates)
         ctx.metric("delta", delta)
         ctx.metric("retry_rate", round(delta["retries"] / cmds, 4))
         ctx.metric("max_rtt_us", after.get("max_rtt_us"))
+        ctx.metric("channel", after.get("channel"))
         ctx.check("data intact over the radio", rates["ok"])
         ctx.check("no failed radio command", delta["failures"] == 0, delta["failures"])
         ctx.summary(f"retries {delta['retries']}/{cmds}, R {rates['read_kib_s']} KiB/s")
@@ -42,9 +52,9 @@ def rad_load(ctx):
 def rad_pairing(ctx):
     def settings():
         with ctx.link() as lk:
-            r = lk.xfer(b"\x9F\x13")
-            if len(r) < 12 or r[1] != 0:
-                raise R.NotApplicable("no radio settings command (0x9F 0x13)")
+            r = radio_control(lk, b"\x13", "settings")
+            if len(r) < 12:
+                raise R.NotApplicable(f"short radio settings answer {r.hex(' ')}")
             return r[4], struct.unpack_from("<I", r, 8)[0]
 
     ctx.need_operator()
@@ -122,7 +132,7 @@ R.manual("RES-04", "Firmware update: DFU / web flasher time, settings kept", """
 Update the probe with its normal path (ESP: web flasher or `esptool write_flash 0x0 merged.bin`;
 CH32: `tools/dfu_update.py`; F103: SWD flash of the release image). Record the time from start
 to the probe answering DAP_Info, and check that settings survive: ESP Wi-Fi credentials (0x86
-op 0 shows the same SSID), CH32 radio pairing and role (0x9F 0x13).""")
+op 0 shows the same SSID), CH32 radio pairing and role (control port 0x13).""")
 
 R.manual("RES-05", "Power and temperature", """
 USB power meter in line with the probe: record mA idle, during PERF-02 and during sampling at
