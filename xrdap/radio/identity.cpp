@@ -3,6 +3,7 @@
 
 #include <cstring>
 
+#include "xrdap/radio/channel.hpp"
 #include "xrdap/radio/packet.hpp"
 
 namespace XrDap::Radio
@@ -19,7 +20,10 @@ int Transitions(uint32_t word)
 
 }  // namespace
 
-Identity DefaultIdentity() { return {2'440'000'000U, 0xFFFF, {'X', 'R', 'D', 'P'}}; }
+Identity DefaultIdentity()
+{
+  return {ChannelHz(kControlChannel), 0xFFFF, {'X', 'R', 'D', 'P'}};
+}
 
 uint32_t Fnv1a(const uint8_t* data, size_t size, uint32_t hash)
 {
@@ -43,8 +47,9 @@ uint32_t LinkId(const uint8_t* a, const uint8_t* b)
 Identity PairIdentity(uint32_t link_id)
 {
   Identity identity{};
-  // 2403..2479 MHz 中的一个 1 MHz 频点。 / One 1 MHz channel within 2403..2479 MHz.
-  identity.frequency_hz = (2403U + link_id % 77U) * 1'000'000U;
+  // 建立会话在 F 上，数据信道另外协商（channel.hpp）。 / Sessions open on F; the data
+  // channel is agreed on separately (channel.hpp).
+  identity.frequency_hz = ChannelHz(kControlChannel);
   identity.crc_seed = static_cast<uint16_t>(link_id >> 16 ^ link_id);
   // 同步字取相邻位变化 10 到 22 次的散列值，避开过于规则的位型。
   // The sync word is a hash with 10 to 22 bit changes, avoiding too regular patterns.
