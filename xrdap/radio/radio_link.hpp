@@ -323,12 +323,19 @@ class RadioLink
     EndRemoteSession();
   }
 
-  void SendNow(const uint8_t* packet, uint8_t size)
+  // 发出一包：上一包还在发射时等它发完，新包紧接着发，中间不回接收。
+  // Send one packet: wait while the previous one is on air, then send right after it
+  // without receiving in between.
+  void Transmit(const uint8_t* packet, uint8_t size)
   {
-    if (radio_.Send(packet, size) != LibXR::ErrorCode::OK)
+    while (radio_.Send(packet, size) == LibXR::ErrorCode::BUSY)
     {
-      return;
     }
+  }
+
+  // 等最后一包发完，转回接收。 / Wait for the last packet and return to receive.
+  void FinishSending()
+  {
     while (radio_.Sending())
     {
       radio_.Poll();
@@ -341,13 +348,15 @@ class RadioLink
     const uint8_t count = FragmentCount(size, fragment);
     for (uint8_t i = 0; i < count; ++i)
     {
-      SendNow(tx_, BuildFragment(kind, sequence, data, size, fragment, i, tx_));
+      Transmit(tx_, BuildFragment(kind, sequence, data, size, fragment, i, tx_));
     }
+    FinishSending();
   }
 
   void SendPing(uint8_t kind, uint8_t sequence, uint16_t session)
   {
-    SendNow(tx_, BuildPing(kind, sequence, session, tx_));
+    Transmit(tx_, BuildPing(kind, sequence, session, tx_));
+    FinishSending();
   }
 
   // ---- 主机 / Host ----
@@ -642,30 +651,39 @@ class RadioLink
   {
     answer_sequence_ = sequence;
     answer_index_ = 0;
+    answer_packet_ = 0;
     answer_count_ = FragmentCount(answer_size_, Fragment());
     answering_ = true;
   }
 
-  // 推进应答：发完一包就发下一包；全部发出后执行等着的设置变更。返回 true 表示还没发完。
-  // Advance the answer: send the next packet once one is out; when all are out, carry out
-  // a pending settings change. Returns true while the answer is not finished.
+  // 推进应答：上一包发完就发下一包，中间不回接收；全部发出后执行等着的设置变更。返回
+  // true 表示还没发完。
+  // Advance the answer: send the next packet once the previous one is out, without
+  // receiving in between; when all are out, carry out a pending settings change.
+  // Returns true while the answer is not finished.
   bool PumpAnswer()
   {
     if (!answering_)
     {
       return false;
     }
+    if (answer_index_ < answer_count_)
+    {
+      if (answer_packet_ == 0U)
+      {
+        answer_packet_ = BuildFragment(kAnswer, answer_sequence_, answer_, answer_size_,
+                                       Fragment(), answer_index_, tx_);
+      }
+      if (radio_.Send(tx_, answer_packet_) != LibXR::ErrorCode::BUSY)
+      {
+        answer_packet_ = 0;
+        ++answer_index_;
+      }
+      return true;
+    }
     if (radio_.Sending())
     {
       radio_.Poll();
-      return true;
-    }
-    if (answer_index_ < answer_count_)
-    {
-      const uint8_t size = BuildFragment(kAnswer, answer_sequence_, answer_, answer_size_,
-                                         Fragment(), answer_index_, tx_);
-      ++answer_index_;
-      (void)radio_.Send(tx_, size);
       return true;
     }
     answering_ = false;
@@ -1006,6 +1024,9 @@ class RadioLink
   uint8_t answer_sequence_ = 0;
   uint8_t answer_index_ = 0;
   uint8_t answer_count_ = 0;
+  // tx_ 里待发的应答包长，0 为还没生成。 / Size of the answer packet waiting in tx_, 0
+  // before it is built.
+  uint8_t answer_packet_ = 0;
 
   // 配对 / Pairing.
   PairState pair_state_ = PairState::IDLE;
