@@ -38,6 +38,10 @@ class Link:
         self.send(request)
         return self.recv(timeout)
 
+    def control(self, request: bytes, timeout=2.0) -> bytes:
+        """One control port request (protocol 3.7.1); answers op + status + payload."""
+        raise NotImplementedError(f"no control port on a {self.kind} link here")
+
     def close(self):
         pass
 
@@ -147,6 +151,17 @@ class UsbLink(Link):
             return bytes(self.ep_in.read(self.read_size, int(timeout * 1000)))
         except Exception as exc:
             raise TimeoutError(f"USB response timeout: {exc}") from exc
+
+    def control(self, request, timeout=2.0):
+        # Vendor requests on the DAP interface: 0x41/0x01 sends, 0xC1/0x02 fetches the
+        # answer, empty until it is ready (protocol 3.7.1).
+        self.dev.ctrl_transfer(0x41, 0x01, 0, self.intf, request, 500)
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            answer = bytes(self.dev.ctrl_transfer(0xC1, 0x02, 0, self.intf, 256, 500))
+            if answer:
+                return answer
+        raise TimeoutError("no control port answer")
 
     def close(self):
         try:
