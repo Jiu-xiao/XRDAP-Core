@@ -158,8 +158,10 @@ struct __attribute__((packed)) StatsAnswer
   uint32_t max_rtt_us;   ///< 最长往返时间 / longest round trip
   uint32_t channel;      ///< 当前信道索引 / current channel index
   uint32_t scans;        ///< 整段扫描次数 / full scans
+  uint32_t rearms;       ///< 射频重新进入接收 / receiver re-entries of the radio
+  uint32_t restarts;     ///< 射频复位重配 / resets of the radio
 };
-static_assert(sizeof(StatsAnswer) == 3 + 12 * 4, "the answer layout is fixed");
+static_assert(sizeof(StatsAnswer) == 3 + 14 * 4, "the answer layout is fixed");
 
 /// 读信道（0x19）的应答 / Answer of reading the channel (0x19).
 struct __attribute__((packed)) ChannelAnswer

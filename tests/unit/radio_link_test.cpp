@@ -68,6 +68,8 @@ class FakeRadio
   uint32_t TxErrors() const { return 0; }
   uint32_t RxPackets() const { return received; }
   uint32_t RxErrors() const { return 0; }
+  uint32_t Rearms() const { return 0; }
+  uint32_t Restarts() const { return starts; }
   uint32_t Frequency() const { return config_.frequency_hz; }
   LibXR::ErrorCode Send(const uint8_t* data, uint8_t size)
   {
@@ -400,7 +402,7 @@ TEST(radio_link_channel)
   StatsAnswer answer;
   CHECK_EQ(stats.size(), sizeof(answer));
   std::memcpy(&answer, stats.data(), sizeof(answer));
-  CHECK(answer.count == 12 && answer.channel == 150U && answer.scans == 1U);
+  CHECK(answer.count == 14 && answer.channel == 150U && answer.scans == 1U);
   CHECK(answer.commands >= 2U && answer.failures == 0U);
   CHECK(p.exec_a.Usb(Command(Byte(DapCmd::DISCONNECT), 1)) ==
         Expected(Command(Byte(DapCmd::DISCONNECT), 1)));

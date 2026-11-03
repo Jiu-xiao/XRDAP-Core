@@ -9,7 +9,8 @@ from .link_perf import block_rates
 RADIO = ("radio",)
 # Control port operations of a radio probe (protocol 8.3): 0x11 statistics, 0x13 settings.
 RADIO_FIELDS = ["radio_tx", "radio_rx", "crc_errors", "tx_timeouts", "commands", "retries",
-                "failures", "duplicates", "last_rtt_us", "max_rtt_us", "channel", "scans"]
+                "failures", "duplicates", "last_rtt_us", "max_rtt_us", "channel", "scans",
+                "rearms", "restarts"]
 
 
 def radio_control(lk, request, what):
