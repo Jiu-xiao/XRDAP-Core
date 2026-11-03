@@ -719,6 +719,31 @@ class RadioLink
     }
   }
 
+  // 远端：收下命令的一个分片；其余分片紧跟着到，在这里接着收，不等主循环下一圈。命令
+  // 齐了时为 true。
+  // Remote: take one fragment of a command; the others follow right behind it and are
+  // received here instead of on the next turns of the main loop. True once the command
+  // is complete.
+  bool ReceiveCommand(int n)
+  {
+    const uint8_t kind = rx_[0];
+    auto added = commands_.Add(rx_, n, Fragment());
+    uint32_t deadline = NowUs() + kFragmentWaitUs;
+    while (added == Reassembler::Result::INCOMPLETE &&
+           static_cast<int32_t>(deadline - NowUs()) > 0)
+    {
+      radio_.Poll();
+      const int m = radio_.Receive(rx_);
+      if (m < kHeader || rx_[0] != kind || !lease_.OnCommand(NowUs()))
+      {
+        continue;
+      }
+      added = commands_.Add(rx_, m, Fragment());
+      deadline = NowUs() + kFragmentWaitUs;
+    }
+    return added == Reassembler::Result::COMPLETE;
+  }
+
   void ServeRemote()
   {
     if (PumpAnswer())
@@ -756,7 +781,7 @@ class RadioLink
     {
       return;
     }
-    if (commands_.Add(rx_, n, Fragment()) != Reassembler::Result::COMPLETE)
+    if (!ReceiveCommand(n))
     {
       return;
     }
