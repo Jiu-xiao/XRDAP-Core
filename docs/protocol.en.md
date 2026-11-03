@@ -2,7 +2,7 @@
 
 [中文](protocol.md)
 
-This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (protocol version 2; 0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only) and the rule that the probe is used over one link at a time, the probe identity and mDNS advertisement, how the ESP32-C3 USB port separates the DAP link from the command line, the USB/IP virtual device served by `xrdap share usbip`, and the zero-length packet USB hosts must send. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. These rules are implemented in `xrdap/` of this repository: serial frames in `xrdap/serial/`, the executor in `xrdap/session/`, the control port in `xrdap/control/`, the vendor extension in `xrdap/vendor/`.
+This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (protocol version 2; 0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only) and the rule that the probe is used over one link at a time, the probe identity and mDNS advertisement, how the ESP32-C3 USB port separates the DAP link from the command line, the USB/IP virtual device served by `xrdap share usbip`, the zero-length packet USB hosts must send, and the link between two radio probes. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. These rules are implemented in `xrdap/` of this repository: serial frames in `xrdap/serial/`, the executor in `xrdap/session/`, the control port in `xrdap/control/`, the vendor extension in `xrdap/vendor/`, the radio link in `xrdap/radio/`.
 
 All integers are little-endian. Spaces in hexadecimal examples are for readability only.
 
@@ -603,3 +603,62 @@ The replies caused by one command (the reply to the OUT and the response paired 
 ## 7. Notes for USB hosts
 
 A full-speed USB Bulk packet is 64 bytes. When a request length is an exact multiple of 64 (128, 192 bytes, ...) and smaller than the DAP packet size, the OUT transfer has no short packet to mark its end, so the probe keeps waiting: the request gets no response and later responses are misaligned. After sending such a request the host must send a zero-length packet. A SUB_START with 8 items is exactly 128 bytes and is the most likely case. `xrdap` handles this; clients written with libusb or pyusb must add it. For reception, the IN request length must be a multiple of the endpoint maximum packet size (and not smaller than the DAP packet size).
+
+## 8. Radio link between two probes
+
+The radio XRDAP-CH32V307 (wdap) is used in pairs: one board on the PC's USB (the host) and one on the target (the remote). The host sends the PC's DAP commands over the SX1281 to the remote, which executes them, and returns the answers to USB. The implementation is in `xrdap/radio/`; the radio driver is the xrobot-org/SX1281 module.
+
+### 8.1 Packets
+
+A radio packet holds at most 255 bytes (GFSK) or 127 bytes (FLRC). Apart from HELLO, every packet starts with a 6-byte header:
+
+| Byte | Content |
+|---|---|
+| 0 | Kind: 1 COMMAND, 2 ANSWER, 3 PING, 4 PONG, 5 HELLO, 6 CONTROL |
+| 1 | Sequence; ANSWER and PONG carry the one of their request |
+| 2 | Fragment index |
+| 3 | Fragment count |
+| 4..5 | Message size, little endian |
+
+A message (a DAP command, a control request or an answer) holds at most 1024 bytes and is split into fragments of fragment = largest packet - 6 bytes: a message of `total` bytes travels as max(1, ⌈total / fragment⌉) fragments, and fragment i carries up to `fragment` bytes from byte i × fragment. A receiver accepts a message only when every fragment of one (sequence, count, size) arrived with exactly its length. PING and PONG are one fragment whose payload is a 2-byte little-endian session id.
+
+HELLO is used for pairing only: `05`, the own 12-byte chip UID, and the peer's UID heard so far (zeros while none).
+
+### 8.2 Sessions
+
+A session is named by a 16-bit non-zero id the host picks. Before the first command of a session the host sends a PING with the new id, which the remote answers with a PONG; after 1 s without a command it sends a heartbeat PING; on `DAP_Disconnect`, or after 5 s without a command from the PC, it ends the session with a PING carrying id 0. The remote ends the session on id 0 or a new id, or after 3 s without a packet from the host; it drops the cached answer, and a connection on the radio lapses together with its sampling. COMMAND and CONTROL outside a session are neither executed nor answered.
+
+After sending a command the host waits for the answer: first 3 ms plus the command's expected execution time, then twice as long with every resend, up to 200 ms each and 1 s plus the execution time in total; each answer fragment that arrives adds 3 ms. The remote keeps its last answer and answers a command with the same sequence from it instead of executing it again.
+
+In the AUTO role a paired probe acts as the remote while it has no session of its own; a `DAP_Connect` on USB that reaches the peer runs the session over the radio, otherwise locally. `SWJ_Clock`, `TransferConfigure` and `SWD_Configure` before `DAP_Connect` run locally, and the last of each is sent to the remote when the session goes over the radio.
+
+Pairing: once both probes are in pairing (for up to 10 s) they use the default identity (2440 MHz, GFSK, sync word `XRDP`) and send a HELLO every 20 ms or so; a probe that hears a HELLO naming its own UID is done and keeps answering for 1 s. Both probes compute the same link id from the two UIDs, and the frequency (2403 to 2479 MHz), the CRC seed and the GFSK sync word follow from it.
+
+### 8.3 Control port operations
+
+The settings and radio operations of a radio probe go through the control port (section 3.7.1). Answer status: 0 OK, 1 timeout, 2 flash error, 3 bad argument, 4 not paired.
+
+| op | Request payload | Effect |
+|---|---|---|
+| 0x10 | Role (0 local, 1 host, 2 remote) | Use this role until the settings apply again, not stored; only 0 while unpaired |
+| 0x13 | None | Read the settings, answer below |
+| 0x14 | Role setting (0 AUTO, 1 local, 2 host, 3 remote) | Stored, in effect once the answer is out |
+| 0x15 | Modulation (0 GFSK, 1 FLRC) | Stored, in effect once the answer is out |
+| 0x16 | None | Forget the pairing, in effect once the answer is out |
+| 0x17 | None | Bootloader slot information (CH32 boards) |
+| 0x20 | None | Start pairing |
+| 0x30 | A control request (not 0x30) | Sent to the peer over the radio; the answer is the peer's; status 1 when the peer does not answer |
+
+Answer of 0x13 (24 bytes):
+
+| Byte | Content |
+|---|---|
+| 0..1 | `13 00` |
+| 2 | Role setting |
+| 3 | Modulation |
+| 4 | 1 paired |
+| 5 | 1 safe mode (after repeated watchdog resets; the settings are not applied) |
+| 6 | Current role |
+| 7 | Pairing state: 0 idle, 1 running, 2 done, 3 failed |
+| 8..11 | Link id, little endian |
+| 12..23 | The peer's chip UID |
