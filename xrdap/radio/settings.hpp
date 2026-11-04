@@ -121,6 +121,9 @@ inline constexpr uint8_t kTimeout = 1;
 inline constexpr uint8_t kError = 2;
 inline constexpr uint8_t kBadRequest = 3;
 inline constexpr uint8_t kNotPaired = 4;
+/// 配对进行中，这个操作要等配对结束 / Pairing is running; this operation has to wait for
+/// its end
+inline constexpr uint8_t kBusy = 5;
 }  // namespace Status
 
 /// 读设置（0x13）的应答 / Answer of reading the settings (0x13).

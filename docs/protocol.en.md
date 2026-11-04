@@ -636,7 +636,7 @@ Pairing: once both probes are in pairing (for up to 10 s) they send a HELLO ever
 
 ### 8.3 Control port operations
 
-The settings and radio operations of a radio probe go through the control port (section 3.7.1). Answer status: 0 OK, 1 timeout, 2 flash error, 3 bad argument, 4 not paired.
+The settings and radio operations of a radio probe go through the control port (section 3.7.1). Answer status: 0 OK, 1 timeout, 2 flash error, 3 bad argument, 4 not paired, 5 pairing is running (operations other than 0x11 and 0x13 have to wait for its end).
 
 | op | Request payload | Effect |
 |---|---|---|
@@ -647,8 +647,8 @@ The settings and radio operations of a radio probe go through the control port (
 | 0x15 | Modulation (0 GFSK, 1 FLRC) | Stored, in effect once the answer is out |
 | 0x16 | None | Forget the pairing, in effect once the answer is out |
 | 0x17 | None | Bootloader slot information (CH32 boards) |
-| 0x18 | start, count (1..20), dwell_ms (1..20) | Scan `count` channels from `start`, `dwell_ms` each; the answer is `18 00 count`, then 2 bytes per channel: busy share (0..200 for 0..100%) and mean RSSI (dBm, signed). The radio returns to its channel afterwards |
-| 0x19 | None, or mode and channel | Read the channel; mode 0 chooses the channel automatically, 1 locks this channel (stored, in effect at the next choice of channel), 2 changes to this channel now (not stored). The answer is `19 00`, the current channel, F, the locked channel (0xFF when automatic) and the best channel of the scan (0xFF when none) |
+| 0x18 | start, count (1..20), dwell_ms (1..20) | Scan `count` channels from `start`, `dwell_ms` each; the answer is `18 00 count`, then 2 bytes per channel: busy share (0..200 for 0..100%) and mean RSSI (dBm, signed). The radio returns to its channel afterwards; the result is reported only and not used to choose a channel |
+| 0x19 | None, or mode and channel | Read the channel; mode 0 chooses the channel automatically, 1 locks this channel (stored, in effect at the next choice of channel), 2 changes to this channel now (not stored; for the next session when no host session is open; status 3 while locked). The answer is `19 00`, the current channel, F, the locked channel (0xFF when automatic) and the best channel of the scan (0xFF when none) |
 | 0x20 | None | Start pairing |
 | 0x30 | A control request (not 0x30) | Sent to the peer over the radio; the answer is the peer's; status 1 when the peer does not answer |
 
@@ -670,8 +670,8 @@ Answer of 0x11: `11 00 n` followed by n little-endian u32 (n = 14): packets sent
 
 ### 8.4 Channels
 
-A frequency is a channel index in steps of 0.5 MHz: frequency = 2402 MHz + index × 0.5 MHz, index 0 to 159 (2402.0–2481.5 MHz), all within the licence-free 2400–2483.5 MHz. The control channel F is 93 (2448.5 MHz) on every probe; the sync word and CRC seed keep pairs apart.
+A frequency is a channel index in steps of 0.5 MHz: frequency = 2402 MHz + index × 0.5 MHz, index 0 to 159 (2402.0–2481.5 MHz), all within the licence-free 2400–2483.5 MHz. The control channel F is 93 (2448.5 MHz) on every probe; the CRC seed keeps pairs apart, and in GFSK the sync word too (the FLRC sync word is fixed).
 
-Pairing and opening a session happen on F. Once the host has reached its peer on F with a PING (waiting up to 300 ms on `DAP_Connect`), it picks the data channel: the locked one (0x19), or the best of the scan; the first session scans first (one point per MHz, 1.5 ms each, 4 passes keeping the worst pass of each point, about 0.6 s). Busy is the share of time the RSSI is above -85 dBm; the point with the lowest busy share wins, and the lower mean RSSI breaks a tie. The host sends CHANNEL on F, and the remote moves once its CHANNEL_ACK is out; on the ACK the host moves too and pings once on the new channel. After every 4 CHANNELs without an ACK the host pings on the target channel once (the peer may have moved and only the ACK was lost); when the change does not succeed within 100 ms the host bans the point and stays on F.
+Pairing and opening a session happen on F. Once the host has reached its peer on F with a PING (waiting up to 300 ms on `DAP_Connect`), it picks the data channel: the locked one (0x19), or the best of the scan; the first session scans first (one point per MHz, 1.5 ms each, 4 passes keeping the worst pass of each point, about 0.6 s). Busy is the share of time the RSSI is above -85 dBm; the point with the lowest busy share wins, and the lower mean RSSI breaks a tie. The host sends CHANNEL on F, and the remote moves once its CHANNEL_ACK is out; on the ACK the host moves too and confirms with a PING (up to 30 ms) on the new channel. After every 4 CHANNELs without an ACK the host pings on the target channel once (the peer may have moved and only the ACK was lost); when the change does not succeed within 100 ms the host bans the point and stays on the channel the peer is on.
 
-During a session the host checks the resends every 200 exchanges: with more than 10, or when a command was sent 3 times with nothing heard for 60 ms, it bans the channel for 10 minutes and moves to the next best point (scanning again when there is none), or opens the session again on F when that fails. Only the host scans. The remote returns to F after 2.5 s on a data channel without a packet from the host, and when the session ends; the PING that ends the session (id 0) is sent on a data channel until the remote answers.
+During a session the host checks the resends every 200 exchanges: with more than 10, or when a command was sent 3 times with nothing heard for 60 ms, it bans the channel for 10 minutes and moves to the next best point (scanning again when there is none); when that fails it looks for the peer again, first on the data channel the peer may have stayed on, then on F. A locked channel does not change; after 3 sends with nothing heard, the radio is reset on F or on a locked channel. Only the host scans: a request from the radio (forwarded with 0x30) cannot run 0x18, the settings of 0x19 or 0x30. The remote returns to F after 2.5 s on a data channel without a packet from the host, and when the session ends; the PING that ends the session (id 0) is sent on a data channel until the remote answers.
