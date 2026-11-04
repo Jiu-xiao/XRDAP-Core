@@ -269,7 +269,7 @@ TGT-04 multidrop (manual): XR-DAP does not implement SWD multidrop target select
 
 ### 4.5 XR vendor extension
 
-VND-01: the DAP_Info vendor is `XRobot`, the serial starts with `XRobot-XRDAP-`, and there is a firmware version; INFO is 22 bytes, protocol version 2, at most 32 items, depth 8, feature bits include READ, WRITE, sampling and 8-byte; the probe time increases.
+VND-01: the DAP_Info vendor is `XRobot`, the serial starts with `XRobot-XRDAP-`, and there is a firmware version; INFO is 22 bytes, protocol version 2, at most 32 items, depth 8, feature bits include READ, WRITE, sampling and 8-byte; the probe time increases and stays within 2 % of the host clock over 1 s.
 
 VND-02: one READ reads u8, u16, u32, u64 and the three-level pointer chain, with values matching the fixture; status matrix: null pointer 0x30, pointer read at `fault_address` 0x10, pointer address unaligned 0x20, final address not aligned to size 0x2F, second-level pointer fault 0x11, final access fault 0x1F, and the normal item after them 0x00 with the correct value; count 0 returns 0x01; 33 items return 0x03; 32 items of 8 bytes (a 355-byte response, which fits in any packet size) succeed. The case where the response space is not enough is checked by VND-14.
 

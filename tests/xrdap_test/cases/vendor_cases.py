@@ -36,6 +36,15 @@ def vnd_info(ctx):
                   hex(info["features"]))
         t1 = vendor.info()["probe_time_us"]
         ctx.check("probe time advances", t1 > info["probe_time_us"])
+        # A wrong core clock value makes every timeout on the probe wrong.
+        host0 = time.perf_counter()
+        t2 = vendor.info()["probe_time_us"]
+        time.sleep(1.0)
+        t3 = vendor.info()["probe_time_us"]
+        rate = (t3 - t2) / 1e6 / (time.perf_counter() - host0)
+        ctx.metric("probe_clock_rate", round(rate, 4))
+        ctx.check("probe clock runs at the host's rate within 2 %", abs(rate - 1.0) < 0.02,
+                  round(rate, 4))
         ctx.summary(f"{ident['product']} {ident['firmware']}, ring {info['ring_bytes']} B, "
                     f"features {info['features']:#x}")
 
