@@ -7,11 +7,11 @@
 // 2402.0–2481.5 MHz。这一段在免执照的 2400–2483.5 MHz 内，两种调制的带宽都放得下；
 // 射频只经 ChannelHz() 设频率，越界的索引落到 F。
 //
-// F（kControlChannel，2448.5 MHz，Wi‑Fi 6 与 11 信道之间）是所有探针共用的控制信道：
-// 配对、建立会话和协商数据信道都在 F 上，不同的对靠同步字和 CRC 初值分开。数据信道由
-// 主机扫描后选出：每个点测一段时间，记下 RSSI 超过 -85 dBm 的时间占比（忙碌）和平均
-// RSSI；Wi-Fi 是突发的，扫几遍、每个点留最差的一遍。选忙碌最低的点，相同时选平均 RSSI
-// 低的。会话中变差的点拉黑 10 分钟。
+// F（kControlChannel，2448.5 MHz，Wi-Fi 6 与 11 信道之间）是所有探针共用的控制信道：
+// 配对、建立会话和协商数据信道都在 F 上，不同的对靠 CRC 初值（GFSK 还有同步字）分开。
+// 数据信道由主机扫描后选出：每个点测一段时间，记下 RSSI 超过 -85 dBm 的时间占比（忙碌）
+// 和平均 RSSI；Wi-Fi 是突发的，扫几遍、每个点留最差的一遍。选忙碌最低的点，相同时选平均
+// RSSI 低的。会话中变差的点拉黑 10 分钟。
 //
 // Radio channels: frequency indices, noise measurement, scan results and the choice of a
 // channel. Pure logic.
@@ -23,12 +23,12 @@
 //
 // F (kControlChannel, 2448.5 MHz, between Wi-Fi channels 6 and 11) is the control channel
 // all probes share: pairing, opening a session and agreeing on the data channel happen
-// on F, and the sync word and CRC seed keep pairs apart. The host picks the data channel
-// from a scan: each point is measured for a while, recording the share of time the RSSI
-// is above -85 dBm (busy) and the mean RSSI; Wi-Fi comes in bursts, so the scan makes
-// several passes and keeps the worst pass of each point. The point with the lowest busy
-// share wins, the lower mean breaks a tie. A point that turns bad during a session is
-// banned for 10 minutes.
+// on F, and the CRC seed (and in GFSK the sync word) keeps pairs apart. The host picks
+// the data channel from a scan: each point is measured for a while, recording the share
+// of time the RSSI is above -85 dBm (busy) and the mean RSSI; Wi-Fi comes in bursts, so
+// the scan makes several passes and keeps the worst pass of each point. The point with
+// the lowest busy share wins, the lower mean breaks a tie. A point that turns bad during
+// a session is banned for 10 minutes.
 
 #include <cstdint>
 
@@ -60,8 +60,8 @@ inline constexpr uint32_t ChannelHz(uint8_t index)
 /// 一个点的测量结果 / Measurement of one point.
 struct ChannelSample
 {
-  uint8_t busy = 0;      ///< 忙碌占比，0..200 为 0..100 % / busy share, 0..200 = 0..100 %
-  int8_t mean_dbm = 0;   ///< 平均 RSSI，dBm / mean RSSI, dBm
+  uint8_t busy = 0;     ///< 忙碌占比，0..200 为 0..100 % / busy share, 0..200 = 0..100 %
+  int8_t mean_dbm = 0;  ///< 平均 RSSI，dBm / mean RSSI, dBm
 };
 
 /// 累积一个点上的 RSSI 读数 / Accumulates the RSSI readings of one point.
@@ -99,17 +99,18 @@ class ChannelTable
   bool Scanned() const;
   /// 拉黑一个点 kBanUs / Ban a point for kBanUs.
   void Ban(uint8_t index, uint32_t now_us);
-  /// 这个点在黑名单里 / Whether the point is banned.
-  bool Banned(uint8_t index, uint32_t now_us) const;
+  /// 这个点在黑名单里；到期的条目在这里清掉 / Whether the point is banned; an entry that
+  /// ran out is cleared here.
+  bool Banned(uint8_t index, uint32_t now_us);
   /// @brief 测过、没拉黑的最好的点；没有时为 kNoChannel / The best measured point that is
   ///        not banned; kNoChannel when there is none.
-  uint8_t Best(uint32_t now_us) const;
+  uint8_t Best(uint32_t now_us);
 
  private:
   struct BanEntry
   {
     uint8_t index = kNoChannel;
-    uint32_t until_us = 0;
+    uint32_t since_us = 0;
   };
 
   ChannelSample samples_[kChannels] = {};

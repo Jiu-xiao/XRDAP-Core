@@ -79,27 +79,32 @@ void ChannelTable::Ban(uint8_t index, uint32_t now_us)
   {
     if (entry.index == index)
     {
-      entry.until_us = now_us + kBanUs;
+      entry.since_us = now_us;
       return;
     }
   }
-  bans_[next_ban_] = {index, now_us + kBanUs};
+  bans_[next_ban_] = {index, now_us};
   next_ban_ = static_cast<uint8_t>((next_ban_ + 1U) % (sizeof(bans_) / sizeof(bans_[0])));
 }
 
-bool ChannelTable::Banned(uint8_t index, uint32_t now_us) const
+bool ChannelTable::Banned(uint8_t index, uint32_t now_us)
 {
-  for (const BanEntry& entry : bans_)
+  for (BanEntry& entry : bans_)
   {
-    if (entry.index == index && static_cast<int32_t>(entry.until_us - now_us) > 0)
+    if (entry.index != index)
+    {
+      continue;
+    }
+    if (now_us - entry.since_us < kBanUs)
     {
       return true;
     }
+    entry.index = kNoChannel;
   }
   return false;
 }
 
-uint8_t ChannelTable::Best(uint32_t now_us) const
+uint8_t ChannelTable::Best(uint32_t now_us)
 {
   uint8_t best = kNoChannel;
   for (uint8_t i = 0; i < kChannels; ++i)

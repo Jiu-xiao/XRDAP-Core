@@ -451,7 +451,123 @@ TEST(radio_link_channel_jammed)
   }
   CHECK(ok);
   CHECK(p.radio_a.Frequency() != ChannelHz(150));
+  CHECK(p.radio_a.Frequency() != ChannelHz(kControlChannel));
   CHECK(p.radio_a.Frequency() == p.radio_b.Frequency());
+}
+
+// 对方已换信道（ACK 到了）而新信道上一阵 PING 不通：主机在那个信道上再找到它，不等它的
+// 沉默超时 / The peer has moved (the ACK arrived) but PINGs on the new channel fail for a
+// while: the host finds it there again instead of waiting for its silence timeout.
+TEST(radio_link_channel_lost_after_ack)
+{
+  Pair p(true);
+  p.radio_a.noise = QuietAt(30);
+  uint32_t first = 0;
+  p.radio_b.jam = [&first](uint32_t hz)
+  {
+    if (hz != ChannelHz(30))
+    {
+      return false;
+    }
+    if (first == 0U)
+    {
+      first = Now();
+    }
+    return Now() - first < 35'000U;
+  };
+  const auto c = Command(Byte(DapCmd::CONNECT), 2);
+  const uint32_t begin = Now();
+  CHECK(p.exec_a.Usb(c) == Expected(c));
+  CHECK(Now() - begin < 2'000'000U);
+  CHECK(first != 0U);
+  CHECK(p.radio_a.Frequency() == p.radio_b.Frequency());
+}
+
+// 空闲结束（H3）后探针重新服务无线：对方能把它当远端用 / After the session ended on idle
+// (H3) the probe serves the radio again: its peer can use it as a remote.
+TEST(radio_link_idle_end_serves_peer)
+{
+  Pair p(true);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  CHECK(p.a.CurrentRole() == Role::HOST);
+  const uint32_t begin = Now();
+  while (Now() - begin < 5'200'000U)
+  {
+    (void)p.a.Service();
+  }
+  CHECK(p.a.CurrentRole() == Role::REMOTE);
+  CHECK(p.radio_a.Frequency() == ChannelHz(kControlChannel));
+  p.radio_a.on_poll = nullptr;
+  p.radio_b.on_poll = [&p] { (void)p.a.Service(); };
+  const auto c = Command(Byte(DapCmd::CONNECT), 2);
+  CHECK(p.exec_b.Usb(c) == Expected(c));
+  CHECK(p.b.CurrentRole() == Role::HOST && p.a.RemoteActive());
+}
+
+// 锁定的信道上接收机聋了：复位射频，留在这个信道 / A deaf receiver on a locked channel:
+// the radio is reset and stays on the channel.
+TEST(radio_link_deaf_locked)
+{
+  Pair p(true);
+  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 1, 40}, nullptr), Status::kOk);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  CHECK(p.radio_a.Frequency() == ChannelHz(40));
+  const uint32_t starts = p.radio_a.starts;
+  p.radio_b.drop = [](uint32_t) { return true; };
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::TRANSFER), 16));
+  CHECK(p.radio_a.starts > starts);
+  CHECK(p.radio_a.Frequency() == ChannelHz(40));
+}
+
+// 0x19 mode 2：会话开着时立即换，HOST 设置下也一样；锁定时拒绝 / 0x19 mode 2: changes at
+// once while a session is open, with the HOST setting too; refused while locked.
+TEST(radio_link_channel_change_now)
+{
+  Pair p(true);
+  CHECK_EQ(ControlStatus(p.a, {Op::kSetRole, static_cast<uint8_t>(RoleSetting::HOST)},
+                         nullptr),
+           Status::kOk);
+  const auto c = Command(Byte(DapCmd::TRANSFER), 16);
+  CHECK(p.exec_a.Usb(c) == Expected(c));
+  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 2, 120}, nullptr), Status::kOk);
+  CHECK(p.radio_a.Frequency() == ChannelHz(120) &&
+        p.radio_b.Frequency() == ChannelHz(120));
+  CHECK(p.exec_a.Usb(c) == Expected(c));
+  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 1, 40}, nullptr), Status::kOk);
+  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 2, 120}, nullptr), Status::kBadRequest);
+}
+
+// 几个点的 0x18 不代替整段扫描 / A 0x18 of a few points does not replace the full scan.
+TEST(radio_link_partial_scan)
+{
+  Pair p(true);
+  p.radio_a.noise = QuietAt(150);
+  CHECK_EQ(ControlStatus(p.a, {Op::kScan, 9, 1, 1}, nullptr), Status::kOk);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  CHECK(p.radio_a.Frequency() == ChannelHz(150));
+}
+
+// 配对中只能读；经无线来的请求不能动远端的射频 / While pairing, only reads work; a
+// request from the radio cannot use the remote's radio.
+TEST(radio_link_control_refused)
+{
+  Pair p(true);
+  p.exec_b.control =
+      [&p](const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap, uint16_t& out)
+  { return p.b.HandleControl(req, len, resp, cap, out); };
+  std::vector<uint8_t> answer;
+  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kScan, 0, 1, 1}, &answer),
+           Status::kBadRequest);
+  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kChannel, 2, 1}, &answer),
+           Status::kBadRequest);
+  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kChannel}, &answer), Status::kOk);
+  p.a.RequestPairing();
+  p.radio_a.on_poll = nullptr;
+  (void)p.a.Service();
+  CHECK(p.a.Pairing() == PairState::RUNNING);
+  CHECK_EQ(ControlStatus(p.a, {Op::kSetRole, 0}, nullptr), Status::kBusy);
+  CHECK_EQ(ControlStatus(p.a, {Op::kScan, 0, 1, 1}, nullptr), Status::kBusy);
+  CHECK_EQ(ControlStatus(p.a, {Op::kSettings}, nullptr), Status::kOk);
 }
 
 // 远端在数据信道上 2.5 s 没听到主机就回 F；主机下一条命令在 F 上重新建立 / The remote
@@ -484,7 +600,8 @@ TEST(radio_link_channel_lock)
   CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 1, 40}, &answer), Status::kOk);
   CHECK(p.store_a.saved.channel_lock == 41U && answer.size() == sizeof(ChannelAnswer));
   CHECK(answer[3] == kControlChannel && answer[4] == 40);
-  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 1, kChannels}, nullptr), Status::kBadRequest);
+  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 1, kChannels}, nullptr),
+           Status::kBadRequest);
   CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 3, 1}, nullptr), Status::kBadRequest);
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
   CHECK(p.radio_a.Frequency() == ChannelHz(40) && p.radio_b.Frequency() == ChannelHz(40));
