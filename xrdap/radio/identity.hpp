@@ -4,9 +4,9 @@
 // 一对探针的射频身份和配对包。纯逻辑。
 //
 // 身份是频点、CRC 初值和 GFSK 同步字。频点总是控制信道 F（channel.hpp），数据信道另外
-// 协商；CRC 初值和同步字把一对探针与别的对分开。未配对的探针用默认身份；配对后两块探针由
-// 各自的芯片 UID 算出同一个链路号，再由链路号算出身份。FLRC 不用身份里的同步字，固定为
-// "XRDP"（勘误 16.4 对编码率 1 没有公布要避开的值）。
+// 协商；CRC 初值（GFSK 还有同步字）把一对探针与别的对分开。未配对的探针用默认身份；
+// 配对后两块探针由各自的芯片 UID 算出同一个链路号，再由链路号算出身份。FLRC
+// 不用身份里的同步字，固定为 "XRDP"（勘误 16.4 对编码率 1 没有公布要避开的值）。
 //
 // 配对：两块都在配对中的探针在 F 上用默认身份（GFSK），每 20 ms 左右发一个 HELLO 包：
 //   [0] 5（packet.hpp）  [1..12] 自己的芯片 UID  [13..24] 目前听到的对方 UID，没有为 0
@@ -17,7 +17,7 @@
 //
 // The identity is the frequency, the CRC seed and the GFSK sync word. The frequency is
 // always the control channel F (channel.hpp), and the data channel is agreed on
-// separately; the CRC seed and the sync word tell a pair apart from other pairs.
+// separately; the CRC seed (and in GFSK the sync word) tells a pair apart from others.
 // Unpaired probes use the default identity; once paired, both probes compute the same
 // link id from their two chip UIDs and the identity from the link id. FLRC does not use
 // the identity's sync word and keeps "XRDP" (errata 16.4 publishes no values to avoid at

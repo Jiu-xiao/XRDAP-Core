@@ -195,6 +195,20 @@ class RadioLink
       out = Control::StatusOnly(op, Control::kStatusBadRequest, resp, cap);
       return true;
     }
+    // 配对占用着射频。 / Pairing holds the radio.
+    if (pairing_ && op != Op::kSettings && op != Op::kStats)
+    {
+      out = Reply(resp, op, Status::kBusy, cap);
+      return true;
+    }
+    // 经无线来的请求不能让远端用射频：应答还要从当前信道发回去。 / A request from the
+    // radio cannot use the remote's radio: its answer still goes out on this channel.
+    if (executing_ &&
+        (op == Op::kForward || op == Op::kScan || (op == Op::kChannel && len > 1U)))
+    {
+      out = Reply(resp, op, Status::kBadRequest, cap);
+      return true;
+    }
     out = HandleOp(op, req, len, resp, cap);
     return true;
   }
@@ -216,9 +230,13 @@ class RadioLink
         return Role::REMOTE;
       case RoleSetting::AUTO:
       default:
-        return session_wireless_ ? Role::HOST
-               : session_local_  ? Role::LOCAL
-                                 : Role::REMOTE;
+        // 主机会话空闲结束（H3）后探针重新服务无线；工具接着发的命令仍然转发，不会落到
+        // 本地目标上。 / After the host session ended on idle (H3) the probe serves the
+        // radio again; commands a tool sends later are still forwarded and do not reach
+        // the local target.
+        return session_wireless_ && host_.Active()    ? Role::HOST
+               : session_wireless_ || !session_local_ ? Role::REMOTE
+                                                      : Role::LOCAL;
     }
   }
 
@@ -245,16 +263,16 @@ class RadioLink
   static constexpr uint32_t kFragmentWaitUs = 3'000;
   static constexpr uint32_t kMaxWaitUs = 200'000;
   static constexpr uint32_t kBudgetUs = 1'000'000;
-  // 收不到包的接收机：主机的 SX1281 停止
-  // 接收而发射照常：它停在接收、一个 IRQ 都没有，远端却听到每次重发并应答；重新进入接收
-  // 没用，复位有用。发了 kDeafSends 次、kDeafUs 内一个包（好坏都算）都没收到时，转发复位
-  // 射频一次再继续。
-  // A deaf receiver:
-  // the host's SX1281 stops receiving while its transmit still works: it stays in
-  // receive with no IRQ at all, while the remote hears every resend and answers it;
-  // entering receive again does not help, a reset does. After kDeafSends sends and
-  // kDeafUs without any packet, good or bad, the forward resets the radio once and goes
-  // on.
+  // 收不到包的接收机：主机的 SX1281 可能停止接收而发射照常：它停在接收、一个 IRQ 都没有，
+  // 远端却听到每次重发并应答；重新进入接收没用，复位有用。信道被堵时表现相同。发了
+  // kDeafSends 次、kDeafUs 内一个包（好坏都算）都没收到时，转发在数据信道上换信道，
+  // 在 F 或锁定的信道上复位射频，一次之后继续。
+  // A deaf receiver: the host's SX1281 can stop receiving while its transmit still works:
+  // it stays in receive with no IRQ at all, while the remote hears every resend and
+  // answers it; entering receive again does not help, a reset does. A jammed channel
+  // looks the same. After kDeafSends sends and kDeafUs without any packet, good or bad,
+  // the forward changes channel when on a data channel, and resets the radio on F or on a
+  // locked channel, once, and goes on.
   static constexpr uint32_t kDeafSends = 3;
   static constexpr uint32_t kDeafUs = 60'000;
   // PING 每 kPingWaitUs 重发一次，直到 kPingBudgetUs；心跳和结束会话只发一次。
@@ -477,48 +495,34 @@ class RadioLink
     return 0;
   }
 
-  // 主机：从 start 起每 step 个索引测一个点，共 count 个，记进 channels_；完了回到原
-  // 信道。
-  // Host: measure count points from `start`, every `step` indices, into channels_; back
-  // on the original channel afterwards.
-  void ScanRange(uint8_t start, uint8_t count, uint8_t step, uint32_t dwell_us,
-                 bool merge = false)
+  // 测一个点；调用方之后回到原信道。 / Measure one point; the caller returns to its
+  // channel afterwards.
+  ChannelSample Measure(uint8_t channel, uint32_t dwell_us)
   {
-    const uint8_t back = channel_;
-    for (uint8_t i = 0; i < count; ++i)
+    TuneTo(channel);
+    LibXR::Timebase::DelayMicroseconds(kSettleUs);
+    RssiMeter meter;
+    const uint32_t begin = NowUs();
+    do
     {
-      const auto channel = static_cast<uint8_t>(start + i * step);
-      if (!IsChannel(channel))
-      {
-        break;
-      }
-      TuneTo(channel);
-      LibXR::Timebase::DelayMicroseconds(kSettleUs);
-      RssiMeter meter;
-      const uint32_t begin = NowUs();
-      do
-      {
-        meter.Add(radio_.RssiInstant());
-      } while (NowUs() - begin < dwell_us);
-      if (merge)
-      {
-        channels_.Merge(channel, meter.Result());
-      }
-      else
-      {
-        channels_.Record(channel, meter.Result());
-      }
-    }
-    TuneTo(back);
+      meter.Add(radio_.RssiInstant());
+    } while (NowUs() - begin < dwell_us);
+    return meter.Result();
   }
 
+  // 主机：选信道用的整段扫描。 / Host: the full scan the choice of channel uses.
   void ScanAll()
   {
+    const uint8_t back = channel_;
     channels_.ClearSamples();
     for (uint8_t pass = 0; pass < kScanPasses; ++pass)
     {
-      ScanRange(0, kChannels / kScanStep, kScanStep, kDwellUs, true);
+      for (uint8_t channel = 0; channel < kChannels; channel += kScanStep)
+      {
+        channels_.Merge(channel, Measure(channel, kDwellUs));
+      }
     }
+    TuneTo(back);
     ++stats_.scans;
   }
 
@@ -585,22 +589,69 @@ class RadioLink
       TuneTo(from);
       if (acked)
       {
-        return false;  // 对方换过去了却不通 / the peer moved but does not answer
+        // 对方换过去了却不通。 / The peer moved but does not answer.
+        NoteStray(target, session);
+        return false;
       }
     }
     return false;
   }
 
-  // 主机：在 F 上找到对方（第一次先扫描），再换到数据信道。对方在时为 true，换信道失败
-  // 时留在 F 上。
-  // Host: reach the peer on F (scanning first the first time), then move to the data
-  // channel. True when the peer is there; a failed change of channel stays on F.
+  // 主机：记下对方可能还留着的数据信道。对方要到沉默超时才回 F，这段时间里 F 上找不到它。
+  // Host: note a data channel the peer may still be on. It returns to F only after its
+  // silence timeout, and until then F does not find it.
+  void NoteStray(uint8_t channel, uint16_t session)
+  {
+    stray_ = channel;
+    stray_session_ = session;
+  }
+
+  // 主机：找到对方。先试它可能留着的数据信道；同一个会话时它留在那里，别的会话号让它结束
+  // 旧会话回 F。再试 F。
+  // Host: find the peer. First the data channel it may have stayed on: with the same
+  // session it stays there, and another id makes it end the old session and return to
+  // F. Then F.
+  bool FindPeer()
+  {
+    const uint16_t session = host_.Session();
+    const uint8_t left = channel_;
+    if (stray_ != kNoChannel)
+    {
+      const uint8_t stray = stray_;
+      const uint16_t stray_session = stray_session_;
+      stray_ = kNoChannel;
+      TuneTo(stray);
+      if (Ping(session, kPingBudgetUs) && stray_session == session)
+      {
+        return true;
+      }
+    }
+    TuneTo(kControlChannel);
+    if (Ping(session, kRendezvousUs))
+    {
+      return true;
+    }
+    if (left != kControlChannel)
+    {
+      NoteStray(left, session);
+    }
+    return false;
+  }
+
+  // 主机：找到对方（第一次先扫描），需要时换到数据信道。对方在时为 true；换信道失败时留在
+  // 对方所在的信道上。
+  // Host: find the peer (scanning first the first time) and move to the data channel if
+  // needed. True when the peer is there; a failed change of channel stays where the
+  // peer is.
   bool Rendezvous()
   {
-    TuneTo(kControlChannel);
-    if (!Ping(host_.Session(), kRendezvousUs))
+    if (!FindPeer())
     {
       return false;
+    }
+    if (channel_ != kControlChannel)
+    {
+      return true;  // 对方还在数据信道上，接着用 / the peer is still on a data channel
     }
     if (LockedChannel() == kNoChannel && !channels_.Scanned())
     {
@@ -610,8 +661,7 @@ class RadioLink
     if (!SwitchTo(target))
     {
       channels_.Ban(target, NowUs());
-      TuneTo(kControlChannel);
-      return Ping(host_.Session(), kRendezvousUs);
+      return FindPeer();
     }
     return true;
   }
@@ -633,10 +683,15 @@ class RadioLink
     {
       ScanAll();
     }
+    const uint8_t from = channel_;
     const uint8_t target = ChooseChannel();
     if (!SwitchTo(target))
     {
       channels_.Ban(target, NowUs());
+      if (stray_ == kNoChannel && from != kControlChannel)
+      {
+        NoteStray(from, host_.Session());
+      }
       TuneTo(kControlChannel);
       peer_lost_ = true;
     }
@@ -702,11 +757,8 @@ class RadioLink
       }
       if (!reset && sends >= kDeafSends && NowUs() - heard >= kDeafUs)
       {
-        // 数据信道上先换信道（必要时回 F 重新建立），F 上才复位射频。 / On a data
-        // channel, change channel first (opening again on F if needed); reset the radio
-        // only on F.
         reset = true;
-        if (channel_ != kControlChannel)
+        if (channel_ != kControlChannel && LockedChannel() == kNoChannel)
         {
           Reselect();
           if (peer_lost_ && Rendezvous())
@@ -735,7 +787,12 @@ class RadioLink
   // timeout; on F it is sent once.
   void EndHostSession()
   {
-    (void)Ping(0, channel_ != kControlChannel ? kPingBudgetUs : kPingOnceUs);
+    const uint8_t from = channel_;
+    if (!Ping(0, from != kControlChannel ? kPingBudgetUs : kPingOnceUs) &&
+        from != kControlChannel)
+    {
+      NoteStray(from, 0);
+    }
     TuneTo(kControlChannel);
   }
 
@@ -1376,16 +1433,20 @@ class RadioLink
     {
       return Reply(resp, Op::kScan, Status::kNotPaired, cap);
     }
-    ScanRange(req[1], req[2], 1, req[3] * 1000U);
+    // 只报告，不进选信道用的表：几个点的测量不能代替整段扫描。 / Reported only, not put
+    // in the table the choice of channel uses: a few points do not replace a full scan.
+    const uint8_t back = channel_;
     resp[0] = Op::kScan;
     resp[1] = Status::kOk;
     resp[2] = req[2];
     for (uint8_t i = 0; i < req[2]; ++i)
     {
-      const ChannelSample sample = channels_.Sample(static_cast<uint8_t>(req[1] + i));
+      const ChannelSample sample =
+          Measure(static_cast<uint8_t>(req[1] + i), req[3] * 1000U);
       resp[3 + 2 * i] = sample.busy;
       resp[4 + 2 * i] = static_cast<uint8_t>(sample.mean_dbm);
     }
+    TuneTo(back);
     return static_cast<uint16_t>(3U + 2U * req[2]);
   }
 
@@ -1395,17 +1456,19 @@ class RadioLink
     {
       const uint8_t mode = req[1];
       const uint8_t channel = req[2];
-      if (mode > 2U || (mode != 0U && !IsChannel(channel)))
+      if (mode > 2U || (mode != 0U && !IsChannel(channel)) ||
+          (mode == 2U && LockedChannel() != kNoChannel))
       {
         return Reply(resp, Op::kChannel, Status::kBadRequest, cap);
       }
       if (mode == 2U)
       {
-        // 会话在无线上时立即换，否则用于下一个会话。 / Change at once while a session
-        // runs over the radio, otherwise for the next session.
+        // 主机会话开着时立即换，否则用于下一个会话。 / Change at once while a host
+        // session is open, otherwise for the next session.
         requested_ = channel;
-        if (session_wireless_ && !peer_lost_ && !SwitchTo(ChooseChannel()))
+        if (running_ && host_.Active() && !peer_lost_ && !SwitchTo(ChooseChannel()))
         {
+          channels_.Ban(channel, NowUs());
           TuneTo(kControlChannel);
           peer_lost_ = true;
         }
@@ -1455,6 +1518,8 @@ class RadioLink
   // 信道 / Channels.
   uint8_t channel_ = kControlChannel;  // 射频现在所在的信道 / the channel the radio is on
   uint8_t requested_ = kNoChannel;     // 0x19 指定的一次 / asked for once by 0x19
+  uint8_t stray_ = kNoChannel;         // 对方可能留着的信道 / channel the peer may be on
+  uint16_t stray_session_ = 0;         // 记下时的会话号 / the session noted with it
   bool reselect_ = false;              // 重发率过高，命令之后换信道 / too many resends
   ChannelTable channels_;
   RetryWindow retries_;
