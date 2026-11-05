@@ -12,19 +12,13 @@
 #include <vector>
 
 #include "check.hpp"
-#include "linux_timebase.hpp"
+#include "radio_test_time.hpp"
 
 using namespace XrDap;
 using namespace XrDap::Radio;
 
 namespace
 {
-LibXR::LinuxTimebase& Time()
-{
-  static LibXR::LinuxTimebase timebase;
-  return timebase;
-}
-
 // 接口同 xrobot-org/SX1281 的假收发器；Send 立即投到对方的接收队列 / Fake transceiver
 // with the interface of xrobot-org/SX1281; Send delivers to the peer's receive queue at
 // once.
@@ -258,7 +252,7 @@ struct Pair
 
   explicit Pair(bool paired, Modulation modulation = Modulation::GFSK)
   {
-    (void)Time();
+    (void)RadioTestTime();
     radio_a.peer = &radio_b;
     radio_b.peer = &radio_a;
     // 只有主机在等应答时阻塞；远端不阻塞，不必反过来驱动主机 / Only the host blocks,
