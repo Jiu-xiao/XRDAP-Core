@@ -502,9 +502,9 @@ TEST(radio_link_idle_end_serves_peer)
   CHECK(p.b.CurrentRole() == Role::HOST && p.a.RemoteActive());
 }
 
-// 锁定的信道上接收机聋了：复位射频，留在这个信道 / A deaf receiver on a locked channel:
-// the radio is reset and stays on the channel.
-TEST(radio_link_deaf_locked)
+// 锁定的信道上什么都收不到：不复位射频，留在这个信道 / Nothing heard on a locked channel:
+// the radio is not reset and stays on the channel.
+TEST(radio_link_silent_locked)
 {
   Pair p(true);
   CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 1, 40}, nullptr), Status::kOk);
@@ -513,7 +513,7 @@ TEST(radio_link_deaf_locked)
   const uint32_t starts = p.radio_a.starts;
   p.radio_b.drop = [](uint32_t) { return true; };
   (void)p.exec_a.Usb(Command(Byte(DapCmd::TRANSFER), 16));
-  CHECK(p.radio_a.starts > starts);
+  CHECK_EQ(p.radio_a.starts, starts);
   CHECK(p.radio_a.Frequency() == ChannelHz(40));
 }
 

@@ -172,16 +172,11 @@ class HostLink
   static constexpr uint32_t kFragmentWaitUs = 3'000;
   static constexpr uint32_t kMaxWaitUs = 200'000;
   static constexpr uint32_t kBudgetUs = 1'000'000;
-  // 收不到包的接收机：主机的 SX1281 可能停止接收而发射照常：它停在接收、一个 IRQ 都没有，
-  // 远端却听到每次重发并应答；重新进入接收没用，复位有用。信道被堵时表现相同。发了
-  // kDeafSends 次、kDeafUs 内一个包（好坏都算）都没收到时，转发在数据信道上换信道，
-  // 在 F 或锁定的信道上复位射频，一次之后继续。
-  // A deaf receiver: the host's SX1281 can stop receiving while its transmit still works:
-  // it stays in receive with no IRQ at all, while the remote hears every resend and
-  // answers it; entering receive again does not help, a reset does. A jammed channel
-  // looks the same. After kDeafSends sends and kDeafUs without any packet, good or bad,
-  // the forward changes channel when on a data channel, and resets the radio on F or on a
-  // locked channel, once, and goes on.
+  // 什么都收不到：信道被堵。发了 kDeafSends 次、kDeafUs 内一个包（好坏都算）都没收到
+  // 时，转发在数据信道上换信道，一次之后继续。F 和锁定的信道不换。
+  // Nothing heard: a jammed channel. After kDeafSends sends and kDeafUs without any
+  // packet, good or bad, the forward changes channel when on a data channel, once, and
+  // goes on. F and a locked channel do not change.
   static constexpr uint32_t kDeafSends = 3;
   static constexpr uint32_t kDeafUs = 60'000;
   // 这么久没听到对方，下一条命令先 PING。 / After this long without hearing the peer,
@@ -215,7 +210,7 @@ class HostLink
     const uint32_t begin = NowUs();
     uint32_t sends = 0;
     uint32_t heard = begin;  // 上一个包，好坏都算 / last packet, good or bad
-    bool reset = false;
+    bool moved = false;
     RadioT& radio = port_.Radio();
     uint8_t* const rx = port_.Rx();
     while (NowUs() - begin < budget)
@@ -255,23 +250,17 @@ class HostLink
         }
         deadline = NowUs() + kFragmentWaitUs;
       }
-      if (!reset && sends >= kDeafSends && NowUs() - heard >= kDeafUs)
+      if (!moved && sends >= kDeafSends && NowUs() - heard >= kDeafUs &&
+          port_.Channel() != kControlChannel && channels_.LockedChannel() == kNoChannel)
       {
-        reset = true;
-        if (port_.Channel() != kControlChannel && channels_.LockedChannel() == kNoChannel)
+        moved = true;
+        if (!channels_.Reselect())
         {
-          if (!channels_.Reselect())
-          {
-            peer_lost_ = true;
-          }
-          if (peer_lost_ && channels_.Rendezvous())
-          {
-            peer_lost_ = false;
-          }
+          peer_lost_ = true;
         }
-        else
+        if (peer_lost_ && channels_.Rendezvous())
         {
-          port_.Restart();
+          peer_lost_ = false;
         }
         heard = NowUs();
       }
