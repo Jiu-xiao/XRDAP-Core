@@ -55,13 +55,6 @@ class RadioPort
     channel_ = kControlChannel;
   }
 
-  /// 复位射频，留在当前信道 / Reset the radio and stay on the current channel.
-  void Restart()
-  {
-    config_.frequency_hz = ChannelHz(channel_);
-    (void)radio_.Start(config_);
-  }
-
   void TuneTo(uint8_t channel)
   {
     if (channel == channel_)
