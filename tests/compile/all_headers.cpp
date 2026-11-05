@@ -2,6 +2,7 @@
 // 每个公开头文件都能单独编译（只在 libxr 编译检查里构建）/ Every public header compiles
 // on its own (built only by the libxr compile check).
 #include "daplink_v2.hpp"
+#include "dfu_runtime.hpp"
 #include "xrdap/activity/dap_activity.hpp"
 #include "xrdap/control/control.hpp"
 #include "xrdap/control/usb_control.hpp"
@@ -29,6 +30,7 @@
 #include "xrdap/vendor/dap_vendor.hpp"
 #include "xrdap/vendor/mem_ap.hpp"
 #include "xrdap/vendor/protocol.hpp"
+#include "xrdap/vendor/reset_counting_usb.hpp"
 #include "xrdap/vendor/sampler.hpp"
 #include "xrdap/vendor/sampling.hpp"
 #include "xrdap/vendor/wifi_command.hpp"
@@ -77,3 +79,8 @@ template class XrDap::SerialLink<XrDap::Executor<FakeDap>, 64U>;
 // hook included) must compile.
 template class XrDap::Executor<LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>>;
 template class XrDap::Control::UsbControl<LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>>;
+
+// 数总线复位的包装能套在端口用的 libxr USB 类上 / The reset-counting wrapper fits the
+// libxr USB classes the ports use.
+template class XrDap::ResetCountingUsb<LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>>;
+template class XrDap::ResetCountingUsb<LibXR::USB::DfuRuntimeClass>;

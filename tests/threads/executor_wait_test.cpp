@@ -570,7 +570,7 @@ void UsbResetEndsAUsbConnectionOnly()
   Probe p;
   UsbThread usb(p, 5U);
   static std::atomic<uint32_t> resets{0U};
-  p.vendor.SetUsbResetSource(+[](void*) -> uint32_t { return resets.load(); }, nullptr);
+  p.vendor.SetUsbResetSource(&resets);
   (void)CommandOn(p, XrDap::Transport::TCP, Byte(DapCmd::CONNECT));
   resets.fetch_add(1U);
   EXPECT(p.vendor.ConnectedLink() == XrDap::Transport::TCP);

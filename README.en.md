@@ -86,10 +86,10 @@ static XrDap::DapVendor vendor(swd);
 static XrDap::DapActivity activity;
 static XrDap::Executor<Dap> exec(dap, vendor, activity);  // installs the command hook and the tick wake
 
-vendor.SetUsbResetSource(&BusResetCount, &usb);  // a changed reset count ends a connection on USB
+vendor.SetUsbResetSource(&usb.BusResets());  // a changed reset count ends a connection on USB
 ```
 
-`BusResetCount` stands for the platform's function that reads the USB bus reset count. The tasks of the other links (serial, TCP, radio) only post a request and wait for the reply, and each link tells the executor when it is lost:
+`usb` is a libxr USB class of the platform wrapped in `ResetCountingUsb`, which counts the bus resets libxr reports to every class. The tasks of the other links (serial, TCP, radio) only post a request and wait for the reply, and each link tells the executor when it is lost:
 
 ```cpp
 // TCP server: each request (in the link's own task, not the execution context)

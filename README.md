@@ -86,10 +86,10 @@ static XrDap::DapVendor vendor(swd);
 static XrDap::DapActivity activity;
 static XrDap::Executor<Dap> exec(dap, vendor, activity);  // 装好命令钩子和节拍唤醒
 
-vendor.SetUsbResetSource(&BusResetCount, &usb);  // 复位计数变了，连接在 USB 上时连接作废
+vendor.SetUsbResetSource(&usb.BusResets());  // 复位计数变了，连接在 USB 上时连接作废
 ```
 
-`BusResetCount` 代表平台读取 USB 总线复位次数的函数。别的链路（串口、TCP、无线）的任务只投递请求并等应答，各链路在自己丢失时告诉执行器：
+`usb` 是平台用 `ResetCountingUsb` 包了一层的 libxr USB 类，它数 libxr 报给每个类的总线复位。别的链路（串口、TCP、无线）的任务只投递请求并等应答，各链路在自己丢失时告诉执行器：
 
 ```cpp
 // TCP 服务：每个请求（在链路自己的任务里，不是执行上下文）
