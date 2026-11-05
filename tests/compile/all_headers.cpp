@@ -31,6 +31,7 @@
 #include "xrdap/vendor/protocol.hpp"
 #include "xrdap/vendor/sampler.hpp"
 #include "xrdap/vendor/sampling.hpp"
+#include "xrdap/vendor/wifi_command.hpp"
 
 namespace
 {
