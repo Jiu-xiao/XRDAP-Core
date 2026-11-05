@@ -647,8 +647,7 @@ The settings and radio operations of a radio probe go through the control port (
 | 0x15 | Modulation (0 GFSK, 1 FLRC) | Stored, in effect once the answer is out |
 | 0x16 | None | Forget the pairing, in effect once the answer is out |
 | 0x17 | None | Bootloader slot information (CH32 boards) |
-| 0x18 | start, count (1..20), dwell_ms (1..20) | Scan `count` channels from `start`, `dwell_ms` each; the answer is `18 00 count`, then 2 bytes per channel: busy share (0..200 for 0..100%) and mean RSSI (dBm, signed). The radio returns to its channel afterwards; the result is reported only and not used to choose a channel |
-| 0x19 | None, or mode and channel | Read the channel; mode 0 chooses the channel automatically, 1 locks this channel (stored, in effect at the next choice of channel), 2 changes to this channel now (not stored; for the next session when no host session is open; status 3 while locked). The answer is `19 00`, the current channel, F, the locked channel (0xFF when automatic) and the best channel of the scan (0xFF when none) |
+| 0x19 | None, or mode and channel | Read the channel; mode 0 chooses the channel automatically, 1 locks this channel (stored, in effect at the next choice of channel). The answer is `19 00`, the current channel and the locked channel (0xFF when automatic) |
 | 0x20 | None | Start pairing |
 | 0x30 | A control request (not 0x30) | Sent to the peer over the radio; the answer is the peer's; status 1 when the peer does not answer |
 
@@ -666,7 +665,7 @@ Answer of 0x13 (24 bytes):
 | 8..11 | Link id, little endian |
 | 12..23 | The peer's chip UID |
 
-Answer of 0x11: `11 00 n` followed by n little-endian u32 (n = 14): packets sent, good packets received, bad packets, failed transmissions, forwarded commands and control requests, resends, forwards without an answer, answers the remote sent from its cache, round trip of the last one (µs), longest round trip (µs), current channel, full scans, receiver re-entries of the radio, resets of the radio.
+Answer of 0x11: `11 00 n` followed by n little-endian u32 (n = 13): packets sent, good packets received, bad packets, failed transmissions, forwarded commands and control requests, resends, forwards without an answer, answers the remote sent from its cache, round trip of the last one (µs), longest round trip (µs), current channel, receiver re-entries of the radio, resets of the radio.
 
 ### 8.4 Channels
 
@@ -674,4 +673,4 @@ A frequency is a channel index in steps of 0.5 MHz: frequency = 2402 MHz + index
 
 Pairing and opening a session happen on F. Once the host has reached its peer on F with a PING (waiting up to 300 ms on `DAP_Connect`), it picks the data channel: the locked one (0x19), or the best of the scan; the first session scans first (one point per MHz, 1.5 ms each, 4 passes keeping the worst pass of each point, about 0.6 s). Busy is the share of time the RSSI is above -85 dBm; the point with the lowest busy share wins, and the lower mean RSSI breaks a tie. The host sends CHANNEL on F, and the remote moves once its CHANNEL_ACK is out; on the ACK the host moves too and confirms with a PING (up to 30 ms) on the new channel. After every 4 CHANNELs without an ACK the host pings on the target channel once (the peer may have moved and only the ACK was lost); when the change does not succeed within 100 ms the host bans the point and stays on the channel the peer is on.
 
-During a session the host checks the resends every 200 exchanges: with more than 10, or when a command was sent 3 times with nothing heard for 60 ms, it bans the channel for 10 minutes and moves to the next best point (scanning again when there is none); when that fails it looks for the peer again, first on the data channel the peer may have stayed on, then on F. A locked channel does not change; after 3 sends with nothing heard, the radio is reset on F or on a locked channel. Only the host scans: a request from the radio (forwarded with 0x30) cannot run 0x18, the settings of 0x19 or 0x30. The remote returns to F after 2.5 s on a data channel without a packet from the host, and when the session ends; the PING that ends the session (id 0) is sent on a data channel until the remote answers.
+During a session the host checks the resends every 200 exchanges: with more than 10, or when a command was sent 3 times with nothing heard for 60 ms, it bans the channel for 10 minutes and moves to the next best point; when that fails it looks for the peer again, first on the data channel the peer may have stayed on, then on F. A locked channel does not change; after 3 sends with nothing heard, the radio is reset on F or on a locked channel. Only the host scans: a request from the radio (forwarded with 0x30) cannot run 0x18, the settings of 0x19 or 0x30. The remote returns to F after 2.5 s on a data channel without a packet from the host, and when the session ends; the PING that ends the session (id 0) is sent on a data channel until the remote answers.

@@ -94,15 +94,9 @@ inline constexpr uint8_t kSetRole = 0x14;
 inline constexpr uint8_t kSetModulation = 0x15;
 /// `16` 忘掉配对 / forget the pairing
 inline constexpr uint8_t kUnpair = 0x16;
-/// `18 start count dwell_ms` 从信道 start 起扫 count 个（1..20），每个 dwell_ms
-/// （1..20）；应答 `18 00 count` 加每个信道的忙碌（0..200）和平均 RSSI（dBm，有符号）/
-/// scan `count` channels (1..20) from `start` for `dwell_ms` each (1..20); the answer is
-/// `18 00 count` plus the busy share (0..200) and mean RSSI (dBm, signed) of each
-inline constexpr uint8_t kScan = 0x18;
-/// `19` 读信道，`19 mode channel` 设：mode 0 自动，1 锁定（保存），2 立即换到（不保存）；
-/// 应答见 ChannelAnswer / read the channel, or `19 mode channel` to set it: mode 0
-/// automatic, 1 locked (stored), 2 change to it now (not stored); answered with
-/// ChannelAnswer
+/// `19` 读信道，`19 mode channel` 设：mode 0 自动，1 锁定（保存）；应答见 ChannelAnswer
+/// / read the channel, or `19 mode channel` to set it: mode 0 automatic, 1 locked
+/// (stored); answered with ChannelAnswer
 inline constexpr uint8_t kChannel = 0x19;
 /// `20` 开始配对 / start pairing
 inline constexpr uint8_t kPair = 0x20;
@@ -160,11 +154,10 @@ struct __attribute__((packed)) StatsAnswer
   uint32_t last_rtt_us;  ///< 上一条的往返时间 / round trip of the last one
   uint32_t max_rtt_us;   ///< 最长往返时间 / longest round trip
   uint32_t channel;      ///< 当前信道索引 / current channel index
-  uint32_t scans;        ///< 整段扫描次数 / full scans
   uint32_t rearms;       ///< 射频重新进入接收 / receiver re-entries of the radio
   uint32_t restarts;     ///< 射频复位重配 / resets of the radio
 };
-static_assert(sizeof(StatsAnswer) == 3 + 14 * 4, "the answer layout is fixed");
+static_assert(sizeof(StatsAnswer) == 3 + 13 * 4, "the answer layout is fixed");
 
 /// 读信道（0x19）的应答 / Answer of reading the channel (0x19).
 struct __attribute__((packed)) ChannelAnswer
@@ -172,11 +165,8 @@ struct __attribute__((packed)) ChannelAnswer
   uint8_t op;
   uint8_t status;
   uint8_t channel;  ///< 射频现在的信道 / the channel the radio is on
-  uint8_t control;  ///< 控制信道 F / the control channel F
   uint8_t lock;     ///< 锁定的信道，自动为 kNoChannel / locked channel, kNoChannel: auto
-  uint8_t best;     ///< 扫描里最好的点，没有时为 kNoChannel / best scanned point, or
-                    ///< kNoChannel
 };
-static_assert(sizeof(ChannelAnswer) == 6, "the answer layout is fixed");
+static_assert(sizeof(ChannelAnswer) == 4, "the answer layout is fixed");
 
 }  // namespace XrDap::Radio
