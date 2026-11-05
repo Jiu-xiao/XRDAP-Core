@@ -91,7 +91,7 @@ bool ChannelTable::Banned(uint8_t index, uint32_t now_us)
 {
   for (BanEntry& entry : bans_)
   {
-    if (entry.index != index)
+    if ((entry.index > index ? entry.index - index : index - entry.index) >= kBanSpan)
     {
       continue;
     }
