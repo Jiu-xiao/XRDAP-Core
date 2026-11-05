@@ -59,9 +59,9 @@ bool DapVendor::LinkAlive(uint32_t epoch)
 
 void DapVendor::CheckUsbReset()
 {
-  if (usb_reset_fn_ != nullptr &&
+  if (usb_resets_ != nullptr &&
       connected_link_.load() == static_cast<uint32_t>(Transport::USB) &&
-      usb_reset_fn_(usb_reset_ctx_) != usb_reset_base_)
+      usb_resets_->load() != usb_reset_base_)
   {
     Drop();
   }
@@ -125,9 +125,9 @@ DapVendor::Result DapVendor::OnCommand(const uint8_t* req, uint16_t len, uint8_t
     if (port == 0U || port == 1U)
     {
       connected_epoch_ = epoch_.load();
-      if (current_link_ == Transport::USB && usb_reset_fn_ != nullptr)
+      if (current_link_ == Transport::USB && usb_resets_ != nullptr)
       {
-        usb_reset_base_ = usb_reset_fn_(usb_reset_ctx_);
+        usb_reset_base_ = usb_resets_->load();
       }
       connected_link_.store(static_cast<uint32_t>(current_link_));
     }
