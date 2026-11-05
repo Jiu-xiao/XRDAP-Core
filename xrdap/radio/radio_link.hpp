@@ -264,10 +264,13 @@ class RadioLink
   // locked channel, once, and goes on.
   static constexpr uint32_t kDeafSends = 3;
   static constexpr uint32_t kDeafUs = 60'000;
-  // PING 每 kPingWaitUs 重发一次，直到 kPingBudgetUs；心跳和结束会话只发一次。
-  // A PING is sent again every kPingWaitUs until kPingBudgetUs; the heartbeat and the
-  // session end send it once.
+  // PING 每 kPingWaitUs 加一段每次不同的偏移重发一次，直到 kPingBudgetUs；心跳和结束会话
+  // 只发一次。偏移让同时找对方的几对不会一直撞在一起。
+  // A PING is sent again every kPingWaitUs plus an offset that changes every time, until
+  // kPingBudgetUs; the heartbeat and the session end send it once. The offset keeps pairs
+  // looking for their peers at the same time from colliding again and again.
   static constexpr uint32_t kPingWaitUs = 3'000;
+  static constexpr uint32_t kPingOffsetUs = 1'024;
   static constexpr uint32_t kPingBudgetUs = 30'000;
   static constexpr uint32_t kPingOnceUs = 0;
   // 在 F 上找对方：DAP_Connect 和回退重建给这么久。F 忙碌 40% 时，3 ms 一次的 PING 在
@@ -328,6 +331,11 @@ class RadioLink
   }
 
   uint8_t Fragment() const { return static_cast<uint8_t>(radio_.MaxPayload() - kHeader); }
+
+  uint32_t PingWaitUs() const
+  {
+    return kPingWaitUs + ((NowUs() >> 3) ^ radio_config_.crc_seed) % kPingOffsetUs;
+  }
 
   // ---- 射频 / Radio ----
 
@@ -451,7 +459,7 @@ class RadioLink
     do
     {
       SendPing(kPing, sequence, session);
-      const uint32_t deadline = NowUs() + kPingWaitUs;
+      const uint32_t deadline = NowUs() + PingWaitUs();
       while (static_cast<int32_t>(deadline - NowUs()) > 0)
       {
         radio_.Poll();
@@ -556,7 +564,7 @@ class RadioLink
       FinishSending();
       uint16_t echoed = 0;
       uint8_t channel = kNoChannel;
-      const int n = AwaitReply(kChannelAck, sequence, kPingWaitUs);
+      const int n = AwaitReply(kChannelAck, sequence, PingWaitUs());
       const bool acked = n > 0 && ParseChannel(rx_, n, echoed, channel) &&
                          echoed == session && channel == target;
       if (!acked && sends % kSwitchProbe != 0U)
