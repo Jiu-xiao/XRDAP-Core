@@ -6,6 +6,7 @@
 #include "xrdap/control/control.hpp"
 #include "xrdap/control/usb_control.hpp"
 #include "xrdap/light/status_light.hpp"
+#include "xrdap/net/tcp_frame.hpp"
 #include "xrdap/probe/family.hpp"
 #include "xrdap/probe/probe_identity.hpp"
 #include "xrdap/protocol/dap_cmd.hpp"
