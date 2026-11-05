@@ -584,6 +584,13 @@ class RadioLink
         return false;
       }
     }
+    // 对方可能收到了 CHANNEL，只是 ACK 丢了：记下目标信道，找对方时先去那里。
+    // The peer may have got CHANNEL and only the ACK was lost: note the target, to look
+    // there first.
+    if (from == kControlChannel)
+    {
+      NoteStray(target, session);
+    }
     return false;
   }
 
