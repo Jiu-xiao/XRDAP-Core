@@ -46,6 +46,10 @@ inline constexpr uint8_t kNoChannel = 0xFF;
 inline constexpr int16_t kBusyRssi = -170;
 /// 拉黑多久 / How long a ban lasts.
 inline constexpr uint32_t kBanUs = 600'000'000;
+/// 拉黑一个点时，索引相差不到这么多的点也不用：2 MHz，约为 GFSK 的带宽，离得更近的点还会
+/// 受同样的干扰 / Banning a point also rules out points less than this many indices away:
+/// 2 MHz, about the GFSK bandwidth; closer points would meet the same interference.
+inline constexpr uint8_t kBanSpan = 4;
 
 /// 是不是信道索引 / Whether `index` is a channel.
 inline constexpr bool IsChannel(uint8_t index) { return index < kChannels; }

@@ -305,19 +305,21 @@ TEST(radio_channel_table)
   CHECK(table.Scanned() && table.Measured(30) && !table.Measured(11));
   CHECK_EQ(table.Best(0), 31);
   table.Ban(31, 1000);
-  CHECK(table.Banned(31, 1000) && table.Best(1000) == 30);
+  CHECK(table.Banned(31, 1000) && table.Banned(28, 1000) && !table.Banned(27, 1000));
+  CHECK_EQ(table.Best(1000), 10);  // 30 离得太近 / 30 is too close
   CHECK(!table.Banned(31, 1000 + kBanUs) && table.Best(1000 + kBanUs) == 31);
   for (uint8_t i = 0; i < 9; ++i)
   {
-    table.Ban(i, 0);  // 8 项，最早的被挤掉 / 8 entries, the oldest drops out
+    table.Ban(static_cast<uint8_t>(i * 10U), 0);  // 8 项，最早的被挤掉 / 8 entries, the
+                                                  // oldest drops out
   }
-  CHECK(!table.Banned(0, 1) && table.Banned(8, 1));
+  CHECK(!table.Banned(0, 1) && table.Banned(80, 1));
   table.Merge(30, {2, -70});  // 留较差的 / the worse stays
   CHECK(table.Sample(30).busy == 5 && table.Sample(30).mean_dbm == -70);
   table.Merge(40, {7, -90});
   CHECK(table.Measured(40) && table.Sample(40).busy == 7);
   table.ClearSamples();
-  CHECK(!table.Scanned() && table.Banned(8, 1));
+  CHECK(!table.Scanned() && table.Banned(80, 1));
 }
 
 TEST(radio_retry_window)
