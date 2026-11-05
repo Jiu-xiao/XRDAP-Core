@@ -63,7 +63,11 @@ class FakeRadio
     config_.frequency_hz = frequency_hz;
     return LibXR::ErrorCode::OK;
   }
-  int16_t RssiInstant() const { return noise ? noise(config_.frequency_hz) : -200; }
+  int16_t RssiInstant()
+  {
+    ++rssi_reads;
+    return noise ? noise(config_.frequency_hz) : -200;
+  }
   uint32_t TxPackets() const { return sent; }
   uint32_t TxErrors() const { return 0; }
   uint32_t RxPackets() const { return received; }
@@ -147,6 +151,7 @@ class FakeRadio
   uint32_t received = 0;
   uint32_t sent = 0;
   uint32_t starts = 0;
+  uint32_t rssi_reads = 0;
   // 每包在空中停留的 Send / Poll 调用次数，0 为立即发完 / Send / Poll calls each packet
   // stays on air, 0 for at once.
   uint32_t air = 0;
@@ -384,9 +389,9 @@ uint8_t ControlStatus(Link& link, std::vector<uint8_t> req, std::vector<uint8_t>
 
 uint32_t Now() { return static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds()); }
 
-// 信道：会话在 F 上建立，主机扫描后两端换到最安静的点；会话结束后都回 F；统计记下一次
-// 整段扫描 / Channels: the session opens on F, the host scans and both move to the
-// quietest point; both return to F when the session ends; the statistics count one scan.
+// 信道：会话在 F 上建立，主机扫描后两端换到最安静的点；会话结束时都回 F；第二个会话不再
+// 扫描 / Channels: the session opens on F, the host scans and both move to the quietest
+// point; both return to F when the session ends; a second session does not scan.
 TEST(radio_link_channel)
 {
   Pair p(true);
@@ -402,7 +407,7 @@ TEST(radio_link_channel)
   StatsAnswer answer;
   CHECK_EQ(stats.size(), sizeof(answer));
   std::memcpy(&answer, stats.data(), sizeof(answer));
-  CHECK(answer.count == 14 && answer.channel == 150U && answer.scans == 1U);
+  CHECK(answer.count == 13 && answer.channel == 150U);
   CHECK(answer.commands >= 2U && answer.failures == 0U);
   CHECK(p.exec_a.Usb(Command(Byte(DapCmd::DISCONNECT), 1)) ==
         Expected(Command(Byte(DapCmd::DISCONNECT), 1)));
@@ -410,11 +415,10 @@ TEST(radio_link_channel)
   CHECK(p.radio_a.Frequency() == ChannelHz(kControlChannel));
   CHECK(p.radio_b.Frequency() == ChannelHz(kControlChannel));
   // 再连一次不再扫描 / A second session does not scan again.
+  const uint32_t reads = p.radio_a.rssi_reads;
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
   CHECK(p.radio_b.Frequency() == ChannelHz(150));
-  CHECK_EQ(ControlStatus(p.a, {Op::kStats}, &stats), Status::kOk);
-  std::memcpy(&answer, stats.data(), sizeof(answer));
-  CHECK_EQ(answer.scans, 1U);
+  CHECK_EQ(p.radio_a.rssi_reads, reads);
 }
 
 // CHANNEL_ACK 丢了：对方已换过去，主机到目标信道上 PING 找到它 / The CHANNEL_ACK is
@@ -519,54 +523,15 @@ TEST(radio_link_deaf_locked)
   CHECK(p.radio_a.Frequency() == ChannelHz(40));
 }
 
-// 0x19 mode 2：会话开着时立即换，HOST 设置下也一样；锁定时拒绝 / 0x19 mode 2: changes at
-// once while a session is open, with the HOST setting too; refused while locked.
-TEST(radio_link_channel_change_now)
+// 配对中只能读 / While pairing, operations can only read.
+TEST(radio_link_control_while_pairing)
 {
   Pair p(true);
-  CHECK_EQ(ControlStatus(p.a, {Op::kSetRole, static_cast<uint8_t>(RoleSetting::HOST)},
-                         nullptr),
-           Status::kOk);
-  const auto c = Command(Byte(DapCmd::TRANSFER), 16);
-  CHECK(p.exec_a.Usb(c) == Expected(c));
-  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 2, 120}, nullptr), Status::kOk);
-  CHECK(p.radio_a.Frequency() == ChannelHz(120) &&
-        p.radio_b.Frequency() == ChannelHz(120));
-  CHECK(p.exec_a.Usb(c) == Expected(c));
-  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 1, 40}, nullptr), Status::kOk);
-  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 2, 120}, nullptr), Status::kBadRequest);
-}
-
-// 几个点的 0x18 不代替整段扫描 / A 0x18 of a few points does not replace the full scan.
-TEST(radio_link_partial_scan)
-{
-  Pair p(true);
-  p.radio_a.noise = QuietAt(150);
-  CHECK_EQ(ControlStatus(p.a, {Op::kScan, 9, 1, 1}, nullptr), Status::kOk);
-  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
-  CHECK(p.radio_a.Frequency() == ChannelHz(150));
-}
-
-// 配对中只能读；经无线来的请求不能动远端的射频 / While pairing, only reads work; a
-// request from the radio cannot use the remote's radio.
-TEST(radio_link_control_refused)
-{
-  Pair p(true);
-  p.exec_b.control =
-      [&p](const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap, uint16_t& out)
-  { return p.b.HandleControl(req, len, resp, cap, out); };
-  std::vector<uint8_t> answer;
-  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kScan, 0, 1, 1}, &answer),
-           Status::kBadRequest);
-  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kChannel, 2, 1}, &answer),
-           Status::kBadRequest);
-  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kChannel}, &answer), Status::kOk);
   p.a.RequestPairing();
   p.radio_a.on_poll = nullptr;
   (void)p.a.Service();
   CHECK(p.a.Pairing() == PairState::RUNNING);
   CHECK_EQ(ControlStatus(p.a, {Op::kSetRole, 0}, nullptr), Status::kBusy);
-  CHECK_EQ(ControlStatus(p.a, {Op::kScan, 0, 1, 1}, nullptr), Status::kBusy);
   CHECK_EQ(ControlStatus(p.a, {Op::kSettings}, nullptr), Status::kOk);
 }
 
@@ -599,26 +564,13 @@ TEST(radio_link_channel_lock)
   std::vector<uint8_t> answer;
   CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 1, 40}, &answer), Status::kOk);
   CHECK(p.store_a.saved.channel_lock == 41U && answer.size() == sizeof(ChannelAnswer));
-  CHECK(answer[3] == kControlChannel && answer[4] == 40);
+  CHECK_EQ(answer[3], 40);
   CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 1, kChannels}, nullptr),
            Status::kBadRequest);
-  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 3, 1}, nullptr), Status::kBadRequest);
+  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 2, 1}, nullptr), Status::kBadRequest);
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
   CHECK(p.radio_a.Frequency() == ChannelHz(40) && p.radio_b.Frequency() == ChannelHz(40));
-  std::vector<uint8_t> stats;
-  CHECK_EQ(ControlStatus(p.a, {Op::kStats}, &stats), Status::kOk);
-  StatsAnswer s;
-  std::memcpy(&s, stats.data(), sizeof(s));
-  CHECK_EQ(s.scans, 0U);
-  CHECK_EQ(ControlStatus(p.a, {Op::kScan, 159, 2, 1}, nullptr), Status::kBadRequest);
-  CHECK_EQ(ControlStatus(p.a, {Op::kScan, 0, 21, 1}, nullptr), Status::kBadRequest);
-  CHECK_EQ(ControlStatus(p.a, {Op::kScan, 0, 2, 0}, nullptr), Status::kBadRequest);
-  p.radio_a.noise = QuietAt(10);
-  CHECK_EQ(ControlStatus(p.a, {Op::kScan, 9, 2, 1}, &answer), Status::kOk);
-  CHECK(answer.size() == 7U && answer[2] == 2);
-  CHECK(answer[3] == 200 && answer[5] == 0);  // 9 忙，10 静 / 9 busy, 10 quiet
-  CHECK(static_cast<int8_t>(answer[6]) == -100);
-  CHECK(p.radio_a.Frequency() == ChannelHz(40));  // 扫完回到原信道 / back afterwards
+  CHECK_EQ(p.radio_a.rssi_reads, 0U);  // 锁定时不扫描 / no scan while locked
   CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 0, 0}, nullptr), Status::kOk);
   CHECK_EQ(p.store_a.saved.channel_lock, 0U);
 }

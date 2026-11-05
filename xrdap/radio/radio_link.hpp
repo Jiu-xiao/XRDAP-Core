@@ -201,14 +201,6 @@ class RadioLink
       out = Reply(resp, op, Status::kBusy, cap);
       return true;
     }
-    // 经无线来的请求不能让远端用射频：应答还要从当前信道发回去。 / A request from the
-    // radio cannot use the remote's radio: its answer still goes out on this channel.
-    if (executing_ &&
-        (op == Op::kForward || op == Op::kScan || (op == Op::kChannel && len > 1U)))
-    {
-      out = Reply(resp, op, Status::kBadRequest, cap);
-      return true;
-    }
     out = HandleOp(op, req, len, resp, cap);
     return true;
   }
@@ -246,9 +238,6 @@ class RadioLink
 
   /// 配对状态 / Pairing state.
   PairState Pairing() const { return pair_state_; }
-
-  /// 当前设置 / Current settings.
-  const Settings& CurrentSettings() const { return settings_; }
 
  private:
   // 主机等待：第一次等命令的执行加第一个应答包，之后每次加倍，至多 kMaxWaitUs，直到总共
@@ -335,7 +324,7 @@ class RadioLink
   {
     return op == Op::kRole || op == Op::kStats || op == Op::kSettings ||
            op == Op::kSetRole || op == Op::kSetModulation || op == Op::kUnpair ||
-           op == Op::kScan || op == Op::kChannel || op == Op::kPair || op == Op::kForward;
+           op == Op::kChannel || op == Op::kPair || op == Op::kForward;
   }
 
   uint8_t Fragment() const { return static_cast<uint8_t>(radio_.MaxPayload() - kHeader); }
@@ -497,7 +486,7 @@ class RadioLink
 
   // 测一个点；调用方之后回到原信道。 / Measure one point; the caller returns to its
   // channel afterwards.
-  ChannelSample Measure(uint8_t channel, uint32_t dwell_us)
+  ChannelSample Measure(uint8_t channel)
   {
     TuneTo(channel);
     LibXR::Timebase::DelayMicroseconds(kSettleUs);
@@ -506,7 +495,7 @@ class RadioLink
     do
     {
       meter.Add(radio_.RssiInstant());
-    } while (NowUs() - begin < dwell_us);
+    } while (NowUs() - begin < kDwellUs);
     return meter.Result();
   }
 
@@ -519,11 +508,10 @@ class RadioLink
     {
       for (uint8_t channel = 0; channel < kChannels; channel += kScanStep)
       {
-        channels_.Merge(channel, Measure(channel, kDwellUs));
+        channels_.Merge(channel, Measure(channel));
       }
     }
     TuneTo(back);
-    ++stats_.scans;
   }
 
   uint8_t LockedChannel() const
@@ -533,21 +521,15 @@ class RadioLink
                : kNoChannel;
   }
 
-  // 主机：该用的数据信道：锁定的，0x19 指定的一次，或扫描里最好的；都没有时为 F。
-  // Host: the data channel to use: the locked one, the one 0x19 asked for once, or the
-  // best of the scan; F when there is none.
+  // 主机：该用的数据信道：锁定的，或扫描里最好的；都没有时为 F。
+  // Host: the data channel to use: the locked one or the best of the scan; F when there
+  // is none.
   uint8_t ChooseChannel()
   {
     const uint8_t locked = LockedChannel();
     if (locked != kNoChannel)
     {
       return locked;
-    }
-    if (requested_ != kNoChannel)
-    {
-      const uint8_t channel = requested_;
-      requested_ = kNoChannel;
-      return channel;
     }
     const uint8_t best = channels_.Best(NowUs());
     return best != kNoChannel ? best : kControlChannel;
@@ -666,11 +648,11 @@ class RadioLink
     return true;
   }
 
-  // 主机：会话中当前数据信道变差：拉黑它，换到下一个最好的点（没有备选时先重扫）；不成就
-  // 回 F，下一条命令在 F 上重新建立。
+  // 主机：会话中当前数据信道变差：拉黑它，换到下一个最好的点；不成就回 F，下一条命令在
+  // F 上重新建立。
   // Host: the data channel turned bad during a session: ban it and move to the next best
-  // point (scanning again when there is none); when that fails, return to F, and the
-  // next command opens the session there again.
+  // point; when that fails, return to F, and the next command opens the session there
+  // again.
   void Reselect()
   {
     channels_.Ban(channel_, NowUs());
@@ -678,10 +660,6 @@ class RadioLink
     if (LockedChannel() != kNoChannel)
     {
       return;  // 锁定时不换 / a locked channel stays
-    }
-    if (channels_.Best(NowUs()) == kNoChannel)
-    {
-      ScanAll();
     }
     const uint8_t from = channel_;
     const uint8_t target = ChooseChannel();
@@ -1368,8 +1346,6 @@ class RadioLink
         return Reply(resp, op, Status::kOk, cap);
       case Op::kStats:
         return StatsReply(resp);
-      case Op::kScan:
-        return ScanReply(req, len, resp, cap);
       case Op::kChannel:
         return ChannelReply(req, len, resp, cap);
       case Op::kForward:
@@ -1400,7 +1376,7 @@ class RadioLink
     StatsAnswer answer{};
     answer.op = Op::kStats;
     answer.status = Status::kOk;
-    answer.count = 14;
+    answer.count = 13;
     answer.radio_tx = radio_.TxPackets();
     answer.radio_rx = radio_.RxPackets();
     answer.crc_errors = radio_.RxErrors();
@@ -1412,42 +1388,10 @@ class RadioLink
     answer.last_rtt_us = stats_.last_rtt_us;
     answer.max_rtt_us = stats_.max_rtt_us;
     answer.channel = channel_;
-    answer.scans = stats_.scans;
     answer.rearms = radio_.Rearms();
     answer.restarts = radio_.Restarts();
     std::memcpy(resp, &answer, sizeof(answer));
     return sizeof(answer);
-  }
-
-  uint16_t ScanReply(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap)
-  {
-    constexpr uint8_t kMaxPoints = 20;
-    constexpr uint8_t kMaxDwellMs = 20;
-    if (len < 4U || !IsChannel(req[1]) || req[2] == 0U || req[2] > kMaxPoints ||
-        req[1] + req[2] > kChannels || req[3] == 0U || req[3] > kMaxDwellMs ||
-        cap < 3U + 2U * kMaxPoints)
-    {
-      return Reply(resp, Op::kScan, Status::kBadRequest, cap);
-    }
-    if (!running_)
-    {
-      return Reply(resp, Op::kScan, Status::kNotPaired, cap);
-    }
-    // 只报告，不进选信道用的表：几个点的测量不能代替整段扫描。 / Reported only, not put
-    // in the table the choice of channel uses: a few points do not replace a full scan.
-    const uint8_t back = channel_;
-    resp[0] = Op::kScan;
-    resp[1] = Status::kOk;
-    resp[2] = req[2];
-    for (uint8_t i = 0; i < req[2]; ++i)
-    {
-      const ChannelSample sample =
-          Measure(static_cast<uint8_t>(req[1] + i), req[3] * 1000U);
-      resp[3 + 2 * i] = sample.busy;
-      resp[4 + 2 * i] = static_cast<uint8_t>(sample.mean_dbm);
-    }
-    TuneTo(back);
-    return static_cast<uint16_t>(3U + 2U * req[2]);
   }
 
   uint16_t ChannelReply(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap)
@@ -1456,35 +1400,19 @@ class RadioLink
     {
       const uint8_t mode = req[1];
       const uint8_t channel = req[2];
-      if (mode > 2U || (mode != 0U && !IsChannel(channel)) ||
-          (mode == 2U && LockedChannel() != kNoChannel))
+      if (mode > 1U || (mode != 0U && !IsChannel(channel)))
       {
         return Reply(resp, Op::kChannel, Status::kBadRequest, cap);
       }
-      if (mode == 2U)
+      // 只存锁定，不重新应用设置：下次选信道时生效。 / Store the lock only, without
+      // applying the settings again: it takes effect at the next choice of channel.
+      Settings settings = settings_;
+      settings.channel_lock = mode == 0U ? 0U : static_cast<uint16_t>(channel + 1U);
+      if (!store_.Save(settings))
       {
-        // 主机会话开着时立即换，否则用于下一个会话。 / Change at once while a host
-        // session is open, otherwise for the next session.
-        requested_ = channel;
-        if (running_ && host_.Active() && !peer_lost_ && !SwitchTo(ChooseChannel()))
-        {
-          channels_.Ban(channel, NowUs());
-          TuneTo(kControlChannel);
-          peer_lost_ = true;
-        }
+        return Reply(resp, Op::kChannel, Status::kError, cap);
       }
-      else
-      {
-        // 只存锁定，不重新应用设置：下次选信道时生效。 / Store the lock only, without
-        // applying the settings again: it takes effect at the next choice of channel.
-        Settings settings = settings_;
-        settings.channel_lock = mode == 0U ? 0U : static_cast<uint16_t>(channel + 1U);
-        if (!store_.Save(settings))
-        {
-          return Reply(resp, Op::kChannel, Status::kError, cap);
-        }
-        settings_ = settings;
-      }
+      settings_ = settings;
     }
     else if (len != 1U)
     {
@@ -1494,9 +1422,7 @@ class RadioLink
     answer.op = Op::kChannel;
     answer.status = Status::kOk;
     answer.channel = channel_;
-    answer.control = kControlChannel;
     answer.lock = LockedChannel();
-    answer.best = channels_.Best(NowUs());
     std::memcpy(resp, &answer, sizeof(answer));
     return sizeof(answer);
   }
@@ -1517,7 +1443,6 @@ class RadioLink
 
   // 信道 / Channels.
   uint8_t channel_ = kControlChannel;  // 射频现在所在的信道 / the channel the radio is on
-  uint8_t requested_ = kNoChannel;     // 0x19 指定的一次 / asked for once by 0x19
   uint8_t stray_ = kNoChannel;         // 对方可能留着的信道 / channel the peer may be on
   uint16_t stray_session_ = 0;         // 记下时的会话号 / the session noted with it
   bool reselect_ = false;              // 重发率过高，命令之后换信道 / too many resends
@@ -1531,7 +1456,6 @@ class RadioLink
     uint32_t duplicates = 0;
     uint32_t last_rtt_us = 0;
     uint32_t max_rtt_us = 0;
-    uint32_t scans = 0;
   } stats_;
 
   uint8_t tx_[256] = {};
