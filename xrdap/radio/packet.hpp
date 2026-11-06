@@ -87,6 +87,13 @@ uint8_t FragmentCount(uint16_t total, uint8_t fragment);
 uint8_t BuildFragment(uint8_t kind, uint8_t sequence, const uint8_t* message,
                       uint16_t total, uint8_t fragment, uint8_t index, uint8_t* out);
 
+/// @brief 这是消息的最后一片（包长已检查）/ This is the last fragment of its message
+///        (packet size checked).
+inline bool IsLastFragment(const uint8_t* packet)
+{
+  return static_cast<uint16_t>(packet[2]) + 1U >= packet[3];
+}
+
 /// @brief 写出 PING 或 PONG，返回包长 / Write a PING or PONG and return its size.
 uint8_t BuildPing(uint8_t kind, uint8_t sequence, uint16_t session, uint8_t* out);
 
@@ -132,11 +139,18 @@ class Reassembler
   /// @param packet 完整的包（含包头）/ The whole packet including the header.
   /// @param fragment 当前调制下的分片长度 / Fragment size of the current modulation.
   /// @note 序号、片数或总长与在拼的消息不同时，先丢掉在拼的消息。消息拼齐后，同一消息
-  ///       要从第 0 片重新开始，其余分片作为 DUPLICATE 丢弃 / A different sequence, count
-  ///       or total first drops the message being assembled. After a message completes,
-  ///       the same message starts again only with fragment 0; its other fragments are
+  ///       的分片都作为 DUPLICATE 丢弃 / A different sequence, count or total first drops
+  ///       the message being assembled. After a message completes, its fragments are
   ///       dropped as DUPLICATE.
   Result Add(const uint8_t* packet, int size, uint8_t fragment);
+
+  /// 这个包头与当前消息的序号、片数和总长都相同（包长已检查）/ This header has the
+  /// sequence, count and total of the current message (packet size checked).
+  bool IsSameMessage(const uint8_t* packet) const
+  {
+    return packet[1] == sequence_ && packet[3] == count_ &&
+           static_cast<uint16_t>(packet[4] | packet[5] << 8) == total_;
+  }
 
   /// 拼齐的消息长度 / Size of the completed message.
   uint16_t Size() const { return total_; }

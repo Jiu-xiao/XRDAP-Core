@@ -113,13 +113,10 @@ Reassembler::Result Reassembler::Add(const uint8_t* packet, int size, uint8_t fr
   {
     return Result::REJECTED;
   }
-  // 刚拼齐的消息的其余分片（提前拼齐的重发）丢掉：当作新消息的开头，它会在下一次重发
-  // 的中途拼齐，那时主机还在发射，听不到应答。同一序号只从第 0 片重新开始。
-  // The rest of the burst of a message just completed (a resend that completed early)
-  // is dropped: as the start of a new assembly it would complete in the middle of the
-  // next resend, while the host is still transmitting and cannot hear the answer. The
-  // same sequence starts again only with its first fragment.
-  if (done_ && sequence == sequence_ && count == count_ && total == total_ && index != 0U)
+  // 刚拼齐的消息的重发不再拼一次：内容已经齐了，到了一片就知道对方还要应答。
+  // A resend of the message just completed is not assembled again: the content is
+  // complete, and one fragment is enough to know that the peer still wants the answer.
+  if (done_ && IsSameMessage(packet))
   {
     return Result::DUPLICATE;
   }
