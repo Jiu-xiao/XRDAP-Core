@@ -198,19 +198,24 @@ class RemoteLink
     }
   }
 
-  // 收下命令的一个分片；其余分片紧跟着到，在这里接着收，不等主循环下一圈。命令齐了时为
-  // true。
+  // 收下命令的一个分片；其余分片紧跟着到，在这里接着收，不等主循环下一圈。命令齐了、这一串
+  // 也发完了（到了最后一片，或 kFragmentWaitUs 没有下一片）时为 true：重发可能在中途就把
+  // 命令拼齐，而主机发射时听不到应答。
   // Take one fragment of a command; the others follow right behind it and are received
-  // here instead of on the next turns of the main loop. True once the command is
-  // complete.
+  // here instead of on the next turns of the main loop. True once the command is complete
+  // and the burst is over (its last fragment arrived, or none for kFragmentWaitUs): a
+  // resend can complete the command halfway, and the host cannot hear an answer while it
+  // transmits.
   bool ReceiveCommand(int n)
   {
     RadioT& radio = port_.Radio();
     uint8_t* const rx = port_.Rx();
     const uint8_t kind = rx[0];
     auto added = commands_.Add(rx, n, port_.Fragment());
+    bool complete = IsComplete(added);
+    bool last = IsLastFragment(rx);
     uint32_t deadline = NowUs() + kFragmentWaitUs;
-    while (added == Reassembler::Result::INCOMPLETE &&
+    while ((complete ? !last : added == Reassembler::Result::INCOMPLETE) &&
            static_cast<int32_t>(deadline - NowUs()) > 0)
     {
       radio.Poll();
@@ -219,10 +224,27 @@ class RemoteLink
       {
         continue;
       }
+      // 已拼齐的命令还在缓冲里等执行，别的消息不能覆盖它；主机会重发那条消息。
+      // The completed command waits in the buffer and another message must not overwrite
+      // it; the host sends that message again.
+      if (complete && !commands_.IsSameMessage(rx))
+      {
+        break;
+      }
       added = commands_.Add(rx, m, port_.Fragment());
+      complete = complete || IsComplete(added);
+      last = IsLastFragment(rx);
       deadline = NowUs() + kFragmentWaitUs;
     }
-    return added == Reassembler::Result::COMPLETE;
+    return complete;
+  }
+
+  // 拼齐了，或者是刚拼齐的消息的重发（从缓存应答）。 / Complete, or a resend of the
+  // message just completed (answered from the cache).
+  static bool IsComplete(Reassembler::Result result)
+  {
+    return result == Reassembler::Result::COMPLETE ||
+           result == Reassembler::Result::DUPLICATE;
   }
 
   void StartAnswer(uint8_t sequence)

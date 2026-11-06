@@ -123,8 +123,9 @@ TEST(radio_reassembly_rejects)
   CHECK(r.Add(p, 3, kGfsk) == Result::REJECTED);  // 短于包头 / short header
 }
 
-// 提前拼齐的重发留下的尾巴丢弃，同序号只从第 0 片重新开始 / The tail of a resend that
-// completed early is dropped; the same sequence starts again only with fragment 0.
+// 拼齐后同一消息的分片都是重复的，第 0 片也一样；序号变了才开始新消息 / After a
+// message completes all its fragments are duplicates, fragment 0 too; another sequence
+// starts a new message.
 TEST(radio_reassembly_resend_tail)
 {
   uint8_t buffer[kMaxMessage];
@@ -139,6 +140,11 @@ TEST(radio_reassembly_resend_tail)
   CHECK(Add(r, a[2], kGfsk) == Result::COMPLETE);
   CHECK(Add(r, a[3], kGfsk) == Result::DUPLICATE);
   CHECK(Add(r, a[4], kGfsk) == Result::DUPLICATE);
+  for (size_t i = 0; i < 5; ++i)
+  {
+    CHECK(Add(r, a[i], kGfsk) == Result::DUPLICATE);
+  }
+  r.Reset();  // 会话结束 / the session ended
   for (size_t i = 0; i < 4; ++i)
   {
     CHECK(Add(r, a[i], kGfsk) == Result::INCOMPLETE);

@@ -191,6 +191,7 @@ class FakeExec
     uint16_t forwarded = 0;
     CHECK(!forwarder_(ctx_, t, req, len, resp, cap, forwarded));  // RADIO 不转发
     ++executed;
+    last.assign(req, req + len);
     resp[0] = req[0];
     for (uint16_t i = 1; i < len && i < cap; ++i)
     {
@@ -213,6 +214,7 @@ class FakeExec
   }
 
   std::function<bool(const uint8_t*, uint16_t, uint8_t*, uint16_t, uint16_t&)> control;
+  std::vector<uint8_t> last;  // 上一条执行的命令 / the last command executed
   uint32_t executed = 0;
   uint32_t local = 0;
   uint32_t lost = 0;
@@ -278,6 +280,37 @@ std::vector<uint8_t> Command(uint8_t id, uint16_t size)
   return c;
 }
 
+// 命令的所有分片，序号由测试给出 / All fragments of a command, with a given sequence.
+std::vector<std::vector<uint8_t>> Burst(const std::vector<uint8_t>& c, uint8_t sequence)
+{
+  const uint8_t fragment = 255 - kHeader;
+  const uint16_t total = static_cast<uint16_t>(c.size());
+  std::vector<std::vector<uint8_t>> out;
+  uint8_t packet[255];
+  for (uint8_t i = 0; i < FragmentCount(total, fragment); ++i)
+  {
+    const uint8_t n =
+        BuildFragment(kCommand, sequence, c.data(), total, fragment, i, packet);
+    out.emplace_back(packet, packet + n);
+  }
+  return out;
+}
+
+void Deliver(Pair& p, const std::vector<uint8_t>& packet)
+{
+  CHECK(p.radio_a.Send(packet.data(), static_cast<uint8_t>(packet.size())) ==
+        LibXR::ErrorCode::OK);
+}
+
+// 让远端把在发的应答发完 / Lets the remote finish the answer it is sending.
+void Serve(Pair& p)
+{
+  for (int i = 0; i < 100; ++i)
+  {
+    (void)p.b.Service();
+  }
+}
+
 std::vector<uint8_t> Expected(const std::vector<uint8_t>& c)
 {
   std::vector<uint8_t> e(c.size());
@@ -333,6 +366,114 @@ TEST(radio_link_resend)
   const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
   CHECK(p.exec_a.Usb(c) == Expected(c));
   CHECK_EQ(p.exec_b.executed, before + 1U);
+}
+
+// 重发在中途拼齐命令时，远端等这一串发完才执行和应答：主机发射时听不到 / A resend that
+// completes a command halfway: the remote executes and answers only after the burst,
+// since the host cannot hear while it transmits.
+TEST(radio_link_answer_after_burst)
+{
+  Pair p(true);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
+  const auto f = Burst(c, 200);
+  CHECK_EQ(f.size(), 5U);
+  const uint32_t executed = p.exec_b.executed;
+  const uint32_t sent = p.radio_b.sent;
+  for (size_t i : {0, 2, 3, 4})  // 第 1 片丢了 / fragment 1 lost
+  {
+    Deliver(p, f[i]);
+  }
+  (void)p.b.Service();
+  CHECK_EQ(p.exec_b.executed, executed);
+  Deliver(p, f[0]);
+  Deliver(p, f[1]);  // 这里拼齐 / completes here
+  size_t next = 2;
+  p.radio_b.on_poll = [&]
+  {
+    CHECK_EQ(p.exec_b.executed, executed);
+    CHECK_EQ(p.radio_b.sent, sent);
+    if (next < f.size())
+    {
+      Deliver(p, f[next++]);
+    }
+  };
+  (void)p.b.Service();
+  p.radio_b.on_poll = nullptr;
+  CHECK_EQ(next, f.size());
+  CHECK_EQ(p.exec_b.executed, executed + 1U);
+  Serve(p);
+  CHECK(p.exec_b.last == c);
+  CHECK_EQ(p.radio_b.sent, sent + 5U);
+}
+
+// 最后一片丢了也会应答，只是多等一会 / With the last fragment lost the answer still
+// comes, a little later.
+TEST(radio_link_answer_when_last_fragment_lost)
+{
+  Pair p(true);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
+  const auto f = Burst(c, 200);
+  const uint32_t executed = p.exec_b.executed;
+  for (size_t i : {0, 2, 3, 4})
+  {
+    Deliver(p, f[i]);
+  }
+  (void)p.b.Service();
+  Deliver(p, f[0]);
+  Deliver(p, f[1]);
+  (void)p.b.Service();
+  CHECK_EQ(p.exec_b.executed, executed + 1U);
+  CHECK(p.exec_b.last == c);
+}
+
+// 已拼齐的命令再来重发：哪片到了都用缓存再答一次，不再执行 / A resend of a completed
+// command: whichever fragment arrives gets the cached answer again, without executing.
+TEST(radio_link_resend_without_first_fragment)
+{
+  Pair p(true);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
+  const auto f = Burst(c, 200);
+  for (const auto& packet : f)
+  {
+    Deliver(p, packet);
+  }
+  Serve(p);
+  const uint32_t executed = p.exec_b.executed;
+  const uint32_t sent = p.radio_b.sent;
+  for (size_t i : {1, 2, 3, 4})  // 第 0 片丢了 / fragment 0 lost
+  {
+    Deliver(p, f[i]);
+  }
+  Serve(p);
+  CHECK_EQ(p.radio_b.sent, sent + 5U);
+  Deliver(p, f[3]);  // 只到了一片 / only one arrived
+  Serve(p);
+  CHECK_EQ(p.radio_b.sent, sent + 10U);
+  CHECK_EQ(p.exec_b.executed, executed);
+}
+
+// 等这一串结束时来了别的消息：已拼齐的命令不被覆盖 / Another message while waiting for
+// the end of the burst does not overwrite the completed command.
+TEST(radio_link_other_message_during_burst)
+{
+  Pair p(true);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
+  const auto f = Burst(c, 200);
+  const auto g = Burst(Command(Byte(DapCmd::TRANSFER_BLOCK), 1024), 201);
+  for (size_t i : {0, 2, 3, 4})
+  {
+    Deliver(p, f[i]);
+  }
+  (void)p.b.Service();
+  Deliver(p, f[0]);
+  Deliver(p, f[1]);
+  Deliver(p, g[0]);
+  Serve(p);
+  CHECK(p.exec_b.last == c);
 }
 
 // 多包的命令和应答连续发出，整条消息发完才转回接收一次 / The packets of a long command
