@@ -34,7 +34,7 @@ def select(spec):
     chosen = []
     for part in spec.split(","):
         part = part.strip().upper()
-        match = [i for i in ids if i == part or i.startswith(part + "-") or i.startswith(part)]
+        match = [i for i in ids if i.startswith(part)]
         if not match:
             raise SystemExit(f"no case matches {part!r}")
         chosen += [i for i in match if i not in chosen]
@@ -253,7 +253,7 @@ def cmd_coverage(args):
     return 1 if problems else 0
 
 
-def main(argv=None):
+def main():
     ap = argparse.ArgumentParser(prog="python -m xrdap_test", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("run", help="run cases against one probe, link and target")
@@ -280,5 +280,5 @@ def main(argv=None):
     p.set_defaults(fn=cmd_table)
     p = sub.add_parser("coverage", help="check SPEC.md / SPEC.en.md against the implemented cases")
     p.set_defaults(fn=cmd_coverage)
-    args = ap.parse_args(argv)
+    args = ap.parse_args()
     return args.fn(args)

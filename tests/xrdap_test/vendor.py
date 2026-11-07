@@ -4,7 +4,7 @@ import struct
 import time
 from dataclasses import dataclass, field
 
-OK, ARG, STATE, RESOURCE, NO_TARGET, BUSY = 0x00, 0x01, 0x02, 0x03, 0x04, 0x05
+OK, ARG, STATE, RESOURCE, NO_TARGET = 0x00, 0x01, 0x02, 0x03, 0x04
 PROTOCOL_VERSION = 2
 WIFI_CLEAR_CONFIRM = 0xA5  # protocol 3.7: 86 02 A5
 
@@ -141,7 +141,7 @@ class Capture:
     left: int  # ring bytes still unread after the drain
 
 
-def capture(vendor, items, seconds, period_us, poll_s=0.0, max_bytes=0xFFFF):
+def capture(vendor, items, seconds, period_us, poll_s=0.0):
     """Start sampling, poll SUB_READ for `seconds`, stop and drain. A failed SUB_READ stops
     sampling before it raises: the probe refuses SUB_START while sampling runs (protocol 3.4)."""
     frames, last = [], SubRead(0)
@@ -151,7 +151,7 @@ def capture(vendor, items, seconds, period_us, poll_s=0.0, max_bytes=0xFFFF):
     t0 = time.monotonic()
     end = t0 + seconds
     while time.monotonic() < end:
-        last = vendor.sub_read(items, max_bytes)
+        last = vendor.sub_read(items)
         if last.status != OK:
             vendor.stop()
             raise RuntimeError(f"SUB_READ status {last.status}")
@@ -161,7 +161,7 @@ def capture(vendor, items, seconds, period_us, poll_s=0.0, max_bytes=0xFFFF):
     elapsed = time.monotonic() - t0
     vendor.stop()
     for _ in range(200):
-        last = vendor.sub_read(items, max_bytes)
+        last = vendor.sub_read(items)
         frames += last.frames
         if not last.remaining:
             break

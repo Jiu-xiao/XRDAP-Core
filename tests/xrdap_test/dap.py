@@ -2,7 +2,7 @@
 
 import struct
 
-ACK_OK, ACK_WAIT, ACK_FAULT = 1, 2, 4
+ACK_OK, ACK_FAULT = 1, 4
 
 # DAP_Transfer request bits.
 AP, RD = 0x01, 0x02
@@ -116,19 +116,19 @@ class Dap:
     def dp_write(self, addr, value):
         self.transfer_ok([(req(0, 0, addr), value)])
 
-    def ap_read(self, reg, ap=0):
-        self.dp_write(DP_SELECT, ap << 24 | (reg & 0xF0))
+    def ap_read(self, reg):
+        self.dp_write(DP_SELECT, reg & 0xF0)
         return self.transfer_ok([(req(1, 1, reg), None)])[0]
 
-    def ap_write(self, reg, value, ap=0):
-        self.dp_write(DP_SELECT, ap << 24 | (reg & 0xF0))
+    def ap_write(self, reg, value):
+        self.dp_write(DP_SELECT, reg & 0xF0)
         self.transfer_ok([(req(1, 0, reg), value)])
 
     def clear_errors(self):
         self.transfer([(req(0, 0, DP_ABORT), ABORT_ALL)])
 
     # ------------------------------------------------------------------ SWD
-    def attach(self, clock_hz, csw=CSW_WORD_INC):
+    def attach(self, clock_hz):
         """Connect SWD, power up the debug domain and set the AP CSW. Returns DPIDR."""
         self.swj_clock(clock_hz)
         self.connect()
@@ -146,8 +146,7 @@ class Dap:
                 break
         else:
             raise DapError("debug power-up not acknowledged")
-        if csw is not None:
-            self.ap_write(AP_CSW, csw)
+        self.ap_write(AP_CSW, CSW_WORD_INC)
         return dpidr
 
     # --------------------------------------------------------------- memory
@@ -164,9 +163,9 @@ class Dap:
         """Most words one TransferBlock carries in this probe's packet."""
         return (self.packet_size - (5 if write else 4)) // 4
 
-    def chunks(self, addr, nbytes, write, max_words=None):
+    def chunks(self, addr, nbytes, write):
         """Split [addr, addr+nbytes) at 1 KiB TAR auto-increment boundaries."""
-        limit = min(self.block_words(write), max_words or 1 << 16)
+        limit = self.block_words(write)
         while nbytes > 0:
             room = (1024 - (addr & 0x3FF)) // 4
             words = min(limit, room, nbytes // 4)
@@ -174,10 +173,10 @@ class Dap:
             addr += words * 4
             nbytes -= words * 4
 
-    def block_read(self, addr, nbytes, max_words=None):
+    def block_read(self, addr, nbytes):
         self.dp_write(DP_SELECT, 0)
         out = bytearray()
-        for a, words in self.chunks(addr, nbytes, False, max_words):
+        for a, words in self.chunks(addr, nbytes, False):
             self.transfer_ok([(req(1, 0, AP_TAR), a)])
             r = self.link.xfer(struct.pack("<BBHB", 0x06, 0, words, req(1, 1, AP_DRW)))
             if len(r) < 4 or r[3] != ACK_OK or int.from_bytes(r[1:3], "little") != words:
@@ -185,10 +184,10 @@ class Dap:
             out += r[4:4 + 4 * words]
         return bytes(out)
 
-    def block_write(self, addr, data, max_words=None):
+    def block_write(self, addr, data):
         self.dp_write(DP_SELECT, 0)
         pos = 0
-        for a, words in self.chunks(addr, len(data), True, max_words):
+        for a, words in self.chunks(addr, len(data), True):
             self.transfer_ok([(req(1, 0, AP_TAR), a)])
             r = self.link.xfer(struct.pack("<BBHB", 0x06, 0, words, req(1, 0, AP_DRW))
                                + data[pos:pos + 4 * words])
