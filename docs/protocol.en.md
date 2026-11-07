@@ -2,7 +2,7 @@
 
 [中文](protocol.md)
 
-This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (protocol version 2; 0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only) and the rule that the probe is used over one link at a time, the probe identity and mDNS advertisement, how the ESP32-C3 USB port separates the DAP link from the command line, the USB/IP virtual device served by `xrdap share usbip`, the zero-length packet USB hosts must send, and the link between two radio probes. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. These rules are implemented in `xrdap/` of this repository: serial frames in `xrdap/serial/`, the executor in `xrdap/session/`, the control port in `xrdap/control/`, the vendor extension in `xrdap/vendor/`, the radio link in `xrdap/radio/`.
+This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V3) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (protocol version 2; 0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only) and the rule that the probe is used over one link at a time, the probe identity and mDNS advertisement, how the ESP32-C3 USB port separates the DAP link from the command line, the USB/IP virtual device served by `xrdap share usbip`, the zero-length packet USB hosts must send, and the link between two radio probes. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. These rules are implemented in `xrdap/` of this repository: serial frames in `xrdap/serial/`, the executor in `xrdap/session/`, the control port in `xrdap/control/`, the vendor extension in `xrdap/vendor/`, the radio link in `xrdap/radio/`.
 
 All integers are little-endian. Spaces in hexadecimal examples are for readability only.
 
@@ -89,7 +89,7 @@ That the probe is used over one link (USB, serial, TCP, radio peer) at a time is
 | A TCP client disconnects, the serial link stops | when the connection is on that link |
 | No serial request for 5 s | when the connection is on serial |
 | USB bus reset (unplugged or host reset) | when the connection is on USB |
-| Radio session id changes or is 0, or no ping within the lease | when the connection is on the radio peer (XRDAP-CH32V307) |
+| Radio session id changes or is 0, or no ping within the lease | when the connection is on the radio peer (XRDAP-CH32V3) |
 
 When the connection is not on the link that was lost, nothing happens.
 
@@ -117,7 +117,7 @@ A request is `command byte + arguments`; a response is `command byte + overall s
 
 A request whose length does not match the count field in the command returns 0x01 and is not executed.
 
-Reply space: before a vendor command runs, the probe works out from the request how many bytes its reply needs and compares that with the space it may write this time. The space is the packet size from DAP_Info (1024 bytes on XRDAP-ESP and XRDAP-CH32V307, 512 bytes on XRDAP-F103C8); inside `DAP_ExecuteCommands` it is the part of that packet not used yet. Vendor commands may sit inside `DAP_ExecuteCommands` and `DAP_QueueCommands`, as in the CMSIS-DAP reference implementation; the commands of a container are back to back and each one's length follows from its own content (READ, WRITE and SUB_START from the item count and the items, INFO 1 byte, SUB_CTRL 2, SUB_READ 3, 0x86 by operation: query 2, save 3 + ssid_len + 1 + pw_len, clear 3); a container with a length that cannot be worked out answers `7F FF` as a whole. With less than 2 bytes of space the reply is `FF` alone; when the whole reply does not fit it is `command 03`; in both cases the command does not run and nothing is written past the given space. The READ reply is 3 + Σ(3 + size) bytes, WRITE 3 + 3 × count, INFO 22, SUB_START and SUB_CTRL 2, SUB_READ at least 24.
+Reply space: before a vendor command runs, the probe works out from the request how many bytes its reply needs and compares that with the space it may write this time. The space is the packet size from DAP_Info (1024 bytes on XRDAP-ESP and XRDAP-CH32V3, 512 bytes on XRDAP-F103C8); inside `DAP_ExecuteCommands` it is the part of that packet not used yet. Vendor commands may sit inside `DAP_ExecuteCommands` and `DAP_QueueCommands`, as in the CMSIS-DAP reference implementation; the commands of a container are back to back and each one's length follows from its own content (READ, WRITE and SUB_START from the item count and the items, INFO 1 byte, SUB_CTRL 2, SUB_READ 3, 0x86 by operation: query 2, save 3 + ssid_len + 1 + pw_len, clear 3); a container with a length that cannot be worked out answers `7F FF` as a whole. With less than 2 bytes of space the reply is `FF` alone; when the whole reply does not fit it is `command 03`; in both cases the command does not run and nothing is written past the given space. The READ reply is 3 + Σ(3 + size) bytes, WRITE 3 + 3 × count, INFO 22, SUB_START and SUB_CTRL 2, SUB_READ at least 24.
 
 | Overall status | Meaning |
 |---|---|
@@ -185,10 +185,10 @@ The response is always 22 bytes:
 | 0 | 1 | 0x80 |
 | 1 | 1 | Overall status |
 | 2 | 1 | Protocol version, currently 2 |
-| 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86), bit5 control port (3.7.1), bit6 compact frames (3.5); 0x7F on XRDAP-ESP, 0x6F on XRDAP-CH32V307, 0x4F on XRDAP-F103C8 (older firmware without compact frames: 0x3F or 0x1F, 0x2F, 0x0F) |
+| 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86), bit5 control port (3.7.1), bit6 compact frames (3.5); 0x7F on XRDAP-ESP, 0x6F on XRDAP-CH32V3, 0x4F on XRDAP-F103C8 (older firmware without compact frames: 0x3F or 0x1F, 0x2F, 0x0F) |
 | 7 | 2 | Maximum items per request or sampling run: 32 |
 | 9 | 1 | Maximum dereference depth: 8 |
-| 10 | 4 | Ring buffer size in bytes: 16384 on XRDAP-ESP (4096 on the ESP32-S2), 4096 on XRDAP-F103C8 and XRDAP-CH32V307 (2048 on the CH32V305 board) |
+| 10 | 4 | Ring buffer size in bytes: 16384 on XRDAP-ESP (4096 on the ESP32-S2), 4096 on XRDAP-F103C8 and XRDAP-CH32V3 (2048 on the CH32V305 board) |
 | 14 | 8 | Current probe time, µs |
 
 #### 0x81 READ
@@ -506,7 +506,7 @@ The firmware returns these strings in `DAP_Info` (`xrdap/probe/probe_identity.hp
 | 0x04 | CMSIS-DAP protocol version | `2.0.0` |
 | 0x05, 0x06 | Target device vendor, name | Not provided (empty) |
 | 0x07 | Board vendor | `XRobot` |
-| 0x08 | Board name | XRDAP-ESP: same as the product; XRDAP-F103C8: `STLINK-V2`; XRDAP-CH32V307: the board, e.g. `XR-DAP-WDAP`; the CH32V305 board is `CH32V305-LINKE` |
+| 0x08 | Board name | XRDAP-ESP: same as the product; XRDAP-F103C8: `STLINK-V2`; XRDAP-CH32V3: the board, e.g. `XR-DAP-WDAP`; the CH32V305 board is `CH32V305-LINKE` |
 | 0x09 | Firmware version | The version of each firmware |
 
 The serial number is the same over every link (USB, serial, TCP, ...), which lets host tools recognise one probe across them.

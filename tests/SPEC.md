@@ -2,7 +2,7 @@
 
 [English](SPEC.en.md)
 
-本文规定 XR-DAP 系列探针（XRDAP-ESP、XRDAP-F103C8、XRDAP-CH32V307）共用的测试用例、固定条件和结果记录方式。三种探针、各种链路使用同一组用例和同一套设置，测得的数字因此可以直接比较。用例由本目录的测试工具 `xrdap_test` 执行，用法见 [README.md](README.md)；协议细节见 [docs/protocol.md](../docs/protocol.md)。
+本文规定 XR-DAP 系列探针（XRDAP-ESP、XRDAP-F103C8、XRDAP-CH32V3）共用的测试用例、固定条件和结果记录方式。三种探针、各种链路使用同一组用例和同一套设置，测得的数字因此可以直接比较。用例由本目录的测试工具 `xrdap_test` 执行，用法见 [README.md](README.md)；协议细节见 [docs/protocol.md](../docs/protocol.md)。
 
 目录：1 范围；2 固定条件；3 用例总表；4 用例说明；5 结果记录。
 
@@ -16,7 +16,7 @@
 | `serial` | libxr Topic 串口帧（协议第 1 节） | XRDAP-ESP |
 | `tcp` | OpenOCD CMSIS-DAP TCP 帧（协议第 2 节） | XRDAP-ESP；`xrdap share openocd` 共享出来的任何探针 |
 | `usbip` | USB/IP，TCP 3240（协议第 6 节） | `xrdap share usbip` 共享出来的任何探针 |
-| `radio` | 经无线对端到目标，上位机侧是 USB | XRDAP-CH32V307 无线板对 |
+| `radio` | 经无线对端到目标，上位机侧是 USB | XRDAP-CH32V3 无线板对 |
 
 每个用例在第 3 节列出适用的链路。探针不具备某条链路时，该格记为 n/a。
 

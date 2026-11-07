@@ -2,7 +2,7 @@
 
 [English](protocol.en.md)
 
-本文说明 XR-DAP 系列探针（XRDAP-ESP、XRDAP-F103C8、XRDAP-CH32V307）与上位机之间的协议：XRDAP-ESP 在串口和 TCP 上传输 CMSIS-DAP 包时使用的帧格式，全系列都实现的 XR 厂商扩展命令（协议版本 2；0x80 到 0x85 为数据命令；0x86 为 Wi-Fi 配置，仅 XRDAP-ESP）和探针一次只使用一条链路的规则，探针的身份信息和 mDNS 广播，ESP32-C3 的 USB 口上 DAP 链路与命令行的分流，`xrdap share usbip` 提供的 USB/IP 虚拟设备，USB 主机要注意的零长度包，以及两块无线探针之间的链路。USB 上的 DAP 包按 CMSIS-DAP v2 的 Bulk 端点收发，没有额外的帧。这些规则在本仓库的 `xrdap/` 里实现：串口帧在 `xrdap/serial/`，执行器在 `xrdap/session/`，控制口在 `xrdap/control/`，厂商扩展在 `xrdap/vendor/`，无线链路在 `xrdap/radio/`。
+本文说明 XR-DAP 系列探针（XRDAP-ESP、XRDAP-F103C8、XRDAP-CH32V3）与上位机之间的协议：XRDAP-ESP 在串口和 TCP 上传输 CMSIS-DAP 包时使用的帧格式，全系列都实现的 XR 厂商扩展命令（协议版本 2；0x80 到 0x85 为数据命令；0x86 为 Wi-Fi 配置，仅 XRDAP-ESP）和探针一次只使用一条链路的规则，探针的身份信息和 mDNS 广播，ESP32-C3 的 USB 口上 DAP 链路与命令行的分流，`xrdap share usbip` 提供的 USB/IP 虚拟设备，USB 主机要注意的零长度包，以及两块无线探针之间的链路。USB 上的 DAP 包按 CMSIS-DAP v2 的 Bulk 端点收发，没有额外的帧。这些规则在本仓库的 `xrdap/` 里实现：串口帧在 `xrdap/serial/`，执行器在 `xrdap/session/`，控制口在 `xrdap/control/`，厂商扩展在 `xrdap/vendor/`，无线链路在 `xrdap/radio/`。
 
 目录：1 串口帧；2 TCP 帧；3 XR 厂商扩展（3.1 规则与一次只使用一条链路，3.2 状态与回复空间，3.3 条目，3.4 命令，3.5 采样，3.6 SWD 访问，3.7 0x86，3.7.1 控制口，3.8 字节示例）；4 探针身份与发现（DAP_Info、mDNS）；5 ESP32-C3 的 USB 口；6 USB/IP 虚拟设备；7 USB 主机的注意事项；8 两块探针之间的无线链路（8.1 包，8.2 会话，8.3 控制口操作，8.4 信道）。
 
@@ -89,7 +89,7 @@ CRC8 为反射多项式 `0x8C`、初值 `0xFF`；CRC32 为反射多项式 `0xEDB
 | TCP 客户端断开、串口链路停止 | 连接在这条链路上时 |
 | 5 秒内没有收到任何串口请求 | 连接在串口上时 |
 | USB 总线复位（拔出或主机复位） | 连接在 USB 上时 |
-| 无线会话号变化或为 0，或超过租期没有 ping | 连接在无线远端上时（XRDAP-CH32V307） |
+| 无线会话号变化或为 0，或超过租期没有 ping | 连接在无线远端上时（XRDAP-CH32V3） |
 
 连接不在丢失的那条链路上时，什么也不发生。
 
@@ -117,7 +117,7 @@ USB 的连接和断开（主机打开或关闭 USB、重新枚举）只属于 US
 
 请求长度与命令里的计数字段对不上时返回 0x01，不执行。
 
-回复空间：每条厂商命令执行前，探针先按请求算出回复要多少字节，与这一次能写的空间比较。空间是 DAP_Info 报告的包长（XRDAP-ESP 和 XRDAP-CH32V307 为 1024 字节，XRDAP-F103C8 为 512 字节）；在 `DAP_ExecuteCommands` 里是这个包里还没用掉的部分。厂商命令可以放进 `DAP_ExecuteCommands` 和 `DAP_QueueCommands`，与 CMSIS-DAP 参考实现相同；容器里的命令首尾相接，每条的长度由它自己的内容得出（READ、WRITE、SUB_START 按条目数和条目，INFO 1 字节，SUB_CTRL 2，SUB_READ 3，0x86 按操作：查询 2、保存 3 + ssid_len + 1 + pw_len、清除 3），算不出长度的容器整个回 `7F FF`。空间不到 2 字节时只回一个 `FF`；放不下整条回复时回 `命令号 03`；两种情况都不执行，也不写出给定的空间。READ 的回复为 3 + Σ(3 + size) 字节，WRITE 为 3 + 3 × count，INFO 为 22，SUB_START、SUB_CTRL 为 2，SUB_READ 至少 24。
+回复空间：每条厂商命令执行前，探针先按请求算出回复要多少字节，与这一次能写的空间比较。空间是 DAP_Info 报告的包长（XRDAP-ESP 和 XRDAP-CH32V3 为 1024 字节，XRDAP-F103C8 为 512 字节）；在 `DAP_ExecuteCommands` 里是这个包里还没用掉的部分。厂商命令可以放进 `DAP_ExecuteCommands` 和 `DAP_QueueCommands`，与 CMSIS-DAP 参考实现相同；容器里的命令首尾相接，每条的长度由它自己的内容得出（READ、WRITE、SUB_START 按条目数和条目，INFO 1 字节，SUB_CTRL 2，SUB_READ 3，0x86 按操作：查询 2、保存 3 + ssid_len + 1 + pw_len、清除 3），算不出长度的容器整个回 `7F FF`。空间不到 2 字节时只回一个 `FF`；放不下整条回复时回 `命令号 03`；两种情况都不执行，也不写出给定的空间。READ 的回复为 3 + Σ(3 + size) 字节，WRITE 为 3 + 3 × count，INFO 为 22，SUB_START、SUB_CTRL 为 2，SUB_READ 至少 24。
 
 | 整体状态 | 含义 |
 |---|---|
@@ -185,10 +185,10 @@ n 为 0 时直接访问 `base + final_off`。base 为 0 是合法的（Cortex-M 
 | 0 | 1 | 0x80 |
 | 1 | 1 | 整体状态 |
 | 2 | 1 | 协议版本，当前为 2 |
-| 3 | 4 | 功能位：bit0 READ，bit1 WRITE，bit2 采样，bit3 8 字节访问，bit4 Wi-Fi 配置（0x86），bit5 有控制口（3.7.1），bit6 支持紧凑帧（3.5）；XRDAP-ESP 为 0x7F，XRDAP-CH32V307 为 0x6F，XRDAP-F103C8 为 0x4F（不支持紧凑帧的旧固件分别为 0x3F 或 0x1F、0x2F、0x0F） |
+| 3 | 4 | 功能位：bit0 READ，bit1 WRITE，bit2 采样，bit3 8 字节访问，bit4 Wi-Fi 配置（0x86），bit5 有控制口（3.7.1），bit6 支持紧凑帧（3.5）；XRDAP-ESP 为 0x7F，XRDAP-CH32V3 为 0x6F，XRDAP-F103C8 为 0x4F（不支持紧凑帧的旧固件分别为 0x3F 或 0x1F、0x2F、0x0F） |
 | 7 | 2 | 一个请求或一次采样最多的条目数：32 |
 | 9 | 1 | 最大解引用深度：8 |
-| 10 | 4 | 环形缓冲字节数：XRDAP-ESP 为 16384（ESP32-S2 为 4096），XRDAP-F103C8 和 XRDAP-CH32V307 为 4096（CH32V305 板为 2048） |
+| 10 | 4 | 环形缓冲字节数：XRDAP-ESP 为 16384（ESP32-S2 为 4096），XRDAP-F103C8 和 XRDAP-CH32V3 为 4096（CH32V305 板为 2048） |
 | 14 | 8 | 探针当前时间，µs |
 
 #### 0x81 READ
@@ -506,7 +506,7 @@ SUB_START 的 flags bit1 为 1 时，SUB_READ 的帧改用紧凑编码，直到�
 | 0x04 | CMSIS-DAP 协议版本 | `2.0.0` |
 | 0x05、0x06 | 目标芯片厂商、名称 | 不提供（空） |
 | 0x07 | 板子厂商 | `XRobot` |
-| 0x08 | 板子名 | XRDAP-ESP 与产品相同；XRDAP-F103C8 为 `STLINK-V2`；XRDAP-CH32V307 为板子名，例如 `XR-DAP-WDAP`，CH32V305 板为 `CH32V305-LINKE` |
+| 0x08 | 板子名 | XRDAP-ESP 与产品相同；XRDAP-F103C8 为 `STLINK-V2`；XRDAP-CH32V3 为板子名，例如 `XR-DAP-WDAP`，CH32V305 板为 `CH32V305-LINKE` |
 | 0x09 | 固件版本 | 各固件自己的版本号 |
 
 序列号对 USB、串口、TCP 等各种连接相同，上位机据此认出同一块探针。

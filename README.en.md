@@ -8,7 +8,7 @@ Firmware code shared by the XR-DAP family of CMSIS-DAP probes, built on [libxr](
 |---|---|---|
 | [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3, ESP32-S2, ESP32-C3, ESP32 | one execution task runs `Run()`, ticks counted by a gptimer |
 | [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8) | STM32F103 (STLINK-V2 board) | the main loop runs `Run()`, no RTOS |
-| XRDAP-CH32V307 | CH32V307, CH32V305 | the main loop runs `Run()`, no RTOS, ticks counted by TIM7 |
+| [XRDAP-CH32V3](https://github.com/Jiu-xiao/XRDAP-CH32V3) | CH32V307, CH32V305 | the main loop runs `Run()`, no RTOS, ticks counted by TIM7 |
 
 The host tool is [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host). The protocol between probe and host is in [docs/protocol.en.md](docs/protocol.en.md): section 1 is the serial frame, section 3 the vendor extension (protocol version 2), the one-link-at-a-time rule and the control port, section 4 the probe identity.
 
