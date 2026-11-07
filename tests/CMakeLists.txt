@@ -87,3 +87,11 @@ xrdap_add_cxx_test(xrdap_core_vendor 60 ${XRDAP_VENDOR_TESTS}
 # word_atomics.cmake).
 xrdap_add_test(xrdap_core_word_atomics 60 ${CMAKE_COMMAND} -DROOT=${XRDAP_CORE_ROOT} -P
                "${CMAKE_CURRENT_LIST_DIR}/word_atomics.cmake")
+
+# Python 测试工具自身的检查，不接探针；xrdap_test 要 Python 3.11 / The Python test tool's
+# own checks, no probe attached; xrdap_test needs Python 3.11.
+find_package(Python3 3.11 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  xrdap_add_test(xrdap_test_coverage 60 ${Python3_EXECUTABLE} -B -m xrdap_test coverage)
+  xrdap_add_test(xrdap_tool_unit 60 ${Python3_EXECUTABLE} -B -m unittest discover -s tool_unit)
+endif()

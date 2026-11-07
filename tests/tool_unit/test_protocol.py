@@ -1,14 +1,10 @@
 """The tool's encoders and decoders against the byte examples of docs/protocol.md."""
 
-import os
-import sys
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from xrdap_test import cli, link  # noqa: E402
-from xrdap_test.vendor import Item, decode_frames  # noqa: E402
-from xrdap_test.vendor import Vendor as VendorClient  # noqa: E402
+from xrdap_test import link
+from xrdap_test.vendor import Item, decode_frames
+from xrdap_test.vendor import Vendor as VendorClient
 
 
 def hexb(text):
@@ -142,12 +138,3 @@ class ResponseLengthScan(unittest.TestCase):
             self.assertEqual(self.response_length(request), n)
             self.assertLessEqual(request[2 + 2], 255)  # DAP_Transfer count
             self.assertLessEqual(len(request), 1024)
-
-
-class Coverage(unittest.TestCase):
-    def test_case_table_matches_registry(self):
-        self.assertEqual(cli.cmd_coverage(None), 0)
-
-
-if __name__ == "__main__":
-    unittest.main()
