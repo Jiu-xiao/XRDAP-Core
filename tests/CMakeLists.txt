@@ -45,6 +45,10 @@ if(TRUE)
                                                 -fsanitize=address,undefined
                                                 -fno-sanitize-recover=all)
   target_link_options(xrdap_core_unit PRIVATE -fsanitize=address,undefined)
+  # 读时间走虚拟时钟（unit/radio_clock.cpp）/ Reading the time goes to the virtual clock
+  # (unit/radio_clock.cpp).
+  target_link_options(xrdap_core_unit PRIVATE
+                      -Wl,--wrap=_ZN5LibXR8Timebase15GetMicrosecondsEv)
   target_compile_options(xrdap_core_compile PRIVATE -Wall -Wextra)
   # libxr 的 Linux 系统层不带 USB 设备驱动，这里只为取得 DAP 类的声明加上它们的目录 /
   # libxr's Linux system layer leaves out the USB device drivers; their directories are
