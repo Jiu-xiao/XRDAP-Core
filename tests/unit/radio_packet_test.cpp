@@ -347,6 +347,26 @@ TEST(radio_channel_table)
   CHECK(!table.Scanned() && table.Banned(80, 1));
 }
 
+// 拉黑只算 10 分钟，过了 32 位微秒的回绕（约 71 分钟）也不回来，中间没人问过也一样 / A
+// ban lasts 10 minutes, so it does not come back past the wrap of 32-bit microseconds
+// (about 71 minutes), even when nobody asked in between.
+TEST(radio_ban_stays_over_past_the_wrap)
+{
+  constexpr uint64_t kWrap = 1ULL << 32;
+  ChannelTable table;
+  table.Record(31, {5, -95});
+  table.Ban(31, 1000);
+  CHECK(!table.Banned(31, 1000 + kWrap));
+  CHECK(!table.Banned(31, 1000 + kWrap + 600'000'000 - 1));
+  CHECK_EQ(table.Best(1000 + kWrap), 31);
+  // 问过不改变答案 / Asking does not change the answer.
+  const ChannelTable& asked = table;
+  table.Ban(31, kWrap);
+  CHECK(asked.Banned(31, kWrap + 600'000'000 - 1));
+  CHECK(asked.Banned(31, kWrap + 600'000'000 - 1));
+  CHECK(!asked.Banned(31, kWrap + 600'000'000));
+}
+
 // 每 200 次往返看一次，重发多于 10 次算差 / Every 200 exchanges; more than 10 retried
 // ones is bad.
 TEST(radio_retry_window)

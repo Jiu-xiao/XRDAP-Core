@@ -24,6 +24,10 @@ inline uint32_t NowUs()
   return static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds());
 }
 
+/// 不回绕的时间，给隔很久还要比较的记录用 / Time that does not wrap, for records compared
+/// long afterwards.
+inline uint64_t NowUs64() { return LibXR::Timebase::GetMicroseconds(); }
+
 /// @brief 探针自己的射频 / The probe's own radio.
 /// @tparam RadioT 收发器驱动（transceiver.hpp）/ Transceiver driver (transceiver.hpp).
 template <typename RadioT>
