@@ -142,7 +142,8 @@ class Capture:
 
 
 def capture(vendor, items, seconds, period_us, poll_s=0.0, max_bytes=0xFFFF):
-    """Start sampling, poll SUB_READ for `seconds`, stop and drain."""
+    """Start sampling, poll SUB_READ for `seconds`, stop and drain. A failed SUB_READ stops
+    sampling before it raises: the probe refuses SUB_START while sampling runs (protocol 3.4)."""
     frames, last = [], SubRead(0)
     status = vendor.start(period_us, items)
     if status != OK:
@@ -152,6 +153,7 @@ def capture(vendor, items, seconds, period_us, poll_s=0.0, max_bytes=0xFFFF):
     while time.monotonic() < end:
         last = vendor.sub_read(items, max_bytes)
         if last.status != OK:
+            vendor.stop()
             raise RuntimeError(f"SUB_READ status {last.status}")
         frames += last.frames
         if poll_s and not last.remaining:
