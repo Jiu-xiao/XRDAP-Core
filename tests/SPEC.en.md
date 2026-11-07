@@ -305,7 +305,7 @@ STAB-01: the 8-item divider group runs for `--long-s` (default 3600 s), with the
 
 STAB-02: in the flash_test region, loop "write random 16 KiB and verify" for `--long-s`. Pass: every verification succeeds; logs of failures are saved separately.
 
-STAB-03 (assisted): during 1 ms sampling of the 4-variable group, unplug the probe USB (or USB serial), and plug it back after 2 s. Pass: it responds again within 30 s; the remaining bytes of the buffer no longer grow (sampling has stopped); after reconnecting, SUB_SET succeeds and at least 500 frames arrive within 1 s. The recovery time is recorded.
+STAB-03 (assisted): during 1 ms sampling of the 4-variable group, unplug the probe USB (or USB serial), and plug it back after 2 s. Pass: it responds again within 30 s; the remaining bytes of the buffer no longer grow (sampling has stopped); after reconnecting, SUB_START succeeds and at least 500 frames arrive within 1 s. The recovery time is recorded.
 
 STAB-04 (assisted): power off the target during sampling. Pass: while the power is off the probe still answers SUB_READ (the failed-item count is recorded in the result); after power is restored, reconnecting and sampling work normally.
 
