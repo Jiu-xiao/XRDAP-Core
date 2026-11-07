@@ -62,6 +62,20 @@ add_library(xrdap_core_compile OBJECT "${CMAKE_CURRENT_LIST_DIR}/compile/all_hea
 target_include_directories(xrdap_core_compile PRIVATE ${XRDAP_TEST_INCLUDE_DIRS})
 target_link_libraries(xrdap_core_compile PRIVATE xr)
 
+# 每个头文件单独也能编译，不靠别的头文件先把它要的东西带进来 / Every header also compiles on
+# its own, without another header bringing in what it needs first.
+file(GLOB_RECURSE XRDAP_HEADERS RELATIVE "${XRDAP_CORE_ROOT}" CONFIGURE_DEPENDS
+     "${XRDAP_CORE_ROOT}/xrdap/*.hpp")
+foreach(header ${XRDAP_HEADERS})
+  string(MAKE_C_IDENTIFIER "${header}" name)
+  set(source "${CMAKE_CURRENT_BINARY_DIR}/header_alone/${name}.cpp")
+  file(GENERATE OUTPUT "${source}" CONTENT "#include \"${header}\"\n")
+  list(APPEND XRDAP_HEADER_ALONE_SOURCES "${source}")
+endforeach()
+add_library(xrdap_core_header_alone OBJECT ${XRDAP_HEADER_ALONE_SOURCES})
+target_include_directories(xrdap_core_header_alone PRIVATE ${XRDAP_TEST_INCLUDE_DIRS})
+target_link_libraries(xrdap_core_header_alone PRIVATE xr)
+
 file(GLOB XRDAP_UNIT_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/unit/*.cpp")
 xrdap_add_cxx_test(xrdap_core_unit 300 ${XRDAP_UNIT_TESTS} ${XRDAP_CORE_PURE_SOURCES})
 # 读时间走虚拟时钟（unit/radio_clock.cpp）/ Reading the time goes to the virtual clock

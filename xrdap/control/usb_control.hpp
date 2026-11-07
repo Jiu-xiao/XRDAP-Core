@@ -29,6 +29,7 @@
 #include <cstring>
 
 #include "libxr_def.hpp"
+#include "libxr_type.hpp"
 #include "xrdap/session/executor.hpp"
 
 namespace XrDap::Control
