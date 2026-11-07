@@ -117,9 +117,8 @@ class MemAp
   /// @param ec 事务的返回码 / Return code of the transaction.
   /// @param ack 事务的 ack，按引用传入 / The transaction's ack, taken by reference.
   /// @note 实参 `swd_.Xxx(ack)` 和 `ack` 的求值顺序没有规定，传值时不开优化会先读到调用前
-  ///       的 NO_ACK（V305-2）/ The evaluation order of `swd_.Xxx(ack)` and `ack` is
-  ///       unspecified; passed by value, an unoptimised build reads the NO_ACK from
-  ///       before the call (V305-2).
+  ///       的 NO_ACK / The evaluation order of `swd_.Xxx(ack)` and `ack` is unspecified;
+  ///       passed by value, an unoptimised build reads the NO_ACK from before the call.
   bool TxnOk(LibXR::ErrorCode ec, const Ack& ack);
 
   bool SetSize(ApState& st, uint8_t size, bool increment = false);

@@ -62,8 +62,8 @@ class RemoteLink
       }
       if (port_.Channel() != kControlChannel && now - heard_host_us_ >= kChannelSilenceUs)
       {
-        port_.TuneTo(
-            kControlChannel);  // 主机不在这个信道上了 / the host left this channel
+        // 主机不在这个信道上了 / The host left this channel.
+        port_.TuneTo(kControlChannel);
       }
       return;
     }
@@ -259,10 +259,10 @@ class RemoteLink
     answering_ = true;
   }
 
-  // 推进应答：上一包发完就发下一包，中间不回接收；全部发出后做等着的事。返回 true
-  // 表示还没 发完。 Advance the answer: send the next packet once the previous one is
-  // out, without receiving in between; when all are out, do what was waiting. Returns
-  // true while the answer is not finished.
+  // 推进应答：上一包发完就发下一包，中间不回接收；全部发出后做等着的事。返回 true 表示
+  // 还没发完。 / Advance the answer: send the next packet once the previous one is out,
+  // without receiving in between; when all are out, do what was waiting. Returns true
+  // while the answer is not finished.
   bool PumpAnswer()
   {
     if (!answering_)

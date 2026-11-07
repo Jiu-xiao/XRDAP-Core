@@ -18,10 +18,9 @@
 // link id from their two chip UIDs and the identity from the link id.
 //
 // Pairing: two probes in pairing both use the default identity at the high rate on F and
-// send a
-// HELLO packet every 20 ms or so:
-//   [0] 5 (packet.hpp)  [1..12] own chip UID  [13..24] the UID of the peer heard so
-//   far, or zeros
+// send a HELLO packet every 20 ms or so:
+//   [0] 5 (packet.hpp)  [1..12] own chip UID
+//   [13..24] the UID of the peer heard so far, or zeros
 // A probe that hears a HELLO naming itself is done; it keeps answering for another second
 // so that the other probe hears its own UID as well. Pairing the same two probes again
 // gives the same identity.

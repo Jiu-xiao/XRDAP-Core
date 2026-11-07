@@ -2,11 +2,10 @@
 #pragma once
 
 // 两块配对探针之间经无线的 DAP 会话。主机探针（接在电脑的 USB 上）把电脑的 DAP 命令经
-// 无线转发出去，再把应答交回
-// USB；远端探针（接目标）执行它们。这个类决定探针现在是什么角色，
-// 并处理控制口操作；具体的事在 host_link.hpp、channel_picker.hpp、remote_link.hpp、
-// pairing.hpp 和 radio_port.hpp。包格式见 packet.hpp，会话规则见
-// session.hpp，设置和控制口 操作见 settings.hpp。
+// 无线转发出去，再把应答交回 USB；远端探针（接目标）执行它们。这个类决定探针现在是什么
+// 角色，并处理控制口操作；具体的事在 host_link.hpp、channel_picker.hpp、remote_link.hpp、
+// pairing.hpp 和 radio_port.hpp。包格式见 packet.hpp，会话规则见 session.hpp，设置和控制
+// 口操作见 settings.hpp。
 //
 // 角色：AUTO 设置（默认）下，配对的探针没有自己的调试会话时当远端。USB 上的 DAP_Connect
 // 开始一个会话：探针用新会话号 PING 对方，对方应答时会话走无线，直到下一个 DAP_Connect 或
