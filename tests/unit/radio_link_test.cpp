@@ -25,32 +25,14 @@ namespace
 class FakeRadio
 {
  public:
-  enum class Modulation : uint8_t
-  {
-    LORA,
-    GFSK,
-    FLRC
-  };
-  struct Config
-  {
-    Modulation modulation = Modulation::LORA;
-    uint32_t frequency_hz = 0;
-    int8_t tx_power_dbm = 0;
-    uint8_t sync_word[4] = {};
-    uint16_t crc_seed = 0;
-  };
-
-  LibXR::ErrorCode Start(const Config& config)
+  LibXR::ErrorCode Start(const LinkParams& config)
   {
     config_ = config;
     rx_.clear();
     ++starts;
     return LibXR::ErrorCode::OK;
   }
-  uint8_t MaxPayload() const
-  {
-    return config_.modulation == Modulation::FLRC ? 127 : 255;
-  }
+  uint8_t MaxPayload() const { return config_.rate == Rate::kLow ? 127 : 255; }
   void PrepareSend() {}
   LibXR::ErrorCode Tune(uint32_t frequency_hz)
   {
@@ -128,10 +110,10 @@ class FakeRadio
 
   bool SameIdentity(const FakeRadio& other) const
   {
-    return other.config_.modulation == config_.modulation &&
+    return other.config_.rate == config_.rate &&
            other.config_.frequency_hz == config_.frequency_hz &&
            other.config_.crc_seed == config_.crc_seed &&
-           std::memcmp(other.config_.sync_word, config_.sync_word, 4) == 0;
+           std::memcmp(other.config_.address, config_.address, 4) == 0;
   }
 
   FakeRadio* peer = nullptr;
@@ -154,7 +136,7 @@ class FakeRadio
  private:
   bool sending_ = false;
   uint32_t on_air_ = 0;
-  Config config_{};
+  LinkParams config_{};
   std::deque<std::vector<uint8_t>> rx_;
 };
 
@@ -249,10 +231,10 @@ struct Pair
   FakeRadio radio_a, radio_b;
   FakeExec exec_a, exec_b;
   FakeStore store_a, store_b;
-  Link a{radio_a, exec_a, store_a, kUidA, {}};
-  Link b{radio_b, exec_b, store_b, kUidB, {}};
+  Link a{radio_a, exec_a, store_a, kUidA};
+  Link b{radio_b, exec_b, store_b, kUidB};
 
-  explicit Pair(bool paired, Modulation modulation = Modulation::GFSK)
+  explicit Pair(bool paired, Rate rate = Rate::kHigh)
   {
     (void)RadioTestTime();
     radio_a.peer = &radio_b;
@@ -263,7 +245,7 @@ struct Pair
     Settings s;
     s.paired = paired ? 1 : 0;
     s.link_id = paired ? LinkId(kUidA, kUidB) : 0;
-    s.modulation = modulation;
+    s.rate = rate;
     a.Begin(s, false);
     b.Begin(s, false);
   }
@@ -329,7 +311,7 @@ std::vector<uint8_t> Expected(const std::vector<uint8_t>& c)
 // it and the remote's connection lapses.
 TEST(radio_link_session)
 {
-  for (Modulation m : {Modulation::GFSK, Modulation::FLRC})
+  for (Rate m : {Rate::kHigh, Rate::kLow})
   {
     Pair p(true, m);
     CHECK(p.a.CurrentRole() == Role::REMOTE && p.b.CurrentRole() == Role::REMOTE);
@@ -862,8 +844,8 @@ struct SlowSavePair
   FakeExec exec_a, exec_b;
   FakeStore store_a;
   SlowStore store_b;
-  Link a{radio_a, exec_a, store_a, kUidA, {}};
-  Link b{radio_b, exec_b, store_b, kUidB, {}};
+  Link a{radio_a, exec_a, store_a, kUidA};
+  Link b{radio_b, exec_b, store_b, kUidB};
 
   explicit SlowSavePair(uint32_t ms) : store_b(ms)
   {
@@ -880,7 +862,7 @@ struct SlowSavePair
     Settings s;
     s.paired = 1;
     s.link_id = LinkId(kUidA, kUidB);
-    s.modulation = Modulation::GFSK;
+    s.rate = Rate::kHigh;
     a.Begin(s, false);
     b.Begin(s, false);
     exec_b.control = [this](const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
@@ -896,7 +878,7 @@ TEST(radio_link_forward_slow_save)
 {
   PastSilenceLimit();
   const std::vector<std::vector<uint8_t>> requests = {
-      {Op::kForward, Op::kSetModulation, 1},
+      {Op::kForward, Op::kSetRate, 1},
       {Op::kForward, Op::kSetRole, static_cast<uint8_t>(RoleSetting::LOCAL)},
       {Op::kForward, Op::kSetRole, static_cast<uint8_t>(RoleSetting::AUTO)},
       {Op::kForward, Op::kChannel, 1, 10},

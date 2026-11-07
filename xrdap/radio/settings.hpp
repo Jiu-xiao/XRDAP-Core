@@ -12,6 +12,7 @@
 
 #include "xrdap/radio/channel.hpp"
 #include "xrdap/radio/identity.hpp"
+#include "xrdap/radio/transceiver.hpp"
 
 namespace XrDap::Radio
 {
@@ -33,13 +34,6 @@ enum class Role : uint8_t
   REMOTE = 2,  ///< 执行无线收到的 DAP 命令 / execute DAP commands from the radio
 };
 
-/// 调制方式 / Modulation.
-enum class Modulation : uint8_t
-{
-  GFSK = 0,  ///< 2 Mb/s，255 字节包 / 255-byte packets
-  FLRC = 1,  ///< 1.3 Mb/s，127 字节包 / 127-byte packets
-};
-
 /// 配对状态 / Pairing state.
 enum class PairState : uint8_t
 {
@@ -53,7 +47,7 @@ enum class PairState : uint8_t
 struct Settings
 {
   RoleSetting role = RoleSetting::AUTO;
-  Modulation modulation = Modulation::GFSK;
+  Rate rate = Rate::kHigh;
   uint8_t paired = 0;  ///< 配对后为 1；0 用默认身份 / 1 once paired; 0 uses the default
                        ///< identity
   uint8_t reserved = 0;
@@ -90,8 +84,8 @@ inline constexpr uint8_t kStats = 0x11;
 inline constexpr uint8_t kSettings = 0x13;
 /// `14 setting` 保存角色设置（RoleSetting）/ store the role setting (RoleSetting)
 inline constexpr uint8_t kSetRole = 0x14;
-/// `15 modulation` 保存调制方式（Modulation）/ store the modulation (Modulation)
-inline constexpr uint8_t kSetModulation = 0x15;
+/// `15 rate` 保存速率（Rate）/ store the rate (Rate)
+inline constexpr uint8_t kSetRate = 0x15;
 /// `16` 忘掉配对 / forget the pairing
 inline constexpr uint8_t kUnpair = 0x16;
 /// `19` 读信道，`19 mode channel` 设：mode 0 自动，1 锁定（保存）；应答见 ChannelAnswer
@@ -126,7 +120,7 @@ struct __attribute__((packed)) SettingsAnswer
   uint8_t op;
   uint8_t status;
   uint8_t role_setting;  ///< RoleSetting
-  uint8_t modulation;    ///< Modulation
+  uint8_t rate;          ///< Rate
   uint8_t paired;
   uint8_t safe_mode;   ///< 1：安全模式，设置不生效 / 1: safe mode, settings not applied
   uint8_t role;        ///< Role

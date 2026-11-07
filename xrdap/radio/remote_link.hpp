@@ -152,9 +152,6 @@ class RemoteLink
   // the heartbeat (1 s) plus a scan, shorter than the lease (3 s), so that returning to F
   // does not end the session.
   static constexpr uint32_t kChannelSilenceUs = 2'500'000;
-  // 命令的分片紧跟着到，等这么久还没到就放弃。 / The fragments of a command follow each
-  // other; give up after this long without the next one.
-  static constexpr uint32_t kFragmentWaitUs = 3'000;
 
   // R4：清掉结束的会话留下的东西，连接在无线上时作废。 / R4: drop what the ended session
   // left behind; a connection on the radio lapses.
@@ -199,11 +196,11 @@ class RemoteLink
   }
 
   // 收下命令的一个分片；其余分片紧跟着到，在这里接着收，不等主循环下一圈。命令齐了、这一串
-  // 也发完了（到了最后一片，或 kFragmentWaitUs 没有下一片）时为 true：重发可能在中途就把
+  // 也发完了（到了最后一片，或 kPacketWaitUs 没有下一片）时为 true：重发可能在中途就把
   // 命令拼齐，而主机发射时听不到应答。
   // Take one fragment of a command; the others follow right behind it and are received
   // here instead of on the next turns of the main loop. True once the command is complete
-  // and the burst is over (its last fragment arrived, or none for kFragmentWaitUs): a
+  // and the burst is over (its last fragment arrived, or none for kPacketWaitUs): a
   // resend can complete the command halfway, and the host cannot hear an answer while it
   // transmits.
   bool ReceiveCommand(int n)
@@ -214,7 +211,7 @@ class RemoteLink
     auto added = commands_.Add(rx, n, port_.Fragment());
     bool complete = IsComplete(added);
     bool last = IsLastFragment(rx);
-    uint32_t deadline = NowUs() + kFragmentWaitUs;
+    uint32_t deadline = NowUs() + kPacketWaitUs;
     while ((complete ? !last : added == Reassembler::Result::INCOMPLETE) &&
            static_cast<int32_t>(deadline - NowUs()) > 0)
     {
@@ -234,7 +231,7 @@ class RemoteLink
       added = commands_.Add(rx, m, port_.Fragment());
       complete = complete || IsComplete(added);
       last = IsLastFragment(rx);
-      deadline = NowUs() + kFragmentWaitUs;
+      deadline = NowUs() + kPacketWaitUs;
     }
     return complete;
   }

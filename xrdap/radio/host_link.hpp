@@ -161,15 +161,13 @@ class HostLink
 
  private:
   // 主机等待：第一次等命令的执行加第一个应答包，之后每次加倍，至多 kMaxWaitUs，直到总共
-  // 过了 kBudgetUs 加执行时间。每到一个应答包就再等 kFragmentWaitUs，长应答不会被截断。
+  // 过了 kBudgetUs 加执行时间。每到一个应答包就再等 kPacketWaitUs，长应答不会被截断。
   // 远端还在执行时重发的命令无害：远端从缓存应答。
   // Host waits: the first wait covers the command's execution plus the first answer
   // packet; every further wait doubles, up to kMaxWaitUs, until kBudgetUs (plus the
   // execution) has passed. Each answer packet that arrives extends the wait by
-  // kFragmentWaitUs, so a long answer is not cut off. A command sent again while the
+  // kPacketWaitUs, so a long answer is not cut off. A command sent again while the
   // remote still executes it is harmless: the remote answers it from its cache.
-  static constexpr uint32_t kFirstWaitUs = 3'000;
-  static constexpr uint32_t kFragmentWaitUs = 3'000;
   static constexpr uint32_t kMaxWaitUs = 200'000;
   static constexpr uint32_t kBudgetUs = 1'000'000;
   // 控制请求可能让远端保存设置，写 Flash 时它听不到也不应答。第一次等待要盖住这段时间，
@@ -178,16 +176,16 @@ class HostLink
   // neither hears nor answers. The first wait covers that time, or the rule below changes
   // channel while it writes. The answer ends the wait as soon as it arrives.
   static constexpr uint32_t kControlExecutionUs = 250'000;
-  // 收不到包的接收机：主机的 SX1281 可能停止接收而发射照常：它停在接收、一个 IRQ 都没有，
-  // 远端却听到每次重发并应答；重新进入接收没用，复位有用。信道被堵时表现相同。发了
+  // 收不到包的接收机：收发器可能停止接收而发射照常（在 SX1281 上见过）：它停在接收、什么
+  // 都收不到，远端却听到每次重发并应答；重新进入接收没用，复位有用。信道被堵时表现相同。发了
   // kDeafSends 次、kDeafUs 内一个包（好坏都算）都没收到时，转发在数据信道上换信道，
   // 在 F 或锁定的信道上复位射频，一次之后继续。
-  // A deaf receiver: the host's SX1281 can stop receiving while its transmit still works:
-  // it stays in receive with no IRQ at all, while the remote hears every resend and
-  // answers it; entering receive again does not help, a reset does. A jammed channel
-  // looks the same. After kDeafSends sends and kDeafUs without any packet, good or bad,
-  // the forward changes channel when on a data channel, and resets the radio on F or on a
-  // locked channel, once, and goes on.
+  // A deaf receiver: a transceiver can stop receiving while its transmit still works
+  // (seen on SX1281): it stays in receive and gets nothing, while the remote hears every
+  // resend and answers it; entering receive again does not help, a reset does. A jammed
+  // channel looks the same. After kDeafSends sends and kDeafUs without any packet, good
+  // or bad, the forward changes channel when on a data channel, and resets the radio on F
+  // or on a locked channel, once, and goes on.
   static constexpr uint32_t kDeafSends = 3;
   static constexpr uint32_t kDeafUs = 60'000;
   // 这么久没听到对方，下一条命令先 PING。 / After this long without hearing the peer,
@@ -217,7 +215,7 @@ class HostLink
     ++stats_.commands;
     const uint32_t budget = kBudgetUs + execution_us;
     Reassembler answers(resp, cap);
-    uint32_t wait = kFirstWaitUs + execution_us;
+    uint32_t wait = kPacketWaitUs + execution_us;
     const uint32_t begin = NowUs();
     uint32_t sends = 0;
     uint32_t heard = begin;  // 上一个包，好坏都算 / last packet, good or bad
@@ -259,7 +257,7 @@ class HostLink
           channels_.NoteExchange(sends > 1U);
           return true;
         }
-        deadline = NowUs() + kFragmentWaitUs;
+        deadline = NowUs() + kPacketWaitUs;
       }
       if (!reset && sends >= kDeafSends && NowUs() - heard >= kDeafUs)
       {
