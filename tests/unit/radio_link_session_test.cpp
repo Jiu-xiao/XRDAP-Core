@@ -392,3 +392,23 @@ TEST(radio_link_session_across_the_wrap)
     CHECK_EQ(sent.remote, far.remote);
   }
 }
+
+// 转发失败时的应答也不越过给它的空间 / The answer of a failed forward stays within the
+// space it was given.
+TEST(radio_link_failed_forward_stays_in_its_space)
+{
+  for (const uint16_t cap : {uint16_t{0}, uint16_t{1}, uint16_t{2}})
+  {
+    Pair p(true);
+    (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+    p.air.lose = [](const Flight& f) { return f.data[0] == kAnswer; };
+    uint8_t resp[3] = {0x55, 0x55, 0x55};
+    uint16_t out = 0xFFFF;
+    const auto c = Command(Byte(DapCmd::TRANSFER), 16);
+    CHECK(p.exec_a.UsbInto(c, resp, cap, out));
+    CHECK_EQ(out, cap);
+    CHECK_EQ(resp[0], cap >= 1U ? c[0] : 0x55);
+    CHECK_EQ(resp[1], cap >= 2U ? Byte(DapStatus::ERROR) : 0x55);
+    CHECK_EQ(resp[2], 0x55);
+  }
+}
