@@ -114,7 +114,8 @@ class FakeRadio
     air_.Land();
     params_ = params;
     rx_.clear();
-    EnterReceive();
+    tx_end_us_ = 0;
+    Listen();
     ++starts;
     return LibXR::ErrorCode::OK;
   }
@@ -126,31 +127,34 @@ class FakeRadio
     CHECK(size >= 1U && size <= MaxPayload());
     air_.Land();
     const uint64_t now = VirtualClock::Read();
-    if (transmitting_ && now < tx_end_us_)
+    if (now < tx_end_us_)
     {
       return LibXR::ErrorCode::BUSY;
     }
     // 2 Mb/s 或 1.3 Mb/s，加前导码和包头 / 2 Mb/s or 1.3 Mb/s, plus preamble and header.
     const uint32_t us_per_byte = params_.rate == Rate::kLow ? 7U : 4U;
     tx_end_us_ = now + 40U + size * us_per_byte;
-    transmitting_ = true;
+    listening_since_us_ = tx_end_us_;
+    return_due_ = true;
     ++sent;
     air_.Launch({this, params_, now, tx_end_us_, false, false,
                  std::vector<uint8_t>(data, data + size)});
     return LibXR::ErrorCode::OK;
   }
 
-  bool Sending() const { return transmitting_ && VirtualClock::Read() < tx_end_us_; }
+  bool Sending() const { return VirtualClock::Read() < tx_end_us_; }
 
   void Poll()
   {
     air_.Land();
-    ReturnToReceive();
+    if (return_due_ && !Sending())
+    {
+      return_due_ = false;
+      ++receive_entries;
+    }
     if (on_poll)
     {
-      polling_ = true;
       on_poll();
-      polling_ = false;
     }
   }
 
@@ -179,7 +183,7 @@ class FakeRadio
     air_.Land();
     params_.frequency_hz = frequency_hz;
     rx_.clear();
-    EnterReceive();
+    Listen();
     return LibXR::ErrorCode::OK;
   }
 
@@ -198,23 +202,18 @@ class FakeRadio
   uint32_t Rearms() const { return rearms; }
   uint32_t Restarts() const { return starts; }
 
-  // 谁听得到谁：这一包从头到尾都在接收、同频、同速率的收发器听得到，高速率还要同地址（低
-  // 速率不比地址，协议 8.4 节）；CRC 初值不同时是坏包。发射时听不到，发完到下一次 Poll()
-  // 也听不到。别的探针嵌套在 Poll() 里跑时，发射一结束就算回到接收：真机上这时已是下一次
-  // Poll() 了。
+  // 谁听得到谁：这一包从头到尾都在接收、同频、同速率的收发器听得到，高速率还要同地址
+  // （低速率不比地址，协议 8.4 节）；CRC 初值不同时是坏包。发射一结束就算回到接收，不等
+  // Poll()：单线程里主机阻塞时对方的主循环可能轮不到跑，真机上这时早已跑过 Poll() 了。
   // Who hears whom: a transceiver in receive for all of the packet, on the same frequency
   // and at the same rate; the high rate also needs the same address (the low rate does
-  // not compare it, protocol section 8.4). Another CRC seed makes it a bad packet. It
-  // hears nothing while transmitting, or after that until the next Poll(). While other
-  // probes run nested in its Poll(), it is back in receive as soon as the transmission
-  // ends: on real hardware that would be the next Poll() already.
+  // not compare it, protocol section 8.4). Another CRC seed makes it a bad packet. It is
+  // back in receive as soon as a transmission ends, without waiting for Poll(): on one
+  // thread a probe's main loop may not get to run while the other is blocked, where on
+  // real hardware Poll() would have run long before.
   void Hear(const Flight& flight)
   {
-    if (polling_)
-    {
-      ReturnToReceive();
-    }
-    if (flight.from == this || transmitting_ || flight.begin_us < listening_since_us_ ||
+    if (flight.from == this || flight.begin_us < listening_since_us_ ||
         flight.params.frequency_hz != params_.frequency_hz ||
         flight.params.rate != params_.rate ||
         (params_.rate != Rate::kLow &&
@@ -246,30 +245,20 @@ class FakeRadio
   uint32_t rearms = 0;
   uint32_t starts = 0;
   uint32_t rssi_reads = 0;
-  uint32_t receive_entries =
-      0;  ///< 发完转回接收的次数 / Returns to receive after sending
+  // Poll() 看到发完的次数，连着发的包之间没有 / How often Poll() saw a transmission end;
+  // packets sent right after each other do not count.
+  uint32_t receive_entries = 0;
 
  private:
-  void EnterReceive()
+  void Listen()
   {
-    transmitting_ = false;
+    return_due_ = false;
     listening_since_us_ = VirtualClock::Read();
-  }
-
-  void ReturnToReceive()
-  {
-    if (transmitting_ && VirtualClock::Read() >= tx_end_us_)
-    {
-      transmitting_ = false;
-      listening_since_us_ = tx_end_us_;
-      ++receive_entries;
-    }
   }
 
   Air& air_;
   LinkParams params_{};
-  bool transmitting_ = false;
-  bool polling_ = false;
+  bool return_due_ = false;
   uint64_t tx_end_us_ = 0;
   uint64_t listening_since_us_ = 0;
   std::deque<std::vector<uint8_t>> rx_;
@@ -529,6 +518,16 @@ inline uint8_t ControlStatus(Link& link, std::vector<uint8_t> req,
     answer->assign(resp, resp + out);
   }
   return out >= 2 ? resp[1] : 0xFF;
+}
+
+inline StatsAnswer ReadStats(Link& link)
+{
+  std::vector<uint8_t> bytes;
+  CHECK_EQ(ControlStatus(link, {Op::kStats}, &bytes), Status::kOk);
+  StatsAnswer answer{};
+  CHECK_EQ(bytes.size(), sizeof(answer));
+  std::memcpy(&answer, bytes.data(), sizeof(answer));
+  return answer;
 }
 
 }  // namespace RadioTest
