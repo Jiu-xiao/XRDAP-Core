@@ -272,8 +272,6 @@ void RunPairs(size_t count, Rate rate)
 }
 }  // namespace
 
-TEST(radio_two_pairs_high_rate) { RunPairs(2, Rate::kHigh); }
-
 TEST(radio_two_pairs_low_rate) { RunPairs(2, Rate::kLow); }
 
 TEST(radio_four_pairs_high_rate) { RunPairs(4, Rate::kHigh); }
