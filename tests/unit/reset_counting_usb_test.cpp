@@ -16,7 +16,7 @@ using LibXR::USB::DeviceEvent;
 class FakeClass
 {
  public:
-  explicit FakeClass(int tag) : tag(tag) {}
+  explicit FakeClass(int) {}
   virtual ~FakeClass() = default;
   virtual void OnDeviceEvent(bool in_isr, DeviceEvent event, uint8_t endpoint = 0)
   {
@@ -25,7 +25,6 @@ class FakeClass
     last_event = event;
     last_endpoint = endpoint;
   }
-  int tag;
   int seen = 0;
   bool last_isr = false;
   DeviceEvent last_event = DeviceEvent::RESET;
@@ -33,21 +32,22 @@ class FakeClass
 };
 }  // namespace
 
+// libxr 经基类指针调用 / libxr calls through the base pointer.
 TEST(ResetCountingUsbCountsOnlyResets)
 {
   XrDap::ResetCountingUsb<FakeClass> usb(7);
-  CHECK_EQ(usb.tag, 7);
+  FakeClass& as_base = usb;
   CHECK_EQ(usb.BusResets().load(), 0U);
-  usb.OnDeviceEvent(true, DeviceEvent::RESET, 0);
-  usb.OnDeviceEvent(false, DeviceEvent::ENDPOINT_RESUMED, 2);
-  usb.OnDeviceEvent(true, DeviceEvent::RESET, 0);
+  as_base.OnDeviceEvent(true, DeviceEvent::RESET, 0);
+  CHECK_EQ(usb.BusResets().load(), 1U);
+  as_base.OnDeviceEvent(false, DeviceEvent::ENDPOINT_RESUMED, 2);
+  CHECK_EQ(usb.BusResets().load(), 1U);
+  as_base.OnDeviceEvent(true, DeviceEvent::RESET, 0);
   CHECK_EQ(usb.BusResets().load(), 2U);
 }
 
 TEST(ResetCountingUsbPassesEveryEventOn)
 {
-  // libxr 经基类指针调用；事件原样交给 Base / libxr calls through the base pointer; the
-  // event reaches Base unchanged.
   XrDap::ResetCountingUsb<FakeClass> usb(1);
   FakeClass& as_base = usb;
   as_base.OnDeviceEvent(true, DeviceEvent::ENDPOINT_RESUMED, 3);
@@ -55,9 +55,9 @@ TEST(ResetCountingUsbPassesEveryEventOn)
   CHECK(usb.last_isr);
   CHECK(usb.last_event == DeviceEvent::ENDPOINT_RESUMED);
   CHECK_EQ(usb.last_endpoint, 3U);
-  CHECK_EQ(usb.BusResets().load(), 0U);
-  as_base.OnDeviceEvent(false, DeviceEvent::RESET);
+  as_base.OnDeviceEvent(false, DeviceEvent::RESET, 4);
   CHECK_EQ(usb.seen, 2);
+  CHECK(!usb.last_isr);
   CHECK(usb.last_event == DeviceEvent::RESET);
-  CHECK_EQ(usb.BusResets().load(), 1U);
+  CHECK_EQ(usb.last_endpoint, 4U);
 }
