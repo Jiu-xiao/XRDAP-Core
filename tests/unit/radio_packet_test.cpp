@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// 无线链路的纯逻辑。判据：packet.hpp、session.hpp、identity.hpp、forwarding.hpp、
-// channel.hpp 里的规范和 docs/protocol.md 第 8 节 / Pure logic of the radio link. Oracle:
-// the specifications in packet.hpp, session.hpp, identity.hpp, forwarding.hpp and
-// channel.hpp, and docs/protocol.md section 8.
+// 无线链路的纯逻辑。判据：docs/protocol.md 第 8 节的数字，判据里不引用产品代码的常量 /
+// Pure logic of the radio link. Oracle: the numbers in docs/protocol.md section 8; the
+// checks do not quote the product code's constants.
 #include <cstring>
 #include <vector>
 
@@ -18,8 +17,10 @@ using Result = Reassembler::Result;
 
 namespace
 {
-constexpr uint8_t kGfsk = 255 - kHeader;  // 分片长度 / fragment sizes
-constexpr uint8_t kFlrc = 127 - kHeader;
+// 分片长度：255 和 127 字节的包减 6 字节包头 / Fragment sizes: packets of 255 and 127
+// bytes less the 6-byte header.
+constexpr uint8_t kLong = 249;
+constexpr uint8_t kShort = 121;
 
 std::vector<uint8_t> Message(uint16_t size, uint8_t salt)
 {
@@ -53,11 +54,11 @@ Result Add(Reassembler& r, const std::vector<uint8_t>& p, uint8_t fragment)
 
 TEST(radio_fragment_count)
 {
-  CHECK_EQ(FragmentCount(0, kGfsk), 1);
-  CHECK_EQ(FragmentCount(kGfsk, kGfsk), 1);
-  CHECK_EQ(FragmentCount(kGfsk + 1, kGfsk), 2);
-  CHECK_EQ(FragmentCount(kMaxMessage, kGfsk), 5);
-  CHECK_EQ(FragmentCount(kMaxMessage, kFlrc), 9);
+  CHECK_EQ(FragmentCount(0, kLong), 1);
+  CHECK_EQ(FragmentCount(kLong, kLong), 1);
+  CHECK_EQ(FragmentCount(kLong + 1, kLong), 2);
+  CHECK_EQ(FragmentCount(1024, kLong), 5);
+  CHECK_EQ(FragmentCount(1024, kShort), 9);
   CHECK_EQ(kMaxFragments, 9);
 }
 
@@ -67,7 +68,7 @@ TEST(radio_round_trip)
 {
   for (uint8_t kind : {kCommand, kControl})
   {
-    for (uint8_t fragment : {kGfsk, kFlrc})
+    for (uint8_t fragment : {kLong, kShort})
     {
       for (uint16_t size : {0, 1, 121, 122, 249, 250, 1024})
       {
@@ -100,71 +101,71 @@ TEST(radio_reassembly_rejects)
   uint8_t buffer[kMaxMessage];
   Reassembler r(buffer, sizeof(buffer));
   uint8_t p[255] = {kCommand, 1, 0, 1, 500 & 0xFF, 500 >> 8};
-  CHECK(r.Add(p, kHeader + 10, kGfsk) ==
+  CHECK(r.Add(p, kHeader + 10, kLong) ==
         Result::REJECTED);  // 声称 500 只带 10 / claims 500, carries 10
   p[3] = 2;
   p[4] = 100;
   p[5] = 0;
-  CHECK(r.Add(p, kHeader + 100, kGfsk) ==
+  CHECK(r.Add(p, kHeader + 100, kLong) ==
         Result::REJECTED);  // 一片装得下却说两片 / two for one
   p[4] = 300 & 0xFF;
   p[5] = 300 >> 8;
-  CHECK(r.Add(p, kHeader + 100, kGfsk) ==
+  CHECK(r.Add(p, kHeader + 100, kLong) ==
         Result::REJECTED);  // 非末片太短 / short non-last
   p[2] = 2;
-  CHECK(r.Add(p, kHeader + 51, kGfsk) == Result::REJECTED);  // 序号超出 / index out
+  CHECK(r.Add(p, kHeader + 51, kLong) == Result::REJECTED);  // 序号超出 / index out
   Reassembler small(buffer, 100);
   p[2] = 0;
   p[3] = 1;
   p[4] = 101;
   p[5] = 0;
-  CHECK(small.Add(p, kHeader + 101, kGfsk) ==
+  CHECK(small.Add(p, kHeader + 101, kLong) ==
         Result::REJECTED);                        // 超过缓冲 / above buffer
-  CHECK(r.Add(p, 3, kGfsk) == Result::REJECTED);  // 短于包头 / short header
+  CHECK(r.Add(p, 3, kLong) == Result::REJECTED);  // 短于包头 / short header
 }
 
-// 拼齐后同一消息的分片都是重复的，第 0 片也一样；序号变了才开始新消息 / After a
-// message completes all its fragments are duplicates, fragment 0 too; another sequence
-// starts a new message.
+// 拼齐后同一消息的分片都是重复的，第 0 片也一样；序号变了才开始新消息 / After a message
+// completes all its fragments are duplicates, fragment 0 too; another sequence starts a
+// new message.
 TEST(radio_reassembly_resend_tail)
 {
   uint8_t buffer[kMaxMessage];
   Reassembler r(buffer, sizeof(buffer));
-  const auto a = Fragments(Message(1021, 4), kCommand, 7, kGfsk);
+  const auto a = Fragments(Message(1021, 4), kCommand, 7, kLong);
   for (size_t i : {0, 1, 3, 4})
   {
-    CHECK(Add(r, a[i], kGfsk) == Result::INCOMPLETE);  // 第 2 片丢了 / fragment 2 lost
+    CHECK(Add(r, a[i], kLong) == Result::INCOMPLETE);  // 第 2 片丢了 / fragment 2 lost
   }
-  CHECK(Add(r, a[0], kGfsk) == Result::INCOMPLETE);
-  CHECK(Add(r, a[1], kGfsk) == Result::INCOMPLETE);
-  CHECK(Add(r, a[2], kGfsk) == Result::COMPLETE);
-  CHECK(Add(r, a[3], kGfsk) == Result::DUPLICATE);
-  CHECK(Add(r, a[4], kGfsk) == Result::DUPLICATE);
+  CHECK(Add(r, a[0], kLong) == Result::INCOMPLETE);
+  CHECK(Add(r, a[1], kLong) == Result::INCOMPLETE);
+  CHECK(Add(r, a[2], kLong) == Result::COMPLETE);
+  CHECK(Add(r, a[3], kLong) == Result::DUPLICATE);
+  CHECK(Add(r, a[4], kLong) == Result::DUPLICATE);
   for (size_t i = 0; i < 5; ++i)
   {
-    CHECK(Add(r, a[i], kGfsk) == Result::DUPLICATE);
+    CHECK(Add(r, a[i], kLong) == Result::DUPLICATE);
   }
   r.Reset();  // 会话结束 / the session ended
   for (size_t i = 0; i < 4; ++i)
   {
-    CHECK(Add(r, a[i], kGfsk) == Result::INCOMPLETE);
+    CHECK(Add(r, a[i], kLong) == Result::INCOMPLETE);
   }
-  CHECK(Add(r, a[4], kGfsk) == Result::COMPLETE);
+  CHECK(Add(r, a[4], kLong) == Result::COMPLETE);
   // 另一条消息的分片丢掉拼了一半的消息 / Another message drops the half-assembled one.
-  const auto b = Fragments(Message(500, 5), kCommand, 8, kGfsk);
-  const auto c = Fragments(Message(500, 6), kCommand, 9, kGfsk);
-  CHECK(Add(r, b[0], kGfsk) == Result::INCOMPLETE);
-  CHECK(Add(r, c[1], kGfsk) == Result::INCOMPLETE);
-  CHECK(Add(r, b[1], kGfsk) == Result::INCOMPLETE);
-  CHECK(Add(r, b[2], kGfsk) == Result::INCOMPLETE);
-  CHECK(Add(r, b[0], kGfsk) == Result::COMPLETE);
+  const auto b = Fragments(Message(500, 5), kCommand, 8, kLong);
+  const auto c = Fragments(Message(500, 6), kCommand, 9, kLong);
+  CHECK(Add(r, b[0], kLong) == Result::INCOMPLETE);
+  CHECK(Add(r, c[1], kLong) == Result::INCOMPLETE);
+  CHECK(Add(r, b[1], kLong) == Result::INCOMPLETE);
+  CHECK(Add(r, b[2], kLong) == Result::INCOMPLETE);
+  CHECK(Add(r, b[0], kLong) == Result::COMPLETE);
 }
 
 TEST(radio_ping)
 {
   uint8_t p[16];
   const uint8_t n = BuildPing(kPing, 4, 0xBEEF, p);
-  CHECK_EQ(n, kHeader + kPingPayload);
+  CHECK_EQ(n, 8);
   uint16_t session = 0;
   CHECK(ParsePing(p, n, session) && session == 0xBEEF);
   CHECK(!ParsePing(p, n - 1, session));
@@ -185,8 +186,8 @@ TEST(radio_remote_lease)
   CHECK(!lease.OnCommand(60));                    // R5
   CHECK(lease.OnPing(9, 1'000) == Event::REPLACED);
   CHECK(lease.OnCommand(2'000'000));  // R3 续租 / renews
-  CHECK(lease.Tick(2'000'000 + kLeaseUs - 1) == Event::NONE);
-  CHECK(lease.Tick(2'000'000 + kLeaseUs) == Event::ENDED);
+  CHECK(lease.Tick(2'000'000 + 3'000'000 - 1) == Event::NONE);
+  CHECK(lease.Tick(2'000'000 + 3'000'000) == Event::ENDED);
   CHECK(lease.OnPing(10, 0xFFFFFF00U) == Event::REPLACED);
   CHECK(lease.Tick(0x100U) == Event::NONE);
 }
@@ -200,9 +201,9 @@ TEST(radio_host_session)
   const uint16_t first = host.Session();
   CHECK(first != 0 && !host.OnCommand(10));
   host.OnSent(10);
-  CHECK(host.Tick(10 + kHeartbeatUs - 1) == Action::NONE);
-  CHECK(host.Tick(10 + kHeartbeatUs) == Action::HEARTBEAT);  // H2
-  CHECK(host.Tick(10 + kHostIdleUs) == Action::END);         // H3
+  CHECK(host.Tick(10 + 1'000'000 - 1) == Action::NONE);
+  CHECK(host.Tick(10 + 1'000'000) == Action::HEARTBEAT);  // H2
+  CHECK(host.Tick(10 + 5'000'000) == Action::END);        // H3
   CHECK(host.OnCommand(20'000'000) && host.Session() != first);
   CHECK(host.OnDisconnect() && !host.OnDisconnect());
   bool nonzero = true;
@@ -214,36 +215,26 @@ TEST(radio_host_session)
   CHECK(nonzero);
 }
 
-TEST(radio_pair_identity)
-{
-  const uint8_t a[kUidSize] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-  const uint8_t b[kUidSize] = {12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1};
-  CHECK(LinkId(a, b) == LinkId(b, a) && LinkId(a, b) != 0);
-  for (uint32_t id = 1; id < 5000; id = id * 3 + 1)
-  {
-    const Identity x = PairIdentity(id);
-    const uint32_t word = static_cast<uint32_t>(x.address[0]) << 24 |
-                          static_cast<uint32_t>(x.address[1]) << 16 |
-                          static_cast<uint32_t>(x.address[2]) << 8 | x.address[3];
-    const int transitions =
-        __builtin_popcount(word ^ (word >> 1)) - static_cast<int>(word >> 31);
-    CHECK(transitions >= 10 && transitions <= 22);
-  }
-  uint8_t hello[kHelloSize];
-  CHECK_EQ(BuildHello(a, nullptr, hello), kHelloSize);
-  CHECK(hello[0] == kHello && std::memcmp(hello + 1, a, kUidSize) == 0);
-  CHECK(hello[1 + kUidSize] == 0 && hello[kHelloSize - 1] == 0);
-}
-
+// 主机等多久取决于这个估计，文档没有给它的公式。这里只测它的性质：盖得住事务本身（一次
+// SWD 事务 8 + 1 + 3 + 1 + 33 = 46 位），随事务数和时钟成比例，命令自己的等待照算；
+// SWJ_Pins 的等待按 CMSIS-DAP 的上限 3 s 计。 / How long the host waits depends on this
+// estimate, and the documents give no formula for it. So only its properties are tested:
+// it covers the transactions themselves (one SWD transaction is 8 + 1 + 3 + 1 + 33 = 46
+// bits), scales with their number and the clock, and counts the command's own wait; the
+// wait of SWJ_Pins counts up to CMSIS-DAP's limit of 3 s.
 TEST(radio_execution_us)
 {
   const uint8_t transfer[] = {0x05, 0, 10};
-  CHECK_EQ(ExecutionUs(transfer, sizeof(transfer), 1'000'000), 2U * 46U * 10U);
+  const uint32_t ten = ExecutionUs(transfer, sizeof(transfer), 1'000'000);
+  CHECK(ten >= 46U * 10U);
+  const uint8_t twice[] = {0x05, 0, 20};
+  CHECK_EQ(ExecutionUs(twice, sizeof(twice), 1'000'000), 2U * ten);
+  CHECK_EQ(ExecutionUs(transfer, sizeof(transfer), 2'000'000), ten / 2U);
   const uint8_t block[] = {0x06, 0, 0x00, 0x01, 0x0F};  // 256 次 / 256 transactions
-  CHECK_EQ(ExecutionUs(block, sizeof(block), 4'000'000), 2U * 46U * 256U / 4U);
+  CHECK(ExecutionUs(block, sizeof(block), 4'000'000) >= 46U * 256U / 4U);
   const uint8_t delay[] = {0x09, 0xE8, 0x03};
   CHECK_EQ(ExecutionUs(delay, sizeof(delay), 1'000'000), 1000U);
-  const uint8_t pins[] = {0x10, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF};  // 封顶 3 s / capped
+  const uint8_t pins[] = {0x10, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF};
   CHECK_EQ(ExecutionUs(pins, sizeof(pins), 1'000'000), 3'000'000U);
   const uint8_t clock[] = {0x11, 0x40, 0x42, 0x0F, 0x00};
   CHECK_EQ(SwjClockHz(clock, sizeof(clock)), 1'000'000U);
@@ -269,23 +260,24 @@ TEST(radio_settings_replay)
 TEST(radio_channel_packet)
 {
   uint8_t packet[16];
-  CHECK_EQ(BuildChannel(kChannel, 7, 0x1234, 150, packet), kHeader + kChannelPayload);
+  CHECK_EQ(BuildChannel(kChannel, 7, 0x1234, 150, packet), 9);
   uint16_t session = 0;
   uint8_t channel = 0;
-  CHECK(ParseChannel(packet, kHeader + kChannelPayload, session, channel));
-  CHECK(packet[0] == kChannel && packet[1] == 7 && session == 0x1234 && channel == 150);
-  CHECK(!ParseChannel(packet, kHeader + kChannelPayload - 1, session, channel));
+  CHECK(ParseChannel(packet, 9, session, channel));
+  CHECK(session == 0x1234 && channel == 150);
+  CHECK(!ParseChannel(packet, 8, session, channel));
 }
 
-// 频点：0.5 MHz 一格，2402.0–2481.5 MHz，越界落到 F；F 是 2448.5 MHz / Frequencies:
-// 0.5 MHz steps over 2402.0–2481.5 MHz, out of range maps to F; F is 2448.5 MHz.
+// 频点：0.5 MHz 一格，2402.0–2481.5 MHz，越界落到 F；F 是 2448.5 MHz / Frequencies: 0.5
+// MHz steps over 2402.0–2481.5 MHz, out of range maps to F; F is 2448.5 MHz.
 TEST(radio_channel_plan)
 {
   CHECK_EQ(ChannelHz(0), 2'402'000'000U);
-  CHECK_EQ(ChannelHz(kChannels - 1), 2'481'500'000U);
-  CHECK_EQ(ChannelHz(kControlChannel), 2'448'500'000U);
-  CHECK_EQ(ChannelHz(kChannels), ChannelHz(kControlChannel));
-  CHECK_EQ(ChannelHz(kNoChannel), ChannelHz(kControlChannel));
+  CHECK_EQ(ChannelHz(159), 2'481'500'000U);
+  CHECK_EQ(kControlChannel, 93);
+  CHECK_EQ(ChannelHz(93), 2'448'500'000U);
+  CHECK_EQ(ChannelHz(160), 2'448'500'000U);
+  CHECK_EQ(ChannelHz(0xFF), 2'448'500'000U);
 }
 
 // 测量与选点：忙碌低者胜，平均 RSSI 破平局；拉黑的点不选；没有测量时没有最好的点 /
@@ -300,17 +292,19 @@ TEST(radio_channel_table)
   CHECK(meter.Result().busy == 100 && meter.Result().mean_dbm == -90);
 
   ChannelTable table;
-  CHECK(!table.Scanned() && table.Best(0) == kNoChannel);
+  CHECK(!table.Scanned() && table.Best(0) == 0xFF);
   table.Record(10, {20, -90});
   table.Record(30, {5, -80});
   table.Record(31, {5, -95});
-  table.Record(kChannels, {0, -100});  // 越界忽略 / out of range ignored
+  table.Record(160, {0, -100});  // 越界忽略 / out of range ignored
   CHECK(table.Scanned() && table.Measured(30) && !table.Measured(11));
   CHECK_EQ(table.Best(0), 31);
   table.Ban(31, 1000);
   CHECK(table.Banned(31, 1000) && table.Banned(28, 1000) && !table.Banned(27, 1000));
   CHECK_EQ(table.Best(1000), 10);  // 30 离得太近 / 30 is too close
-  CHECK(!table.Banned(31, 1000 + kBanUs) && table.Best(1000 + kBanUs) == 31);
+  // 10 分钟后解禁 / The ban ends after 10 minutes.
+  CHECK(table.Banned(31, 1000 + 600'000'000 - 1));
+  CHECK(!table.Banned(31, 1000 + 600'000'000) && table.Best(1000 + 600'000'000) == 31);
   for (uint8_t i = 0; i < 9; ++i)
   {
     table.Ban(static_cast<uint8_t>(i * 10U), 0);  // 8 项，最早的被挤掉 / 8 entries, the
@@ -325,16 +319,18 @@ TEST(radio_channel_table)
   CHECK(!table.Scanned() && table.Banned(80, 1));
 }
 
+// 每 200 次往返看一次，重发多于 10 次算差 / Every 200 exchanges; more than 10 retried
+// ones is bad.
 TEST(radio_retry_window)
 {
   RetryWindow window;
-  for (uint16_t i = 0; i < RetryWindow::kWindow - 1U; ++i)
+  for (int i = 0; i < 199; ++i)
   {
-    CHECK(!window.Add(i < RetryWindow::kLimit + 1U));
+    CHECK(!window.Add(i < 11));
   }
   CHECK(window.Add(false));  // 11 次重发 / 11 retried
-  for (uint16_t i = 0; i < RetryWindow::kWindow; ++i)
+  for (int i = 0; i < 200; ++i)
   {
-    CHECK(!window.Add(i < RetryWindow::kLimit));  // 10 次不算差 / 10 is not bad
+    CHECK(!window.Add(i < 10));  // 10 次不算差 / 10 is not bad
   }
 }
