@@ -10,3 +10,6 @@ dump = { base = 0x08000000, size = 0x20000 }       # region read by the TOOL cas
 flash_test = { base = 0x0801C000, size = 0x4000 }  # flash the TOOL cases and STAB-02 may erase
 # counter = 0x20000000        # optional: a u32 the target program increments (cores without CYCCNT)
 # fault_address = 0xFFFFF000  # optional: an address whose read faults
+# targetsel = 0x00040927      # optional: SWD multidrop, wake the SW-DP and send this TARGETSEL
+# ap_base = 0x2000            # optional: ADIv6, base address of the MEM-AP; the cases that use the
+#                             # READ, WRITE and sampling of the probe are n/a on such a target

@@ -12,7 +12,7 @@
 
 | 链路 | 写法 | 适用的探针 |
 |---|---|---|
-| `usb` | CMSIS-DAP v2 Bulk | 全部（ESP32-S3、F103、CH32V307；ESP32-C3 和传统 ESP32 没有 USB DAP） |
+| `usb` | CMSIS-DAP v2 Bulk | 全部（ESP32-S3、F103、CH32V307、CH32V208；ESP32-C3 和传统 ESP32 没有 USB DAP） |
 | `serial` | libxr Topic 串口帧（协议第 1 节） | XRDAP-ESP |
 | `tcp` | OpenOCD CMSIS-DAP TCP 帧（协议第 2 节） | XRDAP-ESP；`xrdap share openocd` 共享出来的任何探针 |
 | `usbip` | USB/IP，TCP 3240（协议第 6 节） | `xrdap share usbip` 共享出来的任何探针 |
@@ -32,7 +32,7 @@
 
 目标由芯片描述文件（TOML）给出，放在使用者自己的目录里，用 `--target 路径` 指定；本目录的 `targets/example.toml` 只是格式示例。描述的内容：DPIDR、可以改写的 RAM 区（scratch）、可以读出的区域（dump）、可以擦写的 Flash 区（flash_test），以及 OpenOCD、probe-rs、pyOCD 的目标名。工具把测试夹具写进 scratch，不需要专门的目标程序，目标上原有的程序照常运行；运行开始时工具保存 scratch 的原内容，结束时写回。scratch 必须选目标程序不使用的 RAM。
 
-目标矩阵至少覆盖 Cortex-M0/M0+、M3、M4、M7 各一款，其中一款不是 ST 的芯片，DPv1 和 DPv2 各至少一款（TGT-01 记录 DP 版本）。SWD multidrop 不在支持范围内（TGT-04）。
+目标矩阵至少覆盖 Cortex-M0/M0+、M3、M4、M7 各一款，其中一款不是 ST 的芯片，DPv1 和 DPv2 各至少一款（TGT-01 记录 DP 版本）。探针固件不做 SWD multidrop 的目标选择，由主机发出（TGT-04）：目标描述写了 `targetsel` 时，工具连接前先唤醒并选中目标。目标描述写了 `ap_base` 时，工具按 ADIv6 的基址访问 MEM-AP；探针固件的 READ、WRITE 和采样按 AP 编号访问，只适用于 ADIv5，依赖它们的用例在这种目标上记为 n/a。
 
 ### 1.4 判据来源
 
@@ -265,7 +265,7 @@ TGT-02 内存：在 RW 字上用 8 位写偏移 1、16 位写偏移 2，读回 0
 
 TGT-03 内核控制：DHCSR 停核、继续运行；置 DEMCR.VC_CORERESET 后 AIRCR.SYSRESETREQ，内核停在复位向量；`--nreset-wired` 时再用 DAP_SWJ_Pins 把 nRESET 拉低 50 ms，确认内核复位。结束时清除 VC_CORERESET、退出调试并重写夹具。
 
-TGT-04 multidrop（手工）：XR-DAP 不实现 SWD multidrop 的目标选择，每块探针记为不支持；若用主机工具连接了 multidrop 目标（例如 RP2040），记录工具的报告。
+TGT-04 multidrop（手工）：XR-DAP 固件不做目标选择，TARGETSEL 由主机用 DAP_SWJ_Sequence 和 DAP_SWD_Sequence 发出，本工具在目标描述写了 `targetsel` 时这样做；若用主机工具连接了 multidrop 目标（例如 RP2040、RP2350），记录工具的报告。
 
 ### 4.5 XR 厂商扩展
 

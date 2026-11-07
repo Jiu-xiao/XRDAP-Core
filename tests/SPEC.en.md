@@ -12,7 +12,7 @@ Contents: 1 Scope; 2 Fixed conditions; 3 Case table; 4 Case descriptions; 5 Resu
 
 | Link | Notation | Applicable probes |
 |---|---|---|
-| `usb` | CMSIS-DAP v2 Bulk | All (ESP32-S3, F103, CH32V307; ESP32-C3 and the original ESP32 have no USB DAP) |
+| `usb` | CMSIS-DAP v2 Bulk | All (ESP32-S3, F103, CH32V307, CH32V208; ESP32-C3 and the original ESP32 have no USB DAP) |
 | `serial` | libxr Topic serial frames (protocol section 1) | XRDAP-ESP |
 | `tcp` | OpenOCD CMSIS-DAP TCP frames (protocol section 2) | XRDAP-ESP; any probe shared with `xrdap share openocd` |
 | `usbip` | USB/IP, TCP 3240 (protocol section 6) | Any probe shared with `xrdap share usbip` |
@@ -32,7 +32,7 @@ Section 3 lists the applicable links of each case. If a probe does not have a li
 
 The target is given by a chip description file (TOML), kept in the user's own directory and specified with `--target PATH`; `targets/example.toml` in this directory is only a format example. The description contains: DPIDR, the RAM region that may be overwritten (scratch), the region that may be read out (dump), the Flash region that may be erased and written (flash_test), and the target names for OpenOCD, probe-rs and pyOCD. The tool writes the test fixture into scratch and needs no dedicated target program; the program already on the target keeps running; at the start of a run the tool saves the original contents of scratch and writes them back at the end. Scratch must be RAM that the target program does not use.
 
-The target matrix covers at least one each of Cortex-M0/M0+, M3, M4 and M7, one of which is not an ST chip, and at least one each of DPv1 and DPv2 (TGT-01 records the DP version). SWD multidrop is not supported (TGT-04).
+The target matrix covers at least one each of Cortex-M0/M0+, M3, M4 and M7, one of which is not an ST chip, and at least one each of DPv1 and DPv2 (TGT-01 records the DP version). The probe firmware does not select an SWD multidrop target; the host does (TGT-04): when the description has `targetsel`, the tool wakes and selects the target before connecting. When the description has `ap_base`, the tool reaches the MEM-AP by its ADIv6 base address; the READ, WRITE and sampling of the probe firmware select an AP by number and apply to ADIv5 only, so the cases that depend on them are recorded as n/a on such a target.
 
 ### 1.4 Oracle sources
 
@@ -265,7 +265,7 @@ TGT-02 Memory: on the RW word, an 8-bit write at offset 1 and a 16-bit write at 
 
 TGT-03 Core control: halt through DHCSR and resume; set DEMCR.VC_CORERESET and then AIRCR.SYSRESETREQ, the core stops at the reset vector; with `--nreset-wired`, additionally pull nRESET low for 50 ms with DAP_SWJ_Pins and confirm that the core resets. At the end VC_CORERESET is cleared, debug is exited and the fixture is rewritten.
 
-TGT-04 multidrop (manual): XR-DAP does not implement SWD multidrop target selection, and every probe is recorded as unsupported; if a multidrop target (for example RP2040) is connected with a host tool, the report of the tool is recorded.
+TGT-04 multidrop (manual): the XR-DAP firmware does not select a target; the host sends TARGETSEL with DAP_SWJ_Sequence and DAP_SWD_Sequence, and this tool does so when the description has `targetsel`; if a multidrop target (for example RP2040 or RP2350) is connected with a host tool, the report of the tool is recorded.
 
 ### 4.5 XR vendor extension
 

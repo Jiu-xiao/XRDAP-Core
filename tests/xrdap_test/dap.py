@@ -27,6 +27,12 @@ INFO_PACKET_COUNT, INFO_PACKET_SIZE = 0xFE, 0xFF
 SWD_LINE_RESET = bytes([0x12, 51]) + b"\xFF" * 7
 JTAG_TO_SWD = bytes([0x12, 16, 0x9E, 0xE7])
 IDLE_8 = bytes([0x12, 8, 0x00])
+# Out of the dormant state: selection alert, four low clocks, SWD activation code.
+DORMANT_TO_SWD = (bytes([0x12, 8, 0xFF]),
+                  bytes([0x12, 128]) + bytes.fromhex("92f30962952d8586e9afdde3a20ebc19"),
+                  bytes([0x12, 4, 0x00]), bytes([0x12, 8, 0x1A]))
+# ADIv6: the MEM-AP registers, at their ADIv5 offsets, from the base address of the AP.
+ADIV6_AP_REGS = 0xD00
 
 
 class DapError(RuntimeError):
@@ -38,8 +44,10 @@ def req(apndp, rnw, addr):
 
 
 class Dap:
-    def __init__(self, link):
+    def __init__(self, link, targetsel=None, ap_base=None):
         self.link = link
+        self.targetsel = targetsel  # SWD multidrop: the value of TARGETSEL
+        self.ap_base = ap_base  # ADIv6: the base address of the MEM-AP
         self.packet_size = None
         self.packet_count = None
 
@@ -116,26 +124,46 @@ class Dap:
     def dp_write(self, addr, value):
         self.transfer_ok([(req(0, 0, addr), value)])
 
+    def ap_select(self, reg=0):
+        """DP SELECT for an AP register: ADIv5 the bank, ADIv6 the address of the 16 bytes
+        around the register."""
+        if self.ap_base is None:
+            return reg & 0xF0
+        return self.ap_base + ADIV6_AP_REGS + (reg & 0xF0)
+
     def ap_read(self, reg):
-        self.dp_write(DP_SELECT, reg & 0xF0)
+        self.dp_write(DP_SELECT, self.ap_select(reg))
         return self.transfer_ok([(req(1, 1, reg), None)])[0]
 
     def ap_write(self, reg, value):
-        self.dp_write(DP_SELECT, reg & 0xF0)
+        self.dp_write(DP_SELECT, self.ap_select(reg))
         self.transfer_ok([(req(1, 0, reg), value)])
 
     def clear_errors(self):
         self.transfer([(req(0, 0, DP_ABORT), ABORT_ALL)])
 
     # ------------------------------------------------------------------ SWD
+    def select_target(self):
+        """SWD multidrop: wake the SW-DP and select it. Nobody drives the acknowledge of
+        TARGETSEL, so it goes out as a sequence: request, 5 clocks released, data, parity."""
+        for seq in DORMANT_TO_SWD + (SWD_LINE_RESET, IDLE_8):
+            self.swj_sequence(seq)
+        parity = bin(self.targetsel).count("1") & 1
+        r = self.link.xfer(bytes([0x1D, 3, 0x08, 0x99, 0x85, 0x21]) + struct.pack("<IB", self.targetsel, parity))
+        if r[:2] != b"\x1D\x00":
+            raise DapError(f"TARGETSEL: {r.hex(' ')}")
+
     def attach(self, clock_hz):
         """Connect SWD, power up the debug domain and set the AP CSW. Returns DPIDR."""
         self.swj_clock(clock_hz)
         self.connect()
         self.transfer_configure()
         self.link.xfer(bytes([0x13, 0x00]))  # SWD_Configure: 1 turnaround clock, no data phase
-        for seq in (SWD_LINE_RESET, JTAG_TO_SWD, SWD_LINE_RESET, IDLE_8):
-            self.swj_sequence(seq)
+        if self.targetsel is None:
+            for seq in (SWD_LINE_RESET, JTAG_TO_SWD, SWD_LINE_RESET, IDLE_8):
+                self.swj_sequence(seq)
+        else:
+            self.select_target()
         # After a line reset the first DP access must be an IDCODE read.
         dpidr = self.dp_read(DP_IDCODE)
         self.dp_write(DP_ABORT, ABORT_ALL)
@@ -151,11 +179,11 @@ class Dap:
 
     # --------------------------------------------------------------- memory
     def read32(self, addr):
-        self.dp_write(DP_SELECT, 0)
+        self.dp_write(DP_SELECT, self.ap_select())
         return self.transfer_ok([(req(1, 0, AP_TAR), addr), (req(1, 1, AP_DRW), None)])[0]
 
     def write32(self, addr, value):
-        self.dp_write(DP_SELECT, 0)
+        self.dp_write(DP_SELECT, self.ap_select())
         self.transfer_ok([(req(1, 0, AP_TAR), addr), (req(1, 0, AP_DRW), value),
                           (req(0, 1, DP_RDBUFF), None)])
 
@@ -174,7 +202,7 @@ class Dap:
             nbytes -= words * 4
 
     def block_read(self, addr, nbytes):
-        self.dp_write(DP_SELECT, 0)
+        self.dp_write(DP_SELECT, self.ap_select())
         out = bytearray()
         for a, words in self.chunks(addr, nbytes, False):
             self.transfer_ok([(req(1, 0, AP_TAR), a)])
@@ -185,7 +213,7 @@ class Dap:
         return bytes(out)
 
     def block_write(self, addr, data):
-        self.dp_write(DP_SELECT, 0)
+        self.dp_write(DP_SELECT, self.ap_select())
         pos = 0
         for a, words in self.chunks(addr, len(data), True):
             self.transfer_ok([(req(1, 0, AP_TAR), a)])

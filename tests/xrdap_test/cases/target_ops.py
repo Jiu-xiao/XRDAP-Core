@@ -5,7 +5,7 @@ import struct
 import time
 
 from .. import runner as R
-from ..dap import AP_CSW, AP_DRW, AP_IDR, AP_TAR, req
+from ..dap import AP_CSW, AP_DRW, AP_IDR, AP_TAR, DP_SELECT, req
 from ..target import CORES, CPUID, DBGKEY, DEMCR, DHCSR, AIRCR, DWT_CTRL, S_HALT, S_RESET_ST
 
 
@@ -34,7 +34,7 @@ def tgt_memory(ctx):
         rw = t.at(t.RW)
         dap.write32(rw, 0)
         csw = dap.ap_read(AP_CSW) & ~0x37
-        dap.dp_write(0x8, 0)
+        dap.dp_write(DP_SELECT, dap.ap_select())
         # Byte write to rw+1 and halfword write to rw+2: data sits in its byte lane.
         dap.transfer_ok([(req(1, 0, AP_CSW), csw | 0x0), (req(1, 0, AP_TAR), rw + 1),
                          (req(1, 0, AP_DRW), 0xAB << 8),

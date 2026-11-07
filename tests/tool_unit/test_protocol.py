@@ -5,6 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from xrdap_test import dap as dapmod
 from xrdap_test import link
 from xrdap_test import runner as R
 from xrdap_test.cases import vendor_cases as V
@@ -82,6 +83,48 @@ class ProtocolV2(unittest.TestCase):
         self.assertEqual(lk.sent, hexb("83 E8030000 00 0200"
                                        "00 1000 04 00010020 00 0000 0100 0000"
                                        "00 1100 02 04010020 00 0000 0A00 0300"))
+
+
+class AnsweringLink:
+    """Answers every DAP command with success; keeps the requests. CTRL/STAT reads as powered."""
+
+    def __init__(self):
+        self.sent = []
+
+    def xfer(self, request, timeout=2.0):
+        self.sent.append(request)
+        if request[0] == 0x02:
+            return b"\x02\x01"
+        if request[0] == 0x05:
+            return bytes([0x05, request[2], 1]) + (0xF0000000).to_bytes(4, "little")
+        return bytes([request[0], 0])
+
+    def selects(self):
+        return [int.from_bytes(r[4:8], "little") for r in self.sent
+                if r[0] == 0x05 and r[3] == 0x08]
+
+
+class Attach(unittest.TestCase):
+    def test_default_target(self):
+        lk = AnsweringLink()
+        dap = dapmod.Dap(lk)
+        dap.attach(1000000)
+        dap.read32(0x20000000)
+        self.assertIn(dapmod.JTAG_TO_SWD, lk.sent)
+        self.assertFalse([r for r in lk.sent if r[0] == 0x1D])
+        self.assertEqual(set(lk.selects()), {0})
+        self.assertEqual(dap.ap_select(0xFC), 0xF0)
+
+    def test_multidrop_adiv6(self):
+        lk = AnsweringLink()
+        dap = dapmod.Dap(lk, targetsel=0x00040927, ap_base=0x2000)
+        dap.attach(1000000)
+        dap.read32(0x20000000)
+        self.assertNotIn(dapmod.JTAG_TO_SWD, lk.sent)
+        self.assertIn(hexb("1D 03 08 99 85 21 27 09 04 00 01"), lk.sent)
+        # SELECT 0 for CTRL/STAT, then the group of CSW, TAR and DRW.
+        self.assertEqual(lk.selects(), [0, 0x2D00, 0x2D00])
+        self.assertEqual(dap.ap_select(0xFC), 0x2DF0)
 
 
 class MinimumPeriodSearch(unittest.TestCase):
