@@ -1,36 +1,49 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// ADIv5 的 SWD 模型：两个 MEM-AP，读和写都是 posted，可以注入失步、故障和校验错。读出的值
-// 由地址算出，写进的值记在表里。
+// 厂商扩展的测试共用的东西：ADIv5 的 SWD 模型、什么都不做的节拍定时器、按
+// docs/protocol.md 第 3 节编码请求和解回复头的函数。执行器的线程测试也用它们。
+//
+// 模型有两个 MEM-AP，读和写都是 posted，可以注入失步、故障和校验错。读出的值由地址算出，
+// 写进的值记在表里。
 //   posted 读：AP 读回的是上一次的结果，最后一个结果要读 RDBUFF。
 //   posted 写：DRW 写一律回 OK，失败要到下一次 AP 访问或 RDBUFF 读才以 FAULT 出现；
 //   CTRL/STAT 的读不等 AP 事务，所以看不到它（V305-2）。
 //
-// An ADIv5 SWD model: two MEM-APs, reads and writes both posted, with injectable desync,
-// faults and parity errors. A read value is computed from its address; written values are
-// kept in a table.
+// What the vendor extension tests share: an ADIv5 SWD model, a tick timer that does
+// nothing, and functions that encode requests and parse a reply head as
+// docs/protocol.md section 3 says. The executor thread tests use them too.
+//
+// The model has two MEM-APs, reads and writes both posted, with injectable desync, faults
+// and parity errors. A read value is computed from its address; written values are kept
+// in a table.
 //   Posted read: an AP read returns the previous result; the last result takes an RDBUFF
 //   read.
 //   Posted write: a DRW write always answers OK; a failure only shows up as FAULT on the
 //   next AP access or RDBUFF read. A CTRL/STAT read does not wait for the AP transaction,
 //   so it cannot see the failure (V305-2).
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <vector>
 
 #include "../unit/check.hpp"
-#include "libxr.hpp"
-#include "xrdap/vendor/mem_ap.hpp"
+#include "debug/swd.hpp"
+#include "xrdap/vendor/protocol.hpp"
+#include "xrdap/vendor/sampler.hpp"
 
-namespace
+namespace XrDapTest
 {
-using LibXR::ErrorCode;
-namespace P = LibXR::Debug::SwdProtocol;
 
 class ModelSwd final : public LibXR::Debug::Swd
 {
+  using ErrorCode = LibXR::ErrorCode;
+  using Ack = LibXR::Debug::SwdProtocol::Ack;
+  using Port = LibXR::Debug::SwdProtocol::Port;
+  using Request = LibXR::Debug::SwdProtocol::Request;
+  using Response = LibXR::Debug::SwdProtocol::Response;
+
  public:
   /// 写这个地址的 posted 写会失败 / A posted write to this address fails.
   static constexpr uint32_t kFaultAddr = 0x20001000U;
@@ -91,13 +104,13 @@ class ModelSwd final : public LibXR::Debug::Swd
   void IdleClocks(uint32_t) override {}
   ErrorCode SeqWriteBits(uint32_t, const uint8_t*) override { return ErrorCode::OK; }
   ErrorCode SeqReadBits(uint32_t, uint8_t*) override { return ErrorCode::OK; }
-  ErrorCode Transfer(const P::Request& req, P::Response& resp) override
+  ErrorCode Transfer(const Request& req, Response& resp) override
   {
     resp = {};
-    resp.ack = (desynced || missing) ? P::Ack::NO_ACK : P::Ack::OK;
-    if (resp.ack == P::Ack::OK)
+    resp.ack = (desynced || missing) ? Ack::NO_ACK : Ack::OK;
+    if (resp.ack == Ack::OK)
     {
-      if (req.port == P::Port::DP)
+      if (req.port == Port::DP)
       {
         DpAccess(req, resp);
       }
@@ -122,18 +135,18 @@ class ModelSwd final : public LibXR::Debug::Swd
 
   // 结算上一次 posted 写：失败了这次访问就回 FAULT / Settle the last posted write: when
   // it failed, this access answers FAULT.
-  bool Settle(P::Response& resp)
+  bool Settle(Response& resp)
   {
     const bool failed = write_failed_;
     write_failed_ = false;
     if (failed)
     {
-      resp.ack = P::Ack::FAULT;
+      resp.ack = Ack::FAULT;
     }
     return !failed;
   }
 
-  void DpAccess(const P::Request& req, P::Response& resp)
+  void DpAccess(const Request& req, Response& resp)
   {
     if (!req.rnw)
     {
@@ -159,7 +172,7 @@ class ModelSwd final : public LibXR::Debug::Swd
     resp.rdata = req.addr2b == kDpCtrlStat ? ctrl_stat : 0x2BA01477U;
   }
 
-  void ApAccess(const P::Request& req, P::Response& resp)
+  void ApAccess(const Request& req, Response& resp)
   {
     if (!Settle(resp))
     {
@@ -171,7 +184,7 @@ class ModelSwd final : public LibXR::Debug::Swd
     CHECK(bank == 0U || bank == 0xF0U);
     if (ap >= 2U)
     {
-      resp.ack = P::Ack::FAULT;
+      resp.ack = Ack::FAULT;
       return;
     }
     if (bank == 0xF0U)
@@ -190,11 +203,11 @@ class ModelSwd final : public LibXR::Debug::Swd
     }
   }
 
-  void ApRead(uint32_t ap, const P::Request& req, P::Response& resp)
+  void ApRead(uint32_t ap, const Request& req, Response& resp)
   {
     if (req.addr2b == kApDrw && ++drw_attempts == fail_drw)
     {
-      resp.ack = P::Ack::FAULT;
+      resp.ack = Ack::FAULT;
       return;
     }
     resp.rdata = posted_;
@@ -219,7 +232,7 @@ class ModelSwd final : public LibXR::Debug::Swd
     }
   }
 
-  void ApWrite(uint32_t ap, const P::Request& req)
+  void ApWrite(uint32_t ap, const Request& req)
   {
     if (req.addr2b == kApCsw)
     {
@@ -246,4 +259,83 @@ class ModelSwd final : public LibXR::Debug::Swd
   bool write_failed_ = false;
   std::map<uint32_t, uint32_t> written_;
 };
-}  // namespace
+
+struct NullTimer : XrDap::Vendor::TickTimer
+{
+  void Start(uint32_t) override {}
+  void Stop() override {}
+};
+
+/// AP 上 addr 处的一个 u32 / A u32 at addr on an AP.
+inline XrDap::Vendor::Item WordAt(uint32_t addr, uint8_t ap = 0U)
+{
+  XrDap::Vendor::Item it;
+  it.ap = ap;
+  it.size = 4U;
+  it.base = addr;
+  return it;
+}
+
+inline void AppendLe(std::vector<uint8_t>& out, uint32_t value, unsigned bytes)
+{
+  for (unsigned i = 0U; i < bytes; ++i)
+  {
+    out.push_back(static_cast<uint8_t>(value >> (i * 8U)));
+  }
+}
+
+/// 一个条目（docs/protocol.md 3.3）/ One item (docs/protocol.md 3.3).
+inline void AppendItem(std::vector<uint8_t>& out, const XrDap::Vendor::Item& it,
+                       uint16_t id)
+{
+  out.push_back(it.ap);
+  AppendLe(out, id, 2U);
+  out.push_back(it.size);
+  AppendLe(out, it.base, 4U);
+  out.push_back(it.n);
+  for (unsigned i = 0U; i < it.n; ++i)
+  {
+    AppendLe(out, static_cast<uint16_t>(it.deref[i]), 2U);
+  }
+  AppendLe(out, static_cast<uint16_t>(it.final_off), 2U);
+}
+
+/// SUB_START（docs/protocol.md 3.4）：phase 都是 0，divs 没给到的条目 div 是 1 /
+/// SUB_START (docs/protocol.md 3.4): every phase is 0, and an item divs does not reach
+/// has div 1.
+inline std::vector<uint8_t> SubStart(uint32_t period_us, uint8_t flags,
+                                     const std::vector<XrDap::Vendor::Item>& items,
+                                     const std::vector<uint16_t>& divs = {})
+{
+  std::vector<uint8_t> request = {0x83U};
+  AppendLe(request, period_us, 4U);
+  request.push_back(flags);
+  AppendLe(request, static_cast<uint32_t>(items.size()), 2U);
+  for (size_t i = 0U; i < items.size(); ++i)
+  {
+    AppendItem(request, items[i], static_cast<uint16_t>(i + 1U));
+    AppendLe(request, i < divs.size() ? divs[i] : 1U, 2U);
+    AppendLe(request, 0U, 2U);
+  }
+  return request;
+}
+
+/// SUB_READ 回复的头（docs/protocol.md 3.4），帧跟在后面 / The head of a SUB_READ reply
+/// (docs/protocol.md 3.4); the frames follow it.
+inline constexpr uint16_t kSubReadHead = 24U;
+struct SubReadHead
+{
+  uint8_t status;
+  uint32_t left;
+  uint32_t dropped;
+  uint32_t skipped;
+  uint16_t frames;
+};
+
+inline SubReadHead ParseSubReadHead(const uint8_t* reply)
+{
+  return {reply[1], XrDap::Vendor::Get32(reply + 10), XrDap::Vendor::Get32(reply + 14),
+          XrDap::Vendor::Get32(reply + 18), XrDap::Vendor::Get16(reply + 22)};
+}
+
+}  // namespace XrDapTest

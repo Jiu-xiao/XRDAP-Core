@@ -74,24 +74,16 @@ if(TRUE)
   target_compile_options(xrdap_core_threads PRIVATE -Wall -Wextra)
   add_test(NAME xrdap_core_threads COMMAND xrdap_core_threads)
 
-  # MEM-AP 写路径：假 SWD 模拟 posted 写和迟到的故障（V305-2）/ MEM-AP write path against a
-  # fake SWD that models a posted write and a late fault (V305-2).
-  add_executable(xrdap_mem_ap_test
-                 "${CMAKE_CURRENT_LIST_DIR}/mem_ap/mem_ap_posted_write_test.cpp"
-                 "${CMAKE_CURRENT_LIST_DIR}/unit/main.cpp"
-                 "${XRDAP_CORE_ROOT}/xrdap/vendor/mem_ap.cpp")
-  target_include_directories(xrdap_mem_ap_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/stub"
-                                                       ${XRDAP_CORE_INCLUDE_DIRS}
-                                                       ${XRDAP_LIBXR_USB_DIRS})
-  target_link_libraries(xrdap_mem_ap_test PRIVATE xr pthread)
-  target_compile_options(xrdap_mem_ap_test PRIVATE -Wall -Wextra)
-  add_test(NAME xrdap_mem_ap_test COMMAND xrdap_mem_ap_test)
-  add_executable(xrdap_sampler_recovery
-      "${CMAKE_CURRENT_LIST_DIR}/threads/sampler_recovery_test.cpp"
-      ${XRDAP_CORE_SOURCES})
-  target_include_directories(xrdap_sampler_recovery PRIVATE
-      "${CMAKE_CURRENT_LIST_DIR}/stub" ${XRDAP_CORE_INCLUDE_DIRS})
-  target_link_libraries(xrdap_sampler_recovery PRIVATE xr pthread)
-  target_compile_options(xrdap_sampler_recovery PRIVATE -Wall -Wextra -Werror)
-  add_test(NAME xrdap_sampler_recovery COMMAND xrdap_sampler_recovery)
+  # 厂商扩展：MEM-AP、采样和命令，对着 SWD 模型和只由测试拨动的时钟（test_clock.cpp）跑 /
+  # The vendor extension: MEM-AP, sampling and commands, against an SWD model and a clock
+  # only the tests move (test_clock.cpp).
+  file(GLOB XRDAP_VENDOR_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/vendor/*.cpp")
+  add_executable(xrdap_core_vendor ${XRDAP_VENDOR_TESTS}
+                                   "${CMAKE_CURRENT_LIST_DIR}/unit/main.cpp"
+                                   ${XRDAP_CORE_SOURCES})
+  target_include_directories(xrdap_core_vendor PRIVATE "${CMAKE_CURRENT_LIST_DIR}/stub"
+                                                       ${XRDAP_CORE_INCLUDE_DIRS})
+  target_link_libraries(xrdap_core_vendor PRIVATE xr pthread)
+  target_compile_options(xrdap_core_vendor PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME xrdap_core_vendor COMMAND xrdap_core_vendor)
 endif()
