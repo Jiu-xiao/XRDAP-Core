@@ -763,6 +763,159 @@ TEST(radio_link_control)
   CHECK(!p.a.HandleControl(other, sizeof(other), resp, sizeof(resp), out));
 }
 
+// 探针开机超过远端的沉默时限：只有这时沉默规则才会动作 / The probe has been up for longer
+// than the remote's silence limit, the only time that rule can act.
+void PastSilenceLimit()
+{
+  (void)RadioTestTime();
+  while (Now() < 3'000'000U)
+  {
+  }
+}
+
+void AnswerControlOnB(Pair& p)
+{
+  p.exec_b.control =
+      [&p](const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap, uint16_t& out)
+  { return p.b.HandleControl(req, len, resp, cap, out); };
+}
+
+// 没有 DAP 会话时转发一条请求：两块探针都回到 F，下一条转发和 DAP_Connect 都走无线，不会
+// 悄悄落到本地目标上 / A forward with no DAP session: both probes return to F, and the
+// next forward and DAP_Connect go over the radio instead of silently reaching the local
+// target.
+TEST(radio_link_forward_outside_session)
+{
+  PastSilenceLimit();
+  Pair p(true);
+  AnswerControlOnB(p);
+  std::vector<uint8_t> answer;
+  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kSettings}, &answer), Status::kOk);
+  (void)p.a.Service();
+  (void)p.b.Service();
+  CHECK(p.radio_a.Frequency() == ChannelHz(kControlChannel));
+  CHECK(p.radio_b.Frequency() == ChannelHz(kControlChannel));
+  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kSettings}, &answer), Status::kOk);
+  const uint32_t executed = p.exec_b.executed;
+  const auto connect = Command(Byte(DapCmd::CONNECT), 2);
+  CHECK(p.exec_a.Usb(connect) == Expected(connect));
+  CHECK_EQ(p.exec_a.local, 0U);
+  CHECK_EQ(p.exec_b.executed, executed + 1U);
+  CHECK(p.a.CurrentRole() == Role::HOST);
+}
+
+// 对方不应答时也回到 F / Back on F when the peer does not answer either.
+TEST(radio_link_forward_no_answer)
+{
+  PastSilenceLimit();
+  Pair p(true);
+  p.radio_a.drop = [](uint32_t) { return true; };
+  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kSettings}, nullptr), Status::kTimeout);
+  CHECK(p.radio_a.Frequency() == ChannelHz(kControlChannel));
+  CHECK(p.a.CurrentRole() == Role::REMOTE);
+}
+
+// 无线 DAP 会话中的转发不结束会话，也不换信道 / A forward during a wireless DAP session
+// neither ends the session nor changes channel.
+TEST(radio_link_forward_in_session)
+{
+  PastSilenceLimit();
+  Pair p(true);
+  AnswerControlOnB(p);
+  p.radio_a.noise = QuietAt(40);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  CHECK(p.radio_a.Frequency() == ChannelHz(40));
+  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kSettings}, nullptr), Status::kOk);
+  CHECK(p.radio_a.Frequency() == ChannelHz(40) && p.radio_b.Frequency() == ChannelHz(40));
+  CHECK(p.a.CurrentRole() == Role::HOST);
+  const auto c = Command(Byte(DapCmd::TRANSFER), 16);
+  CHECK(p.exec_a.Usb(c) == Expected(c));
+}
+
+// 保存设置要一段时间：Save 立即返回，这段时间里远端既不运行也收不到包，和它阻塞在写 Flash
+// 上一样，主机却还能继续发 / A save that takes time: Save returns at once, and for that
+// time the remote neither runs nor receives, as when it blocks writing flash, while the
+// host can go on sending.
+class SlowStore final : public Store
+{
+ public:
+  explicit SlowStore(uint32_t ms) : ms_(ms) {}
+  bool Save(const Settings& s) override
+  {
+    saved = s;
+    ++saves;
+    until_ = Now() + ms_ * 1000U;
+    return true;
+  }
+  bool Busy() const { return static_cast<int32_t>(until_ - Now()) > 0; }
+  Settings saved{};
+  uint32_t saves = 0;
+
+ private:
+  uint32_t ms_;
+  uint32_t until_ = 0;
+};
+
+struct SlowSavePair
+{
+  FakeRadio radio_a, radio_b;
+  FakeExec exec_a, exec_b;
+  FakeStore store_a;
+  SlowStore store_b;
+  Link a{radio_a, exec_a, store_a, kUidA, {}};
+  Link b{radio_b, exec_b, store_b, kUidB, {}};
+
+  explicit SlowSavePair(uint32_t ms) : store_b(ms)
+  {
+    radio_a.peer = &radio_b;
+    radio_b.peer = &radio_a;
+    radio_a.on_poll = [this]
+    {
+      if (!store_b.Busy())
+      {
+        (void)b.Service();
+      }
+    };
+    radio_a.drop = [this](uint32_t) { return store_b.Busy(); };
+    Settings s;
+    s.paired = 1;
+    s.link_id = LinkId(kUidA, kUidB);
+    s.modulation = Modulation::GFSK;
+    a.Begin(s, false);
+    b.Begin(s, false);
+    exec_b.control = [this](const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
+                            uint16_t& out)
+    { return b.HandleControl(req, len, resp, cap, out); };
+  }
+};
+
+// 对方写 Flash 比“听不到”规则的时限长时：请求只执行一次、不重发、不换信道，电脑收到成功
+// / A save longer than the deaf rule's limit: the request runs once, with no resend and
+// no channel change, and the PC gets success.
+TEST(radio_link_forward_slow_save)
+{
+  PastSilenceLimit();
+  const std::vector<std::vector<uint8_t>> requests = {
+      {Op::kForward, Op::kSetModulation, 1},
+      {Op::kForward, Op::kSetRole, static_cast<uint8_t>(RoleSetting::LOCAL)},
+      {Op::kForward, Op::kSetRole, static_cast<uint8_t>(RoleSetting::AUTO)},
+      {Op::kForward, Op::kChannel, 1, 10},
+      {Op::kForward, Op::kUnpair},
+  };
+  for (const auto& request : requests)
+  {
+    SlowSavePair p(150);
+    CHECK_EQ(ControlStatus(p.a, request, nullptr), Status::kOk);
+    CHECK_EQ(p.store_b.saves, 1U);
+    std::vector<uint8_t> stats;
+    CHECK_EQ(ControlStatus(p.a, {Op::kStats}, &stats), Status::kOk);
+    StatsAnswer answer;
+    std::memcpy(&answer, stats.data(), sizeof(answer));
+    CHECK_EQ(answer.retries, 0U);
+    CHECK(p.radio_a.Frequency() == ChannelHz(kControlChannel));
+  }
+}
+
 // 配对：两块未配对的探针得到同一个链路号并保存 / Pairing: two unpaired probes end with
 // the same link id, stored.
 TEST(radio_link_pairing)

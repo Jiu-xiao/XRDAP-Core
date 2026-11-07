@@ -511,8 +511,17 @@ class RadioLink
           return Reply(resp, op, Status::kNotPaired, cap);
         }
         uint16_t size = 0;
-        if (!host_.Forward(req + 1, static_cast<uint16_t>(len - 1U), resp, cap, size,
-                           true))
+        const bool answered = host_.Forward(req + 1, static_cast<uint16_t>(len - 1U),
+                                            resp, cap, size, true);
+        // 探针不是主机角色时，主循环不服务这个会话，也没有 DAP_Disconnect 来结束它：就此
+        // 结束，两块探针都回到 F。
+        // Outside the host role the main loop does not serve this session and no
+        // DAP_Disconnect will end it: end it here, so that both probes return to F.
+        if (CurrentRole() != Role::HOST)
+        {
+          host_.Reset();
+        }
+        if (!answered)
         {
           return Reply(resp, op, Status::kTimeout, cap);
         }

@@ -76,10 +76,9 @@ class HostLink
   bool Forward(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                uint16_t& out, bool control)
   {
-    // 控制请求不是 DAP 命令：没有 SWJ 时钟要记，没有 DAP_Disconnect 结束会话，远端执行
-    // 它不花 SWD 时间。
-    // A control request is not a DAP command: no SWJ clock to note, no DAP_Disconnect to
-    // end the session, and the remote executes it without SWD time.
+    // 控制请求不是 DAP 命令：没有 SWJ 时钟要记，也没有 DAP_Disconnect 结束会话。
+    // A control request is not a DAP command: no SWJ clock to note, and no DAP_Disconnect
+    // to end the session.
     const uint32_t hz = control ? 0U : SwjClockHz(req, len);
     if (hz != 0U)
     {
@@ -92,7 +91,8 @@ class HostLink
       return false;
     }
     const bool disconnect = !control && IsCommand(req, len, DapCmd::DISCONNECT);
-    if (!Exchange(req, len, resp, cap, out, control ? 0U : ExecutionUs(req, len, swd_hz_),
+    if (!Exchange(req, len, resp, cap, out,
+                  control ? kControlExecutionUs : ExecutionUs(req, len, swd_hz_),
                   !disconnect, control))
     {
       peer_lost_ = true;
@@ -172,6 +172,12 @@ class HostLink
   static constexpr uint32_t kFragmentWaitUs = 3'000;
   static constexpr uint32_t kMaxWaitUs = 200'000;
   static constexpr uint32_t kBudgetUs = 1'000'000;
+  // 控制请求可能让远端保存设置，写 Flash 时它听不到也不应答。第一次等待要盖住这段时间，
+  // 否则下面的规则会在它还在写时换信道。应答一到就结束等待，不必等满。
+  // A control request may make the remote store its settings; while it writes flash it
+  // neither hears nor answers. The first wait covers that time, or the rule below changes
+  // channel while it writes. The answer ends the wait as soon as it arrives.
+  static constexpr uint32_t kControlExecutionUs = 250'000;
   // 收不到包的接收机：主机的 SX1281 可能停止接收而发射照常：它停在接收、一个 IRQ 都没有，
   // 远端却听到每次重发并应答；重新进入接收没用，复位有用。信道被堵时表现相同。发了
   // kDeafSends 次、kDeafUs 内一个包（好坏都算）都没收到时，转发在数据信道上换信道，
