@@ -70,10 +70,10 @@ class FakeLink:
 
 class ProtocolV2(unittest.TestCase):
     def test_info_example(self):
-        info = VendorClient(FakeLink(hexb("80 00 02 1F000000 2000 08 00400000 40420F0000000000"))).info()
+        info = VendorClient(FakeLink(hexb("80 00 02 7F000000 2000 08 00400000 40420F0000000000"))).info()
         self.assertEqual((info["version"], info["length"], info["features"], info["max_items"],
                           info["max_depth"], info["ring_bytes"], info["probe_time_us"]),
-                         (2, 22, 0x1F, 32, 8, 16384, 1_000_000))
+                         (2, 22, 0x7F, 32, 8, 16384, 1_000_000))
 
     def test_sub_start_example(self):
         items = [Item(0x20000100, 4, id=0x10), Item(0x20000104, 2, id=0x11, div=10, phase=3)]
