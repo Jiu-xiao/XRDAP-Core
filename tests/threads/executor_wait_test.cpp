@@ -14,8 +14,8 @@
 #include <cstring>
 #include <thread>
 
+#include "../vendor/fixture.hpp"
 #include "libxr.hpp"
-#include "model_swd.hpp"
 #include "semaphore.hpp"
 #include "xrdap/activity/dap_activity.hpp"
 #include "xrdap/control/usb_control.hpp"
@@ -31,6 +31,7 @@ using Clock = std::chrono::steady_clock;
 using LibXR::ErrorCode;
 using XrDap::Byte;
 using XrDap::DapCmd;
+using XrDapTest::ModelSwd;
 
 int g_failures = 0;
 #define EXPECT(cond)                                                \
