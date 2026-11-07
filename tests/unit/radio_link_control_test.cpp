@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// RadioLink 的控制口操作和转发：一对探针，射频是内存里的假收发器。判据：settings.hpp 的
-// 操作和 docs/protocol.md 第 8.3 节 / The control port operations and forwarding of
+// RadioLink 的控制口操作和转发：一对探针，射频是内存里的假收发器。判据：settings.hpp 的操
+// 作和 docs/protocol.md 第 8.3 节 / The control port operations and forwarding of
 // RadioLink: a pair of probes over fake transceivers in memory. Oracle: the operations of
 // settings.hpp and docs/protocol.md section 8.3.
 #include <cstring>
-#include <functional>
 #include <vector>
 
 #include "check.hpp"
@@ -41,7 +40,8 @@ void HoldPeerWhileSaving(PairWith<SlowStore>& p, uint32_t save_us)
 }
 }  // namespace
 
-// 配对中只能读 / While pairing, operations can only read.
+// 配对中只能读，0x11 和 0x13 之外的操作要等配对结束 / While pairing, operations can only
+// read: all but 0x11 and 0x13 have to wait for its end.
 TEST(radio_link_control_while_pairing)
 {
   Pair p(true);
@@ -51,48 +51,70 @@ TEST(radio_link_control_while_pairing)
   CHECK(p.a.Pairing() == PairState::RUNNING);
   CHECK_EQ(ControlStatus(p.a, {Op::kSetRole, 0}, nullptr), Status::kBusy);
   CHECK_EQ(ControlStatus(p.a, {Op::kSettings}, nullptr), Status::kOk);
+  CHECK_EQ(ControlStatus(p.a, {Op::kStats}, nullptr), Status::kOk);
 }
 
-// 控制口：读设置的布局，保存后生效，转发给对方 / Control port: the settings layout, a
-// stored setting taking effect, forwarding to the peer.
-TEST(radio_link_control)
+// 读对方的设置：0x30 + 请求，应答是对方的应答。两块探针记的对方 UID 不同，看得出应答来自
+// 哪一块 / The peer's settings: 0x30 + request, answered with the peer's answer. The two
+// probes hold different peer UIDs, which shows where the answer comes from.
+TEST(radio_link_forward_answers_for_the_peer)
 {
   Pair p(true);
-  p.exec_b.control =
-      [&p](const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap, uint16_t& out)
-  { return p.b.HandleControl(req, len, resp, cap, out); };
+  AnswerControlOnB(p);
+  Settings settings;
+  settings.paired = 1;
+  settings.link_id = LinkId(kUidA, kUidB);
+  std::memcpy(settings.peer_uid, kUidA, kUidSize);
+  p.b.Begin(settings, false);
+  std::vector<uint8_t> answer;
+  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kSettings}, &answer), Status::kOk);
+  CHECK_EQ(answer[0], Op::kSettings);
+  CHECK(answer.size() == 24U && std::memcmp(answer.data() + 12, kUidA, kUidSize) == 0);
+}
+
+// 不转发转发请求，也不用无线 / A forward of a forward is refused, without using the
+// radio.
+TEST(radio_link_forward_refuses_a_forward)
+{
+  Pair p(true);
+  std::vector<uint8_t> answer;
+  CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kForward, Op::kSettings}, &answer),
+           Status::kBadRequest);
+  CHECK_EQ(answer.size(), 2U);
+  CHECK_EQ(p.radio_a.sent, 0U);
+}
+
+// 角色设为 LOCAL：保存并立即生效，无线停用 / Role setting LOCAL: stored and in effect at
+// once, the radio stops.
+TEST(radio_link_role_setting_takes_effect_at_once)
+{
+  Pair p(true);
+  CHECK_EQ(ControlStatus(p.a, {Op::kSetRole, static_cast<uint8_t>(RoleSetting::LOCAL)},
+                         nullptr),
+           Status::kOk);
+  CHECK(p.store_a.saved.role == RoleSetting::LOCAL);
+  CHECK(p.a.CurrentRole() == Role::LOCAL);
+}
+
+// 保存失败：状态 2，设置不生效 / A failed save: status 2, and the setting does not apply.
+TEST(radio_link_failed_save_changes_nothing)
+{
+  Pair p(true);
+  p.store_a.ok = false;
+  CHECK_EQ(ControlStatus(p.a, {Op::kSetRole, static_cast<uint8_t>(RoleSetting::LOCAL)},
+                         nullptr),
+           Status::kError);
+  CHECK(p.a.CurrentRole() == Role::REMOTE);
+}
+
+// 别的 op 不归这里，留给平台（0x17 引导槽信息）/ Other ops are not handled here and are
+// left to the platform (0x17, boot slot information).
+TEST(radio_link_other_ops_left_to_the_platform)
+{
+  Pair p(true);
+  const uint8_t other[] = {0x17};
   uint8_t resp[64];
   uint16_t out = 0;
-  const uint8_t read[] = {Op::kSettings};
-  CHECK(p.a.HandleControl(read, sizeof(read), resp, sizeof(resp), out));
-  CHECK_EQ(out, sizeof(SettingsAnswer));
-  SettingsAnswer answer;
-  std::memcpy(&answer, resp, sizeof(answer));
-  const uint32_t id = LinkId(kUidA, kUidB);
-  CHECK(answer.op == Op::kSettings && answer.status == Status::kOk);
-  CHECK(answer.paired == 1 && answer.role == static_cast<uint8_t>(Role::REMOTE));
-  CHECK(answer.link_id[0] == static_cast<uint8_t>(id) &&
-        answer.link_id[3] == static_cast<uint8_t>(id >> 24));
-
-  // 对方读设置：0x30 + 请求，应答为对方的应答 / The peer's settings: 0x30 + request,
-  // answered with the peer's answer.
-  const uint8_t forward[] = {Op::kForward, Op::kSettings};
-  CHECK(p.a.HandleControl(forward, sizeof(forward), resp, sizeof(resp), out));
-  CHECK(out == sizeof(SettingsAnswer) && resp[0] == Op::kSettings && resp[1] == 0);
-  const uint8_t nested[] = {Op::kForward, Op::kForward, Op::kSettings};
-  CHECK(p.a.HandleControl(nested, sizeof(nested), resp, sizeof(resp), out));
-  CHECK(out == 2 && resp[1] == Status::kBadRequest);
-
-  // 角色设为 LOCAL：保存并立即生效，无线停用 / Role setting LOCAL: stored and in effect
-  // at once, the radio stops.
-  const uint8_t local[] = {Op::kSetRole, static_cast<uint8_t>(RoleSetting::LOCAL)};
-  CHECK(p.a.HandleControl(local, sizeof(local), resp, sizeof(resp), out));
-  CHECK(out == 2 && resp[1] == Status::kOk);
-  CHECK(p.store_a.saved.role == RoleSetting::LOCAL && p.a.CurrentRole() == Role::LOCAL);
-  p.store_a.ok = false;
-  CHECK(p.a.HandleControl(local, sizeof(local), resp, sizeof(resp), out));
-  CHECK(resp[1] == Status::kError);
-  const uint8_t other[] = {0x17};
   CHECK(!p.a.HandleControl(other, sizeof(other), resp, sizeof(resp), out));
 }
 
@@ -119,13 +141,28 @@ TEST(radio_link_forward_outside_session)
   CHECK(p.a.CurrentRole() == Role::HOST);
 }
 
-// 对方不应答时也回到 F / Back on F when the peer does not answer either.
+// 转发已经把两块探针带到数据信道，对方的应答却都回不来：电脑收到状态 1，没有无线 DAP 会
+// 话，所以两块探针都回到 F / The forward has taken both probes to a data channel, but
+// none of the peer's answers come back: the PC gets status 1 and, with no wireless DAP
+// session, both probes return to F.
 TEST(radio_link_forward_no_answer)
 {
   Pair p(true);
-  p.air.lose = [&p](const Flight& f) { return f.from == &p.radio_a; };
+  p.radio_a.noise = QuietAt(40, 120);
+  bool on_data_channel = false;
+  p.air.lose = [&on_data_channel](const Flight& f)
+  {
+    if (f.data[0] != kAnswer)
+    {
+      return false;
+    }
+    on_data_channel = f.params.frequency_hz != ChannelHz(93);
+    return true;
+  };
   CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kSettings}, nullptr), Status::kTimeout);
-  CHECK(p.radio_a.Frequency() == ChannelHz(kControlChannel));
+  CHECK(on_data_channel);
+  CHECK(p.radio_a.Frequency() == ChannelHz(93));
+  CHECK(p.radio_b.Frequency() == ChannelHz(93));
   CHECK(p.a.CurrentRole() == Role::REMOTE);
 }
 
@@ -145,9 +182,11 @@ TEST(radio_link_forward_in_session)
   CHECK(p.exec_a.Usb(c) == Expected(c));
 }
 
-// 对方写 Flash 比“听不到”规则的时限长时：请求只执行一次、不重发、不换信道，电脑收到成功
-// / A save longer than the deaf rule's limit: the request runs once, with no resend and
-// no channel change, and the PC gets success.
+// 对方写 Flash 的时间：比“听不到”规则的 60 ms 长，又在控制请求第一次等待留给它的 250 ms
+// 之内，所以主机这段时间既不该重发，也不该换信道 / How long the peer writes flash: longer
+// than the 60 ms of the deaf rule, and within the 250 ms the first wait of a control
+// request leaves for it, so that the host should neither resend nor change channel
+// meanwhile.
 TEST(radio_link_forward_slow_save)
 {
   const std::vector<std::vector<uint8_t>> requests = {
@@ -160,14 +199,10 @@ TEST(radio_link_forward_slow_save)
   for (const auto& request : requests)
   {
     PairWith<SlowStore> p(true);
-    HoldPeerWhileSaving(p, 150'000);
+    HoldPeerWhileSaving(p, 240'000);
     CHECK_EQ(ControlStatus(p.a, request, nullptr), Status::kOk);
     CHECK_EQ(p.store_b.saves, 1U);
-    std::vector<uint8_t> stats;
-    CHECK_EQ(ControlStatus(p.a, {Op::kStats}, &stats), Status::kOk);
-    StatsAnswer answer;
-    std::memcpy(&answer, stats.data(), sizeof(answer));
-    CHECK_EQ(answer.retries, 0U);
-    CHECK(p.radio_a.Frequency() == ChannelHz(kControlChannel));
+    CHECK_EQ(ReadStats(p.a).retries, 0U);
+    CHECK(p.radio_a.Frequency() == ChannelHz(93));
   }
 }
