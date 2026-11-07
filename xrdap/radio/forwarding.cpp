@@ -17,6 +17,13 @@ constexpr uint32_t kBitsPerTransaction = 46;
 constexpr uint32_t kLongCommandUs = 500'000;
 // 计入的 SWJ_Pins 等待上限。 / The longest SWJ_Pins wait counted.
 constexpr uint32_t kMaxPinWaitUs = 3'000'000;
+// 估计的上限，正好放得下最长的 SWJ_Pins 等待。转发时主循环阻塞在 Forward 里喂不了看门狗；
+// 请求里的计数没有检查，SWJ 时钟也可以很慢，不封顶时一条命令就能等到看门狗复位。
+// The cap on the estimate, just enough for the longest SWJ_Pins wait. The main loop
+// blocks in Forward and cannot feed the watchdog; the count in a request is unchecked and
+// the SWJ clock can be very slow, so without a cap one command could wait until a
+// watchdog reset.
+constexpr uint32_t kMaxExecutionUs = 3'000'000;
 
 }  // namespace
 
@@ -35,8 +42,7 @@ uint32_t ExecutionUs(const uint8_t* req, uint16_t len, uint32_t swd_hz)
   {
     transactions = static_cast<uint32_t>(req[2] | req[3] << 8);
   }
-  uint32_t us = static_cast<uint32_t>(2ULL * kBitsPerTransaction * transactions *
-                                      1'000'000ULL / swd_hz);
+  uint64_t us = 2ULL * kBitsPerTransaction * transactions * 1'000'000ULL / swd_hz;
   if (IsCommand(req, len, DapCmd::DELAY) && len >= 3U)
   {
     us += static_cast<uint32_t>(req[1] | req[2] << 8);
@@ -53,7 +59,7 @@ uint32_t ExecutionUs(const uint8_t* req, uint16_t len, uint32_t swd_hz)
   {
     us += kLongCommandUs;
   }
-  return us;
+  return us < kMaxExecutionUs ? static_cast<uint32_t>(us) : kMaxExecutionUs;
 }
 
 uint32_t SwjClockHz(const uint8_t* req, uint16_t len)

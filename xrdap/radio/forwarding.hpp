@@ -4,7 +4,7 @@
 // 主机探针经无线转发 DAP 命令时要知道的事。纯逻辑。
 //
 // ExecutionUs()：远端执行一条命令最多用多久（命令自己的等待，或按转发出去的 SWD 时钟算
-// 的 SWD 事务，再乘 2 留余量）；主机把它加到等应答的时间上。
+// 的 SWD 事务，再乘 2 留余量），至多 3 s；主机把它加到等应答的时间上。
 // SettingsReplay：工具在 DAP_Connect 之前发的 SWJ_Clock、TransferConfigure 和
 // SWD_Configure 在本地执行，因为那时还不知道会话走哪条路；每种保留最后一条，会话走无线时
 // 重发给远端。
@@ -13,8 +13,8 @@
 // Pure logic.
 //
 // ExecutionUs(): how long the remote may take to execute a command (its waits, or its
-// SWD transactions at the forwarded SWD clock, twice over for margin); the host adds it
-// to the time it waits for the answer.
+// SWD transactions at the forwarded SWD clock, twice over for margin), 3 s at most; the
+// host adds it to the time it waits for the answer.
 // SettingsReplay: SWJ_Clock, TransferConfigure and SWD_Configure that a tool sends before
 // DAP_Connect run locally, as the session is not decided yet; the last of each is kept
 // and sent to the remote when the session goes over the radio.
@@ -36,8 +36,8 @@ inline bool IsCommand(const uint8_t* req, uint16_t len, DapCmd id)
 /// forwarded.
 inline constexpr uint32_t kDefaultSwdHz = 500'000;
 
-/// @brief 远端执行这条命令最多用多久，µs / How long the remote may take to execute this
-///        command, µs.
+/// @brief 远端执行这条命令最多用多久，µs，至多 3 s / How long the remote may take to
+///        execute this command, µs, 3 s at most.
 uint32_t ExecutionUs(const uint8_t* req, uint16_t len, uint32_t swd_hz);
 
 /// @brief SWJ_Clock 命令设的时钟；别的命令或时钟为 0 时返回 0 / The clock an SWJ_Clock

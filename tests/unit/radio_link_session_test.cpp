@@ -359,6 +359,25 @@ TEST(radio_link_command_longer_than_the_channel_silence) { CheckLongCommand(2'60
 
 TEST(radio_link_command_longer_than_the_lease) { CheckLongCommand(3'200'000); }
 
+// 一次转发在主循环里阻塞，要远短于固件的看门狗（8 s）：一条计数坏掉的命令发出去，对方再
+// 也没有应答，换信道和重新找对方都试过，也在 6 s 内结束 / One forward blocks the main
+// loop and must stay well below the firmware's watchdog (8 s): a command with a malformed
+// count goes out, the peer never answers, changing channel and looking for the peer are
+// both tried, and it still ends within 6 s.
+TEST(radio_link_forward_stays_below_the_watchdog)
+{
+  Pair p(true);
+  p.radio_a.noise = QuietAt(150);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  p.air.lose = [](const Flight&) { return true; };
+  const std::vector<uint8_t> block = {0x06, 0, 0xFF, 0xFF, 0x0F};
+  const uint64_t begin = VirtualClock::Read();
+  const std::vector<uint8_t> answer = p.exec_a.Usb(block);
+  CHECK(VirtualClock::Read() - begin < 6'000'000U);
+  CHECK_EQ(answer.size(), 2U);
+  CHECK_EQ(answer[1], Byte(DapStatus::ERROR));
+}
+
 // NowUs() 截成 32 位，约 71 分钟回绕一次：回绕点落在会话的任何地方，都不会多发一个包，因
 // 为没有等待会提前结束。步长小于 3 ms 的等待 / NowUs() truncates to 32 bits and wraps
 // about every 71 minutes: wherever the wrap falls in a session, not one more packet goes
