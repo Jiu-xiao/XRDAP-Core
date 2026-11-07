@@ -123,11 +123,15 @@ class Context:
         finally:
             lk.close()
 
+    def new_dap(self, lk):
+        t = self.target
+        return Dap(lk, t.targetsel, t.ap_base) if t else Dap(lk)
+
     @contextlib.contextmanager
     def session(self, clock=None, fixture=True):
         """Open the link, attach SWD at `clock` and (re)write the scratch fixture."""
         with self.link() as lk:
-            dap = Dap(lk)
+            dap = self.new_dap(lk)
             dap.query_packet()
             vendor = Vendor(lk)
             vendor.stop()  # a previous client may have left sampling running
@@ -135,6 +139,12 @@ class Context:
             if fixture and self.target:
                 dap.block_write(self.target.scratch.base, self.target.fixture_bytes())
             yield lk, dap, vendor
+
+    def need_probe_mem_ap(self):
+        """For cases that use the READ, WRITE and sampling of the probe, which select an AP by
+        number."""
+        if self.target and self.target.ap_base is not None:
+            raise NotApplicable("the probe's own memory access selects an AP by number (ADIv5)")
 
     def need_target(self):
         if not self.target:

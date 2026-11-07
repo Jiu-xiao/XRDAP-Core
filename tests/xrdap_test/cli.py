@@ -11,7 +11,6 @@ import time
 from . import link as linkmod
 from . import report
 from . import runner as R
-from .dap import Dap
 from .target import list_targets, load_target
 from .vendor import Vendor
 
@@ -78,7 +77,7 @@ def do_run(args, out_dir):
     ctx = R.Context(args, target, out_dir)
     lk = linkmod.open_link(args.link)
     try:
-        dap = Dap(lk)
+        dap = ctx.new_dap(lk)
         identity = dap.identity()
         identity["vendor_info"] = Vendor(lk).info()
         saved = None

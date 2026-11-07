@@ -42,6 +42,7 @@ def vnd_info(ctx):
 
 @R.case("VND-02", "READ: 1/2/4/8 bytes, pointer chain, item status matrix, limits")
 def vnd_read(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -76,6 +77,7 @@ def vnd_read(ctx):
 
 @R.case("VND-03", "WRITE: 1/2/4/8 bytes with readback, item status matrix")
 def vnd_write(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -102,6 +104,7 @@ def vnd_write(ctx):
 
 @R.case("VND-04", "Argument and state checks")
 def vnd_args(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -140,6 +143,7 @@ def vnd_args(ctx):
 
 @R.case("VND-05", "READ/WRITE latency, items/s, pointer-chain cost")
 def vnd_latency(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -212,6 +216,7 @@ def search_min_period(vendor, items):
 
 @R.case("VND-06", "Sampling: minimum period that keeps up for 1/4/8/32 variables")
 def vnd_capacity(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -320,6 +325,7 @@ def check_stream(ctx, cap, items, period, counter_kind):
 
 @R.case("VND-07", "Divider and phase: 8-item divided set, values and due pattern")
 def vnd_divider(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -337,6 +343,7 @@ def vnd_divider(ctx):
 
 @R.case("VND-08", "Timestamp jitter at 1 ms, 10 s")
 def vnd_jitter(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -351,6 +358,7 @@ def vnd_jitter(ctx):
 
 @R.case("VND-09", "Skip and drop accounting, stop-on-full, partial reads, exclusivity")
 def vnd_overload(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -398,6 +406,7 @@ def vnd_overload(ctx):
 
 @R.case("VND-10", "Halt, run and reset through vendor WRITE (works while sampling)")
 def vnd_core(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -437,6 +446,7 @@ def vnd_core(ctx):
 
 @R.case("VND-11", "PPB access when the AP CSW holds an unprivileged Prot value")
 def vnd_ppb(ctx):
+    ctx.need_probe_mem_ap()
     with ctx.session(fixture=False) as (lk, dap, vendor):
         need_vendor(vendor)
         cpuid = dap.read32(CPUID)
@@ -455,6 +465,7 @@ def vnd_ppb(ctx):
 
 @R.case("VND-12", "Stop and restart at once: new run starts at tick 0, no stale frame")
 def vnd_restart(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -506,6 +517,7 @@ def vnd_wifi(ctx):
 def vnd_space(ctx):
     """B8: inside DAP_ExecuteCommands, fillers use up the response buffer until about 50 bytes
     are left; a READ needing 91 bytes must answer [81 03] and the packet must stay in bounds."""
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -540,6 +552,7 @@ def vnd_space(ctx):
 def vnd_lease(ctx):
     """Protocol 3.1 stop table: no serial request for 5 s stops sampling started over serial;
     the frames stay readable."""
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)

@@ -26,7 +26,8 @@ def dap_transfer(ctx):
     t = ctx.need_target()
     with ctx.session() as (lk, dap, _):
         words = t.at(t.WORDS)
-        dap.dp_write(DP_SELECT, 0)
+        select = dap.ap_select()
+        dap.dp_write(DP_SELECT, select)
         ctx.check("DP read CTRL/STAT powered", dap.dp_read(DP_CTRL_STAT) & 0xA0000000 == 0xA0000000)
         # AP read pipeline: TAR, four DRW reads with auto-increment, then a DP read in one packet.
         done, ack, vals = dap.transfer([(req(1, 0, AP_TAR), words)] + [(req(1, 1, AP_DRW), None)] * 4
@@ -34,8 +35,8 @@ def dap_transfer(ctx):
         ctx.check("posted AP reads return in order", ack == ACK_OK and vals[:4] == [0x5A000000 | k for k in range(4)],
                   [hex(v) for v in vals])
         # Writes followed by the trailing check; AP and DP mixed and SELECT rewritten mid-packet.
-        done, ack, _ = dap.transfer([(req(0, 0, DP_SELECT), 0), (req(1, 0, AP_TAR), t.at(t.RW)),
-                                     (req(1, 0, AP_DRW), 0x11223344), (req(0, 0, DP_SELECT), 0),
+        done, ack, _ = dap.transfer([(req(0, 0, DP_SELECT), select), (req(1, 0, AP_TAR), t.at(t.RW)),
+                                     (req(1, 0, AP_DRW), 0x11223344), (req(0, 0, DP_SELECT), select),
                                      (req(1, 0, AP_DRW), 0x55667788)])
         ctx.check("AP/DP mixed writes", ack == ACK_OK and done == 5)
         ctx.check("write data landed, TAR auto-incremented",
@@ -89,7 +90,7 @@ def dap_block(ctx):
         dpidr = dap.dp_read(0)
         r = lk.xfer(struct.pack("<BBHB", 0x06, 0, 3, req(0, 1, 0)))
         ctx.check("DP block read (IDCODE x3)", r[3] == ACK_OK and r[4:16] == struct.pack("<I", dpidr) * 3, r[:16].hex(" "))
-        r = lk.xfer(struct.pack("<BBHB", 0x06, 0, 2, req(0, 0, DP_SELECT)) + b"\0" * 8)
+        r = lk.xfer(struct.pack("<BBHBII", 0x06, 0, 2, req(0, 0, DP_SELECT), dap.ap_select(), dap.ap_select()))
         ctx.check("DP block write (SELECT x2)", r[3] == ACK_OK and r[1] == 2)
         r = lk.xfer(struct.pack("<BBHB", 0x06, 0, 0, req(1, 1, AP_DRW)))
         ctx.check("count 0: nothing transferred, in sync", int.from_bytes(r[1:3], "little") == 0 and in_sync(lk), r.hex(" "))
@@ -115,10 +116,10 @@ def dap_block(ctx):
         ctx.summary(f"block semantics as expected, {fit} words per packet")
 
 
-def transfer_of_length(n):
+def transfer_of_length(n, select=0):
     """A DAP_Transfer request exactly n bytes long: SELECT writes plus RDBUFF reads."""
     w, r = divmod(n - 3, 5)
-    writes = b"".join(bytes([req(0, 0, DP_SELECT)]) + b"\0" * 4 for _ in range(w))
+    writes = b"".join(bytes([req(0, 0, DP_SELECT)]) + struct.pack("<I", select) for _ in range(w))
     return bytes([0x05, 0, w + r]) + writes + bytes([req(0, 1, DP_RDBUFF)]) * r
 
 
@@ -132,7 +133,7 @@ def dap_lengths(ctx):
         bad = []
         for n in lengths:
             for _ in range(20):
-                r = lk.xfer(transfer_of_length(n))
+                r = lk.xfer(transfer_of_length(n, dap.ap_select()))
                 if r[:1] != b"\x05" or r[2] != ACK_OK:
                     bad.append(("request", n, r[:3].hex(" ")))
                     break
