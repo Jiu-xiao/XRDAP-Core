@@ -503,4 +503,32 @@ inline void RunFor(Link& link, uint32_t us)
   }
 }
 
+// 一个点安静、其余忙碌的噪声 / Noise with one quiet point and the rest busy.
+inline std::function<int16_t(uint32_t)> QuietAt(uint8_t quiet,
+                                                uint8_t second = kNoChannel)
+{
+  return [quiet, second](uint32_t hz) -> int16_t
+  {
+    if (hz == ChannelHz(quiet))
+    {
+      return -200;
+    }
+    return hz == ChannelHz(second) ? -190 : -150;
+  };
+}
+
+inline uint8_t ControlStatus(Link& link, std::vector<uint8_t> req,
+                             std::vector<uint8_t>* answer)
+{
+  uint8_t resp[128];
+  uint16_t out = 0;
+  CHECK(link.HandleControl(req.data(), static_cast<uint16_t>(req.size()), resp,
+                           sizeof(resp), out));
+  if (answer != nullptr)
+  {
+    answer->assign(resp, resp + out);
+  }
+  return out >= 2 ? resp[1] : 0xFF;
+}
+
 }  // namespace RadioTest
