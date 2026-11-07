@@ -111,4 +111,14 @@ code: 55 cases ({'auto': 39, 'assisted': 5, 'manual': 11})
 coverage OK
 ```
 
-单元测试用协议文档里的字节示例检查帧、条目编码和 SUB_READ 解码。
+单元测试用协议文档里的字节示例检查帧、条目编码和 SUB_READ 解码，并用假链路检查不接探针也能运行的用例逻辑。
+
+## 电脑端测试
+
+`unit/`、`threads/`、`mem_ap/` 和 `compile/` 是不接探针的 C++ 测试，在电脑上编译运行，需要 libxr 的路径，所有目标都开 AddressSanitizer、UBSan 和 `-Werror`。ctest 运行这些测试，检查 `xrdap/` 里的原子变量只用 32 位整数，并在有 Python 3.11 或更新版本时运行上面的覆盖检查和单元测试；每条测试都有超时。以下命令在仓库根目录执行：
+
+```bash
+cmake -S tests -B build -DLIBXR_DIR=<libxr>
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
