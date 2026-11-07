@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <atomic>
 #include <cstdint>
 
 namespace RadioTest
@@ -28,7 +27,7 @@ class VirtualClock
   static uint64_t Read() { return now_us_ += kStepUs; }
 
  private:
-  static inline std::atomic<uint64_t> now_us_{kWrapUs - kLeadUs};
+  static inline uint64_t now_us_ = kWrapUs - kLeadUs;
 };
 
 }  // namespace RadioTest
