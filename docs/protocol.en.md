@@ -6,7 +6,7 @@ This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP
 
 All integers are little-endian. Spaces in hexadecimal examples are for readability only.
 
-Contents: 1 Serial frames; 2 TCP frames; 3 XR vendor extension (3.1 rules and one link at a time, 3.2 status and reply space, 3.3 items, 3.4 commands, 3.5 sampling, 3.6 SWD access, 3.7 0x86, 3.8 byte examples); 4 Probe identity and discovery (DAP_Info, mDNS); 5 The ESP32-C3 USB port; 6 USB/IP virtual device; 7 Notes for USB hosts.
+Contents: 1 Serial frames; 2 TCP frames; 3 XR vendor extension (3.1 rules and one link at a time, 3.2 status and reply space, 3.3 items, 3.4 commands, 3.5 sampling, 3.6 SWD access, 3.7 0x86, 3.7.1 control port, 3.8 byte examples); 4 Probe identity and discovery (DAP_Info, mDNS); 5 The ESP32-C3 USB port; 6 USB/IP virtual device; 7 Notes for USB hosts; 8 Radio link between two probes (8.1 packets, 8.2 sessions, 8.3 control port operations, 8.4 channels).
 
 ## 1. Serial frames
 
@@ -185,10 +185,10 @@ The response is always 22 bytes:
 | 0 | 1 | 0x80 |
 | 1 | 1 | Overall status |
 | 2 | 1 | Protocol version, currently 2 |
-| 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86), bit5 control port (3.7.1), bit6 compact frames (3.5); 0x7F on XRDAP-ESP, 0x6F on the radio XRDAP-CH32V307 (wdap), 0x4F on the others (older firmware without compact frames: 0x3F or 0x1F, 0x2F, 0x0F) |
+| 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86), bit5 control port (3.7.1), bit6 compact frames (3.5); 0x7F on XRDAP-ESP, 0x6F on XRDAP-CH32V307, 0x4F on XRDAP-F103C8 (older firmware without compact frames: 0x3F or 0x1F, 0x2F, 0x0F) |
 | 7 | 2 | Maximum items per request or sampling run: 32 |
 | 9 | 1 | Maximum dereference depth: 8 |
-| 10 | 4 | Ring buffer size in bytes: 16384 on XRDAP-ESP, 4096 on XRDAP-F103C8 and XRDAP-CH32V307 |
+| 10 | 4 | Ring buffer size in bytes: 16384 on XRDAP-ESP (4096 on the ESP32-S2), 4096 on XRDAP-F103C8 and XRDAP-CH32V307 (2048 on the CH32V305 board) |
 | 14 | 8 | Current probe time, µs |
 
 #### 0x81 READ
@@ -375,11 +375,11 @@ Response: `86 status`. With status 0x00 the credentials have been cleared, and a
 
 ### 3.7.1 Control port
 
-Settings requests (for now only the Wi-Fi operations above) can also bypass DAP and use the probe's control port. A request is `op(1) + payload` and the answer `op(1) + status(1) + payload`; `op` and the payload are those of the matching DAP command, but the request has no `86` byte and the first byte of the answer is the `op`. The probe's execution context handles a control request one after the other with DAP commands; there is no connection, and the DAP connection and sampling are not affected. An operation the probe does not have answers status `0xF2` (the control port's own "unsupported"), an empty request status `0xF1`; `0xF0` to `0xFF` belong to the control port and a probe's own operations use the low status codes.
+Settings requests (the Wi-Fi operations above and the radio operations of section 8.3) bypass DAP and use the probe's control port; the Wi-Fi operations can also use `0x86`. A request is `op(1) + payload` and the answer `op(1) + status(1) + payload`; for a Wi-Fi operation `op` and the payload are those of `0x86`, but the request has no `86` byte and the first byte of the answer is the `op`. The probe's execution context handles a control request one after the other with DAP commands; there is no connection, and the DAP connection and sampling are not affected. An operation the probe does not have answers status `0xF2` (the control port's own "unsupported"); `0xF0` to `0xFF` belong to the control port and a probe's own operations use the low status codes. An empty request is not an operation: on USB the SEND is STALLed, on TCP the header is invalid and the connection is closed (section 2), and on serial the answer is `00 F1` (status `0xF1`: malformed request).
 
 | Link | How to send |
 |---|---|
-| USB | A vendor control transfer to the DAP interface: `bmRequestType 0x41 bRequest 0x01` sends the request (OUT data stage); `0xC1 / 0x02` takes the answer (IN; 0 bytes while it is not ready, retry later). One request at a time; sending another before the answer was taken is STALLed; a request cannot exceed the device's EP0 OUT buffer (64 bytes measured on the CH32; a longer SEND is STALLed), and the host must then use another way (a Wi-Fi save request that is longer falls back to `0x86`) |
+| USB | A vendor control transfer to the DAP interface: `bmRequestType 0x41 bRequest 0x01` sends the request (OUT data stage); `0xC1 / 0x02` takes the answer (IN; 0 bytes while it is not ready, retry later). One request at a time; sending another before the answer was taken is STALLed; a request cannot exceed the device's EP0 OUT buffer (64 bytes on the CH32; a longer SEND is STALLed), and the host must then use another way (a Wi-Fi save request that is longer falls back to `0x86`) |
 | Serial | The same frame with the topics `ctrl_req` (`0x3D2538F2`) and `ctrl_resp` (`0x31BDA5B6`) and the same payload layout (2-byte length + content); it does not renew the serial lease |
 | TCP | The same connection, frame type 3 for a control request and 4 for the answer, otherwise as section 2 |
 
@@ -393,9 +393,9 @@ The values below are examples only.
 
 Request: `80`
 
-Response: `80 00 02 1F000000 2000 08 00400000 40420F0000000000`
+Response: `80 00 02 7F000000 2000 08 00400000 40420F0000000000`
 
-Meaning: version 2, feature bits 0x1F, at most 32 items, depth 8, 16384-byte buffer, probe time 1 000 000 µs.
+Meaning: version 2, feature bits 0x7F, at most 32 items, depth 8, 16384-byte buffer, probe time 1 000 000 µs.
 
 #### READ, one item
 
@@ -496,7 +496,7 @@ Request: `05 …` (`DAP_Transfer`), response: `FF`
 
 ### 4.1 DAP_Info strings
 
-The firmware returns these strings in `DAP_Info` (`probe/probe_identity.hpp` in this repository). On probes with USB the USB device descriptor uses the same vendor and serial number.
+The firmware returns these strings in `DAP_Info` (`xrdap/probe/probe_identity.hpp` in this repository). On probes with USB the USB device descriptor uses the same vendor and serial number.
 
 | Info ID | Meaning | Content |
 |---|---|---|
@@ -522,7 +522,7 @@ Once the probe has an IP address it advertises itself on the LAN:
 | Instance name | The serial number, e.g. `XRobot-XRDAP-0123456789AB` |
 | TXT `serial` | The serial number |
 | TXT `chip` | `esp32s3`, `esp32s2`, `esp32c3` or `esp32` |
-| TXT `fw` | Firmware version, e.g. `0.5.5` |
+| TXT `fw` | Firmware version, e.g. `0.6.0` |
 
 OpenOCD accepts the host name directly in `cmsis-dap tcp host`. Host tools browse the `_xrdap._tcp` service to list the probes on the LAN and match them with the same probe on USB or serial through the TXT `serial`. An mDNS startup failure is only logged and does not affect the TCP service.
 
@@ -606,7 +606,7 @@ A full-speed USB Bulk packet is 64 bytes. When a request length is an exact mult
 
 ## 8. Radio link between two probes
 
-Radio probes are used in pairs: one board on the PC's USB (the host) and one on the target (the remote). The host sends the PC's DAP commands over the radio to the remote, which executes them, and returns the answers to USB. The implementation is in `xrdap/radio/`; the radio driver is a template parameter and meets the contract in `xrdap/radio/transceiver.hpp`. Probes with different transceivers cannot work together.
+Radio probes are used in pairs: one board on the PC's USB (the host) and one on the target (the remote). The host sends the PC's DAP commands over the radio to the remote, which executes them, and returns the answers to USB. The implementation is in `xrdap/radio/`; the radio driver is a template parameter and meets the contract in `xrdap/radio/transceiver.hpp`. Probes with different transceivers cannot work together. The radio link has no authentication: the CRC seed and the link address only keep pairs apart.
 
 ### 8.1 Packets
 
@@ -657,7 +657,7 @@ Answer of 0x13 (24 bytes):
 |---|---|
 | 0..1 | `13 00` |
 | 2 | Role setting |
-| 3 | Modulation |
+| 3 | Rate (0 high, 1 low) |
 | 4 | 1 paired |
 | 5 | 1 safe mode (after repeated watchdog resets; the settings are not applied) |
 | 6 | Current role |
