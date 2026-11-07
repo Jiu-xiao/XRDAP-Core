@@ -1,9 +1,12 @@
 """The tool's encoders and decoders against the byte examples of docs/protocol.md."""
 
 import unittest
+from unittest import mock
 
 from xrdap_test import link
-from xrdap_test.vendor import Item, decode_frames
+from xrdap_test import runner as R
+from xrdap_test.cases import vendor_cases as V
+from xrdap_test.vendor import OK, STATE, Item, decode_frames, numbered
 from xrdap_test.vendor import Vendor as VendorClient
 
 
@@ -79,8 +82,6 @@ class ProtocolV2(unittest.TestCase):
 
 class MinimumPeriodSearch(unittest.TestCase):
     def test_doubling_then_25_us_steps(self):
-        from xrdap_test.cases import vendor_cases as V
-
         calls = []
 
         def keeps_up(vendor, items, period, tried):
@@ -97,8 +98,6 @@ class MinimumPeriodSearch(unittest.TestCase):
                                  250, 250, 275, 275, 300, 300, 325, 325, 350])
 
     def test_one_failed_run_is_retried(self):
-        from xrdap_test.cases import vendor_cases as V
-
         flaky = {200: [False, True]}  # 200 us: a burst of drops once, then fine
 
         def keeps_up(vendor, items, period, tried):
@@ -112,6 +111,39 @@ class MinimumPeriodSearch(unittest.TestCase):
         finally:
             V.keeps_up = real
         self.assertEqual(best, 150)
+
+
+class SamplingProbe:
+    """SUB_START, SUB_CTRL stop and SUB_READ of protocol 3.4, one frame per read while sampling.
+    The first `lost` SUB_READs answer 85 FF, the host board's answer to a failed forward."""
+
+    def __init__(self, lost):
+        self.lost, self.sampling, self.tick = lost, False, 0
+
+    def xfer(self, request, timeout=2.0):
+        command = request[0]
+        if command == 0x83:
+            refused, self.sampling = self.sampling, True
+            return bytes([command, STATE if refused else OK])
+        if command == 0x84:
+            self.sampling = self.sampling and request[1] != 0
+            return bytes([command, OK])
+        if self.lost:
+            self.lost -= 1
+            return bytes([command, 0xFF])
+        if not self.sampling:
+            return bytes([command, STATE]) + bytes(22)
+        self.tick += 1
+        head = bytes(20) + (1).to_bytes(2, "little")  # time, remaining, dropped, skipped, frames
+        return bytes([command, OK]) + head + self.tick.to_bytes(4, "little") + bytes(11)
+
+
+class LostForward(unittest.TestCase):
+    def test_period_search_goes_on_after_one_failed_read(self):
+        vendor = VendorClient(SamplingProbe(lost=1))
+        with mock.patch.object(R, "SEARCH_RUN_S", 0.01):
+            best, _ = V.search_min_period(vendor, numbered([Item(0x20000000)]))
+        self.assertEqual(best, R.SEARCH_STEP_US)
 
 
 class ResponseLengthScan(unittest.TestCase):
