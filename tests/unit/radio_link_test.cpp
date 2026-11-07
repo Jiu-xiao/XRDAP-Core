@@ -4,10 +4,7 @@
 // through RadioLink over a pair of in-memory fake transceivers. Oracle: the role and
 // session rules of radio_link.hpp, the operations of settings.hpp and docs/protocol.md
 // section 8.
-#include "xrdap/radio/radio_link.hpp"
-
 #include <cstring>
-#include <deque>
 #include <functional>
 #include <vector>
 
@@ -16,252 +13,10 @@
 
 using namespace XrDap;
 using namespace XrDap::Radio;
+using namespace RadioTest;
 
 namespace
 {
-// 接口同 xrobot-org/SX1281 的假收发器；Send 立即投到对方的接收队列 / Fake transceiver
-// with the interface of xrobot-org/SX1281; Send delivers to the peer's receive queue at
-// once.
-class FakeRadio
-{
- public:
-  LibXR::ErrorCode Start(const LinkParams& config)
-  {
-    config_ = config;
-    rx_.clear();
-    ++starts;
-    return LibXR::ErrorCode::OK;
-  }
-  uint8_t MaxPayload() const { return config_.rate == Rate::kLow ? 127 : 255; }
-  void PrepareSend() {}
-  LibXR::ErrorCode Tune(uint32_t frequency_hz)
-  {
-    config_.frequency_hz = frequency_hz;
-    return LibXR::ErrorCode::OK;
-  }
-  int16_t RssiInstant()
-  {
-    ++rssi_reads;
-    return noise ? noise(config_.frequency_hz) : -200;
-  }
-  uint32_t TxPackets() const { return sent; }
-  uint32_t TxErrors() const { return 0; }
-  uint32_t RxPackets() const { return received; }
-  uint32_t RxErrors() const { return 0; }
-  uint32_t Rearms() const { return 0; }
-  uint32_t Restarts() const { return starts; }
-  uint32_t Frequency() const { return config_.frequency_hz; }
-  LibXR::ErrorCode Send(const uint8_t* data, uint8_t size)
-  {
-    if (sending_)
-    {
-      if (on_air_ > 0U)
-      {
-        --on_air_;
-        return LibXR::ErrorCode::BUSY;
-      }
-      sending_ = false;  // 上一包发完，不回接收 / previous one done, no receive between
-    }
-    ++sent;
-    // 双方身份（含频率）相同、信道没被堵时才收得到 / Delivered only when both use the
-    // same identity (frequency included) and the channel is not jammed.
-    if (peer != nullptr && (drop == nullptr || !drop(sent)) &&
-        (jam == nullptr || !jam(config_.frequency_hz)) && SameIdentity(*peer))
-    {
-      peer->rx_.emplace_back(data, data + size);
-    }
-    sending_ = air > 0U;
-    on_air_ = air;
-    return LibXR::ErrorCode::OK;
-  }
-  bool Sending() const { return sending_; }
-  // 主机等应答时让对方跑一轮 / Lets the peer run a round while the host waits.
-  void Poll()
-  {
-    if (sending_)
-    {
-      if (on_air_ > 0U)
-      {
-        --on_air_;
-      }
-      else
-      {
-        sending_ = false;
-        ++receive_entries;
-      }
-    }
-    if (on_poll)
-    {
-      on_poll();
-    }
-  }
-  int Receive(uint8_t* out)
-  {
-    if (rx_.empty())
-    {
-      return 0;
-    }
-    const auto packet = rx_.front();
-    rx_.pop_front();
-    ++received;
-    std::memcpy(out, packet.data(), packet.size());
-    return static_cast<int>(packet.size());
-  }
-
-  bool SameIdentity(const FakeRadio& other) const
-  {
-    return other.config_.rate == config_.rate &&
-           other.config_.frequency_hz == config_.frequency_hz &&
-           other.config_.crc_seed == config_.crc_seed &&
-           std::memcmp(other.config_.address, config_.address, 4) == 0;
-  }
-
-  FakeRadio* peer = nullptr;
-  std::function<void()> on_poll;
-  std::function<bool(uint32_t)> drop;  // 第 n 次发送丢掉时为 true / true drops send n
-  // 在这个频率上发的包丢掉时为 true / true loses packets sent on this frequency
-  std::function<bool(uint32_t)> jam;
-  // 某个频率上的 RSSI，0.5 dBm；没设时处处安静 / RSSI on a frequency, 0.5 dBm; quiet
-  // everywhere when unset
-  std::function<int16_t(uint32_t)> noise;
-  uint32_t received = 0;
-  uint32_t sent = 0;
-  uint32_t starts = 0;
-  uint32_t rssi_reads = 0;
-  // 每包在空中停留的 Send / Poll 调用次数，0 为立即发完 / Send / Poll calls each packet
-  // stays on air, 0 for at once.
-  uint32_t air = 0;
-  uint32_t receive_entries = 0;  // 发完转回接收的次数 / Returns to receive after sending
-
- private:
-  bool sending_ = false;
-  uint32_t on_air_ = 0;
-  LinkParams config_{};
-  std::deque<std::vector<uint8_t>> rx_;
-};
-
-// 执行器只留 RadioLink 用到的部分 / Executor with only what RadioLink uses.
-class FakeExec
-{
- public:
-  using Forwarder = bool (*)(void*, Transport, const uint8_t*, uint16_t, uint8_t*,
-                             uint16_t, uint16_t&);
-  void SetForwarder(Forwarder f, void* ctx)
-  {
-    forwarder_ = f;
-    ctx_ = ctx;
-  }
-  // USB 来一条命令：转发钩子不处理时在本地执行 / A command from USB: runs locally when
-  // the forwarder hook does not take it.
-  std::vector<uint8_t> Usb(const std::vector<uint8_t>& req)
-  {
-    uint8_t resp[kMaxMessage];
-    uint16_t out = 0;
-    if (!forwarder_(ctx_, Transport::USB, req.data(), static_cast<uint16_t>(req.size()),
-                    resp, sizeof(resp), out))
-    {
-      ++local;
-      return {0xEE};
-    }
-    return {resp, resp + out};
-  }
-  // 远端执行：应答 = 命令号 + 命令倒序 / Remote execution: answer = command id + the
-  // command reversed.
-  void ExecuteHere(Transport t, const uint8_t* req, uint16_t len, uint8_t* resp,
-                   uint16_t cap, uint16_t& out)
-  {
-    uint16_t forwarded = 0;
-    CHECK(!forwarder_(ctx_, t, req, len, resp, cap, forwarded));  // RADIO 不转发
-    ++executed;
-    last.assign(req, req + len);
-    resp[0] = req[0];
-    for (uint16_t i = 1; i < len && i < cap; ++i)
-    {
-      resp[i] = req[len - i];
-    }
-    out = len;
-  }
-  void ControlHere(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
-                   uint16_t& out)
-  {
-    if (control == nullptr || !control(req, len, resp, cap, out))
-    {
-      out = Control::StatusOnly(req[0], Control::kStatusUnsupported, resp, cap);
-    }
-  }
-  void LinkLost(Transport t)
-  {
-    CHECK(t == Transport::RADIO);
-    ++lost;
-  }
-
-  std::function<bool(const uint8_t*, uint16_t, uint8_t*, uint16_t, uint16_t&)> control;
-  std::vector<uint8_t> last;  // 上一条执行的命令 / the last command executed
-  uint32_t executed = 0;
-  uint32_t local = 0;
-  uint32_t lost = 0;
-
- private:
-  Forwarder forwarder_ = nullptr;
-  void* ctx_ = nullptr;
-};
-
-class FakeStore final : public Store
-{
- public:
-  bool Save(const Settings& s) override
-  {
-    saved = s;
-    ++saves;
-    return ok;
-  }
-  Settings saved{};
-  uint32_t saves = 0;
-  bool ok = true;
-};
-
-using Link = RadioLink<FakeRadio, FakeExec>;
-
-const uint8_t kUidA[kUidSize] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-const uint8_t kUidB[kUidSize] = {9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9};
-
-// 一对探针：a 接电脑，b 接目标 / A pair: a on the PC, b on the target.
-struct Pair
-{
-  FakeRadio radio_a, radio_b;
-  FakeExec exec_a, exec_b;
-  FakeStore store_a, store_b;
-  Link a{radio_a, exec_a, store_a, kUidA};
-  Link b{radio_b, exec_b, store_b, kUidB};
-
-  explicit Pair(bool paired, Rate rate = Rate::kHigh)
-  {
-    RadioTest::VirtualClock::StartBeforeWrap(RadioTest::VirtualClock::kLeadUs);
-    radio_a.peer = &radio_b;
-    radio_b.peer = &radio_a;
-    // 只有主机在等应答时阻塞；远端不阻塞，不必反过来驱动主机 / Only the host blocks,
-    // waiting for answers; the remote never blocks and need not drive the host.
-    radio_a.on_poll = [this] { (void)b.Service(); };
-    Settings s;
-    s.paired = paired ? 1 : 0;
-    s.link_id = paired ? LinkId(kUidA, kUidB) : 0;
-    s.rate = rate;
-    a.Begin(s, false);
-    b.Begin(s, false);
-  }
-};
-
-std::vector<uint8_t> Command(uint8_t id, uint16_t size)
-{
-  std::vector<uint8_t> c(size);
-  c[0] = id;
-  for (uint16_t i = 1; i < size; ++i)
-  {
-    c[i] = static_cast<uint8_t>(i * 13U);
-  }
-  return c;
-}
-
 // 命令的所有分片，序号由测试给出 / All fragments of a command, with a given sequence.
 std::vector<std::vector<uint8_t>> Burst(const std::vector<uint8_t>& c, uint8_t sequence)
 {
@@ -278,31 +33,22 @@ std::vector<std::vector<uint8_t>> Burst(const std::vector<uint8_t>& c, uint8_t s
   return out;
 }
 
+// 主机的射频发一包，等它在空中走完 / The host's radio sends a packet and it finishes its
+// time on air.
 void Deliver(Pair& p, const std::vector<uint8_t>& packet)
 {
-  CHECK(p.radio_a.Send(packet.data(), static_cast<uint8_t>(packet.size())) ==
-        LibXR::ErrorCode::OK);
-}
-
-// 让远端把在发的应答发完 / Lets the remote finish the answer it is sending.
-void Serve(Pair& p)
-{
-  for (int i = 0; i < 100; ++i)
+  while (p.radio_a.Send(packet.data(), static_cast<uint8_t>(packet.size())) ==
+         LibXR::ErrorCode::BUSY)
   {
-    (void)p.b.Service();
+  }
+  while (p.radio_a.Sending())
+  {
   }
 }
 
-std::vector<uint8_t> Expected(const std::vector<uint8_t>& c)
-{
-  std::vector<uint8_t> e(c.size());
-  e[0] = c[0];
-  for (size_t i = 1; i < c.size(); ++i)
-  {
-    e[i] = c[c.size() - i];
-  }
-  return e;
-}
+// 让远端把在发的应答发完：5 片加上等下一片的 3 ms / Lets the remote finish the answer it
+// is sending: 5 fragments plus the 3 ms it waits for a next one.
+void Serve(Pair& p) { RunFor(p.b, 10'000); }
 }  // namespace
 
 // AUTO：DAP_Connect 找到对方后整个会话走无线，长短命令都逐字节到达；DAP_Disconnect
@@ -343,8 +89,9 @@ TEST(radio_link_resend)
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
   const uint32_t before = p.exec_b.executed;
   // 远端第一次应答的分片全部丢掉 / Every fragment of the remote's first answer is lost.
-  const uint32_t first = p.radio_b.sent;
-  p.radio_b.drop = [first](uint32_t n) { return n > first && n <= first + 5; };
+  int lost = 0;
+  p.air.lose = [&](const Flight& f)
+  { return f.from == &p.radio_b && f.data[0] == kAnswer && lost++ < 5; };
   const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
   CHECK(p.exec_a.Usb(c) == Expected(c));
   CHECK_EQ(p.exec_b.executed, before + 1U);
@@ -357,6 +104,7 @@ TEST(radio_link_answer_after_burst)
 {
   Pair p(true);
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  Serve(p);
   const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
   const auto f = Burst(c, 200);
   CHECK_EQ(f.size(), 5U);
@@ -375,9 +123,11 @@ TEST(radio_link_answer_after_burst)
   {
     CHECK_EQ(p.exec_b.executed, executed);
     CHECK_EQ(p.radio_b.sent, sent);
-    if (next < f.size())
+    if (next < f.size() &&
+        p.radio_a.Send(f[next].data(), static_cast<uint8_t>(f[next].size())) ==
+            LibXR::ErrorCode::OK)
     {
-      Deliver(p, f[next++]);
+      ++next;
     }
   };
   (void)p.b.Service();
@@ -395,6 +145,7 @@ TEST(radio_link_answer_when_last_fragment_lost)
 {
   Pair p(true);
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  Serve(p);
   const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
   const auto f = Burst(c, 200);
   const uint32_t executed = p.exec_b.executed;
@@ -416,6 +167,7 @@ TEST(radio_link_resend_without_first_fragment)
 {
   Pair p(true);
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  Serve(p);
   const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
   const auto f = Burst(c, 200);
   for (const auto& packet : f)
@@ -443,6 +195,7 @@ TEST(radio_link_other_message_during_burst)
 {
   Pair p(true);
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  Serve(p);
   const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
   const auto f = Burst(c, 200);
   const auto g = Burst(Command(Byte(DapCmd::TRANSFER_BLOCK), 1024), 201);
@@ -463,16 +216,15 @@ TEST(radio_link_other_message_during_burst)
 TEST(radio_link_back_to_back)
 {
   Pair p(true);
-  p.radio_a.air = 2;
-  p.radio_b.air = 2;
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  Serve(p);
   const uint32_t sent_a = p.radio_a.sent;
   const uint32_t sent_b = p.radio_b.sent;
   const uint32_t entries_a = p.radio_a.receive_entries;
   const uint32_t entries_b = p.radio_b.receive_entries;
   const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
   CHECK(p.exec_a.Usb(c) == Expected(c));
-  (void)p.b.Service();
+  RunFor(p.b, 2'000);
   CHECK(p.radio_a.sent - sent_a > 1U && p.radio_b.sent - sent_b > 1U);
   CHECK_EQ(p.radio_a.receive_entries - entries_a, 1U);
   CHECK_EQ(p.radio_b.receive_entries - entries_b, 1U);
@@ -503,8 +255,6 @@ uint8_t ControlStatus(Link& link, std::vector<uint8_t> req, std::vector<uint8_t>
   }
   return out >= 2 ? resp[1] : 0xFF;
 }
-
-uint32_t Now() { return static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds()); }
 
 // 信道：会话在 F 上建立，主机扫描后两端换到最安静的点；会话结束时都回 F；第二个会话不再
 // 扫描 / Channels: the session opens on F, the host scans and both move to the quietest
@@ -545,7 +295,8 @@ TEST(radio_link_channel_ack_lost)
   Pair p(true);
   p.radio_a.noise = QuietAt(20);
   const uint32_t first = p.radio_b.sent;
-  p.radio_b.drop = [first](uint32_t n) { return n == first + 2; };  // PONG, 然后 ACK
+  p.air.lose = [&](const Flight& f)
+  { return f.from == &p.radio_b && p.radio_b.sent == first + 2; };  // PONG, 然后 ACK
   const auto c = Command(Byte(DapCmd::CONNECT), 2);
   CHECK(p.exec_a.Usb(c) == Expected(c));
   CHECK(p.radio_a.Frequency() == ChannelHz(20) && p.radio_b.Frequency() == ChannelHz(20));
@@ -560,13 +311,11 @@ TEST(radio_link_channel_jammed)
   p.radio_a.noise = QuietAt(150, 120);
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
   CHECK(p.radio_b.Frequency() == ChannelHz(150));
-  auto jam = [](uint32_t hz) { return hz == ChannelHz(150); };
-  p.radio_a.jam = jam;
-  p.radio_b.jam = jam;
+  p.air.lose = [](const Flight& f) { return f.params.frequency_hz == ChannelHz(150); };
   const auto c = Command(Byte(DapCmd::TRANSFER), 64);
-  const uint32_t begin = Now();
+  const uint32_t begin = NowUs();
   bool ok = false;
-  while (!ok && Now() - begin < 8'000'000U)
+  while (!ok && NowUs() - begin < 8'000'000U)
   {
     ok = p.exec_a.Usb(c) == Expected(c);
   }
@@ -584,23 +333,25 @@ TEST(radio_link_channel_lost_after_ack)
   Pair p(true);
   p.radio_a.noise = QuietAt(30);
   uint32_t first = 0;
-  p.radio_b.jam = [&first](uint32_t hz)
+  bool reached = false;
+  p.air.lose = [&](const Flight& f)
   {
-    if (hz != ChannelHz(30))
+    if (f.from != &p.radio_b || f.params.frequency_hz != ChannelHz(30))
     {
       return false;
     }
-    if (first == 0U)
+    if (!reached)
     {
-      first = Now();
+      first = NowUs();
+      reached = true;
     }
-    return Now() - first < 35'000U;
+    return NowUs() - first < 35'000U;
   };
   const auto c = Command(Byte(DapCmd::CONNECT), 2);
-  const uint32_t begin = Now();
+  const uint32_t begin = NowUs();
   CHECK(p.exec_a.Usb(c) == Expected(c));
-  CHECK(Now() - begin < 2'000'000U);
-  CHECK(first != 0U);
+  CHECK(NowUs() - begin < 2'000'000U);
+  CHECK(reached);
   CHECK(p.radio_a.Frequency() == p.radio_b.Frequency());
 }
 
@@ -611,11 +362,7 @@ TEST(radio_link_idle_end_serves_peer)
   Pair p(true);
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
   CHECK(p.a.CurrentRole() == Role::HOST);
-  const uint32_t begin = Now();
-  while (Now() - begin < 5'200'000U)
-  {
-    (void)p.a.Service();
-  }
+  RunFor(p.a, 5'200'000);
   CHECK(p.a.CurrentRole() == Role::REMOTE);
   CHECK(p.radio_a.Frequency() == ChannelHz(kControlChannel));
   p.radio_a.on_poll = nullptr;
@@ -634,7 +381,7 @@ TEST(radio_link_deaf_locked)
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
   CHECK(p.radio_a.Frequency() == ChannelHz(40));
   const uint32_t starts = p.radio_a.starts;
-  p.radio_b.drop = [](uint32_t) { return true; };
+  p.air.lose = [&p](const Flight& f) { return f.from == &p.radio_b; };
   (void)p.exec_a.Usb(Command(Byte(DapCmd::TRANSFER), 16));
   CHECK(p.radio_a.starts > starts);
   CHECK(p.radio_a.Frequency() == ChannelHz(40));
@@ -661,11 +408,7 @@ TEST(radio_link_remote_silence)
   p.radio_a.noise = QuietAt(40);
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
   CHECK(p.radio_b.Frequency() == ChannelHz(40));
-  const uint32_t begin = Now();
-  while (Now() - begin < 2'700'000U)
-  {
-    (void)p.b.Service();
-  }
+  RunFor(p.b, 2'700'000);
   CHECK(p.radio_b.Frequency() == ChannelHz(kControlChannel));
   const auto c = Command(Byte(DapCmd::TRANSFER), 16);
   CHECK(p.exec_a.Usb(c) == Expected(c));
@@ -745,7 +488,8 @@ TEST(radio_link_control)
   CHECK(!p.a.HandleControl(other, sizeof(other), resp, sizeof(resp), out));
 }
 
-void AnswerControlOnB(Pair& p)
+template <typename PairT>
+void AnswerControlOnB(PairT& p)
 {
   p.exec_b.control =
       [&p](const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap, uint16_t& out)
@@ -779,7 +523,7 @@ TEST(radio_link_forward_outside_session)
 TEST(radio_link_forward_no_answer)
 {
   Pair p(true);
-  p.radio_a.drop = [](uint32_t) { return true; };
+  p.air.lose = [&p](const Flight& f) { return f.from == &p.radio_a; };
   CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kSettings}, nullptr), Status::kTimeout);
   CHECK(p.radio_a.Frequency() == ChannelHz(kControlChannel));
   CHECK(p.a.CurrentRole() == Role::REMOTE);
@@ -801,63 +545,21 @@ TEST(radio_link_forward_in_session)
   CHECK(p.exec_a.Usb(c) == Expected(c));
 }
 
-// 保存设置要一段时间：Save 立即返回，这段时间里远端既不运行也收不到包，和它阻塞在写 Flash
-// 上一样，主机却还能继续发 / A save that takes time: Save returns at once, and for that
-// time the remote neither runs nor receives, as when it blocks writing flash, while the
-// host can go on sending.
-class SlowStore final : public Store
+// 对方写 Flash 时不运行也收不到包 / While the peer writes flash it neither runs nor
+// receives.
+void HoldPeerWhileSaving(PairWith<SlowStore>& p, uint32_t save_us)
 {
- public:
-  explicit SlowStore(uint32_t ms) : ms_(ms) {}
-  bool Save(const Settings& s) override
+  p.store_b.save_us = save_us;
+  AnswerControlOnB(p);
+  p.radio_a.on_poll = [&p]
   {
-    saved = s;
-    ++saves;
-    until_ = Now() + ms_ * 1000U;
-    return true;
-  }
-  bool Busy() const { return saves != 0U && static_cast<int32_t>(until_ - Now()) > 0; }
-  Settings saved{};
-  uint32_t saves = 0;
-
- private:
-  uint32_t ms_;
-  uint32_t until_ = 0;
-};
-
-struct SlowSavePair
-{
-  FakeRadio radio_a, radio_b;
-  FakeExec exec_a, exec_b;
-  FakeStore store_a;
-  SlowStore store_b;
-  Link a{radio_a, exec_a, store_a, kUidA};
-  Link b{radio_b, exec_b, store_b, kUidB};
-
-  explicit SlowSavePair(uint32_t ms) : store_b(ms)
-  {
-    RadioTest::VirtualClock::StartBeforeWrap(RadioTest::VirtualClock::kLeadUs);
-    radio_a.peer = &radio_b;
-    radio_b.peer = &radio_a;
-    radio_a.on_poll = [this]
+    if (!p.store_b.Busy())
     {
-      if (!store_b.Busy())
-      {
-        (void)b.Service();
-      }
-    };
-    radio_a.drop = [this](uint32_t) { return store_b.Busy(); };
-    Settings s;
-    s.paired = 1;
-    s.link_id = LinkId(kUidA, kUidB);
-    s.rate = Rate::kHigh;
-    a.Begin(s, false);
-    b.Begin(s, false);
-    exec_b.control = [this](const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
-                            uint16_t& out)
-    { return b.HandleControl(req, len, resp, cap, out); };
-  }
-};
+      (void)p.b.Service();
+    }
+  };
+  p.air.lose = [&p](const Flight& f) { return f.from == &p.radio_a && p.store_b.Busy(); };
+}
 
 // 对方写 Flash 比“听不到”规则的时限长时：请求只执行一次、不重发、不换信道，电脑收到成功
 // / A save longer than the deaf rule's limit: the request runs once, with no resend and
@@ -873,7 +575,8 @@ TEST(radio_link_forward_slow_save)
   };
   for (const auto& request : requests)
   {
-    SlowSavePair p(150);
+    PairWith<SlowStore> p(true);
+    HoldPeerWhileSaving(p, 150'000);
     CHECK_EQ(ControlStatus(p.a, request, nullptr), Status::kOk);
     CHECK_EQ(p.store_b.saves, 1U);
     std::vector<uint8_t> stats;
@@ -893,10 +596,10 @@ TEST(radio_link_pairing)
   p.radio_a.on_poll = nullptr;
   p.a.RequestPairing();
   p.b.RequestPairing();
-  const uint32_t begin = static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds());
+  const uint32_t begin = NowUs();
   while ((p.a.Pairing() == PairState::IDLE || p.a.Pairing() == PairState::RUNNING ||
           p.b.Pairing() == PairState::IDLE || p.b.Pairing() == PairState::RUNNING) &&
-         static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds()) - begin < 15'000'000U)
+         NowUs() - begin < 15'000'000U)
   {
     (void)p.a.Service();
     (void)p.b.Service();
