@@ -10,7 +10,7 @@ from xrdap_test import runner as R
 from xrdap_test.cases import vendor_cases as V
 from xrdap_test.cases.dap_behavior import dap_response_lengths
 from xrdap_test.target import Region, Target
-from xrdap_test.vendor import OK, STATE, Item, decode_frames, numbered
+from xrdap_test.vendor import OK, STATE, Item, capture, decode_frames, numbered
 from xrdap_test.vendor import Vendor as VendorClient
 
 
@@ -148,6 +148,71 @@ class LostForward(unittest.TestCase):
         with mock.patch.object(R, "SEARCH_RUN_S", 0.01):
             best, _ = V.search_min_period(vendor, numbered([Item(0x20000000)]))
         self.assertEqual(best, R.SEARCH_STEP_US)
+
+
+class LossyProbe(SamplingProbe):
+    """A SamplingProbe whose answers can get lost. A lost stop did not reach the probe, so sampling
+    goes on. Failed forwards answer 84 FF or 85 FF, and a link without an answer raises."""
+
+    def __init__(self, lost_stops=0, stop_timeouts=0, lost_drains=0, read_timeouts=0):
+        super().__init__(lost=0)
+        self.lost_stops, self.stop_timeouts = lost_stops, stop_timeouts
+        self.lost_drains, self.read_timeouts = lost_drains, read_timeouts
+
+    def xfer(self, request, timeout=2.0):
+        command = request[0]
+        if command == 0x84 and self.stop_timeouts:
+            self.stop_timeouts -= 1
+            raise TimeoutError("no answer")
+        if command == 0x84 and self.lost_stops:
+            self.lost_stops -= 1
+            return bytes([command, 0xFF])
+        if command == 0x85 and self.read_timeouts:
+            self.read_timeouts -= 1
+            raise TimeoutError("no answer")
+        if command == 0x85 and self.lost_drains and not self.sampling:
+            self.lost_drains -= 1
+            return bytes([command, 0xFF])
+        return super().xfer(request, timeout)
+
+
+class LostReplies(unittest.TestCase):
+    ITEMS = numbered([Item(0x20000000)])
+
+    def run_capture(self, probe):
+        return capture(VendorClient(probe), self.ITEMS, 0.01, 1000)
+
+    def test_nothing_lost(self):
+        probe = LossyProbe()
+        result = self.run_capture(probe)
+        self.assertFalse(probe.sampling)
+        self.assertTrue(result.frames)
+        self.assertEqual(result.left, 0)
+
+    def test_stop_with_a_lost_answer_is_sent_again(self):
+        for probe in (LossyProbe(lost_stops=2), LossyProbe(stop_timeouts=2)):
+            self.assertTrue(self.run_capture(probe).frames)
+            self.assertFalse(probe.sampling)
+            self.assertEqual(VendorClient(probe).start(1000, self.ITEMS), OK)
+
+    def test_stop_that_never_gets_through_raises(self):
+        probe = LossyProbe(lost_stops=1000)
+        with self.assertRaises(RuntimeError):
+            self.run_capture(probe)
+
+    def test_lost_read_in_the_drain_raises_and_the_next_run_starts(self):
+        probe = LossyProbe(lost_drains=1)
+        with self.assertRaises(RuntimeError):
+            self.run_capture(probe)
+        self.assertFalse(probe.sampling)
+        self.assertTrue(self.run_capture(probe).frames)
+
+    def test_read_without_an_answer_stops_sampling(self):
+        probe = LossyProbe(read_timeouts=1)
+        with self.assertRaises(TimeoutError):
+            self.run_capture(probe)
+        self.assertFalse(probe.sampling)
+        self.assertTrue(self.run_capture(probe).frames)
 
 
 class ResponseLengthScan(unittest.TestCase):
