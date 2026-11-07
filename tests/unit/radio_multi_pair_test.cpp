@@ -20,266 +20,18 @@
 // is the outermost. The first session scans for 0.6 s, during which the outer frames
 // stand still, so each pair opens one session on its own first.
 #include <cstring>
-#include <deque>
-#include <functional>
 #include <memory>
 #include <vector>
 
 #include "check.hpp"
 #include "radio_fakes.hpp"
-#include "xrdap/radio/radio_link.hpp"
 
 using namespace XrDap;
 using namespace XrDap::Radio;
+using namespace RadioTest;
 
 namespace
 {
-uint32_t Now() { return static_cast<uint32_t>(LibXR::Timebase::GetMicroseconds()); }
-
-// 2 Mb/s GFSK 的带宽按 2 MHz 算 / The bandwidth of 2 Mb/s GFSK, taken as 2 MHz.
-constexpr uint32_t kBandwidthHz = 2'000'000;
-
-bool Overlap(uint32_t a, uint32_t b) { return (a > b ? a - b : b - a) < kBandwidthHz; }
-
-class AirRadio;
-
-// 所有收发器共用的空中 / The air all transceivers share.
-class Air
-{
- public:
-  struct Flight
-  {
-    AirRadio* from;
-    uint32_t hz;
-    uint32_t end_us;
-    bool collided;
-    std::vector<uint8_t> data;
-  };
-
-  void Join(AirRadio* radio) { radios_.push_back(radio); }
-
-  // 结束了的包送给同频、不在发射的收发器。 / Packets that ended reach the transceivers on
-  // their frequency that are not transmitting.
-  void Advance(uint32_t now);
-
-  std::vector<Flight> flights;
-
- private:
-  std::vector<AirRadio*> radios_;
-};
-
-// 接口同 xrobot-org/SX1281 的假收发器 / Fake transceiver with the interface of
-// xrobot-org/SX1281.
-class AirRadio
-{
- public:
-  explicit AirRadio(Air& air) : air_(air) { air_.Join(this); }
-
-  LibXR::ErrorCode Start(const LinkParams& config)
-  {
-    config_ = config;
-    rx_.clear();
-    sending_ = false;
-    return LibXR::ErrorCode::OK;
-  }
-  uint8_t MaxPayload() const { return config_.rate == Rate::kLow ? 127 : 255; }
-  void PrepareSend() {}
-  LibXR::ErrorCode Tune(uint32_t frequency_hz)
-  {
-    config_.frequency_hz = frequency_hz;
-    rx_.clear();
-    return LibXR::ErrorCode::OK;
-  }
-  int16_t RssiInstant() { return noise(config_.frequency_hz); }
-  uint32_t TxPackets() const { return 0; }
-  uint32_t TxErrors() const { return 0; }
-  uint32_t RxPackets() const { return 0; }
-  uint32_t RxErrors() const { return bad; }
-  uint32_t Rearms() const { return 0; }
-  uint32_t Restarts() const { return 0; }
-  uint32_t Frequency() { return config_.frequency_hz; }
-
-  LibXR::ErrorCode Send(const uint8_t* data, uint8_t size)
-  {
-    const uint32_t now = Now();
-    air_.Advance(now);
-    if (sending_ && static_cast<int32_t>(tx_end_us_ - now) > 0)
-    {
-      return LibXR::ErrorCode::BUSY;
-    }
-    // 2 Mb/s 或 1.3 Mb/s，加前导码和包头 / 2 Mb/s or 1.3 Mb/s, plus preamble and header.
-    const uint32_t us_per_byte = config_.rate == Rate::kLow ? 7U : 4U;
-    Air::Flight flight{this, config_.frequency_hz, now + 40U + size * us_per_byte, false,
-                       std::vector<uint8_t>(data, data + size)};
-    for (auto& other : air_.flights)
-    {
-      if (Overlap(other.hz, flight.hz))
-      {
-        other.collided = true;
-        flight.collided = true;
-      }
-    }
-    tx_end_us_ = flight.end_us;
-    sending_ = true;
-    air_.flights.push_back(std::move(flight));
-    return LibXR::ErrorCode::OK;
-  }
-
-  bool Sending() const { return sending_; }
-
-  void Poll()
-  {
-    {
-      const uint32_t now = Now();
-      air_.Advance(now);
-      if (sending_ && static_cast<int32_t>(tx_end_us_ - now) <= 0)
-      {
-        sending_ = false;
-      }
-    }
-    if (on_poll)
-    {
-      on_poll();
-    }
-  }
-
-  int Receive(uint8_t* out)
-  {
-    air_.Advance(Now());
-    if (rx_.empty())
-    {
-      return 0;
-    }
-    const auto packet = rx_.front();
-    rx_.pop_front();
-    if (packet.empty())
-    {
-      ++bad;
-      return -1;  // 坏包 / a bad packet
-    }
-    std::memcpy(out, packet.data(), packet.size());
-    return static_cast<int>(packet.size());
-  }
-
-  // 空中送来一包。低速率不比链路地址（协议 8.4 节），别的对的包收得到但 CRC 错；高速率的
-  // 地址不同，收不到。 / A packet from the air. The low rate does not compare link
-  // addresses (protocol section 8.4), so another pair's packet arrives with a CRC error;
-  // at the high rate the addresses differ and it is not received at all.
-  void Deliver(const Air::Flight& flight, uint32_t now)
-  {
-    if (flight.from == this || flight.hz != config_.frequency_hz ||
-        (sending_ && static_cast<int32_t>(tx_end_us_ - now) > 0) ||
-        flight.from->config_.rate != config_.rate ||
-        (config_.rate != Rate::kLow &&
-         std::memcmp(flight.from->config_.address, config_.address, 4) != 0))
-    {
-      return;
-    }
-    if (flight.from->config_.crc_seed == config_.crc_seed)
-    {
-      rx_.push_back(flight.data);
-    }
-    else
-    {
-      rx_.emplace_back();
-    }
-  }
-
-  std::function<void()> on_poll;
-  std::function<int16_t(uint32_t)> noise;
-  uint32_t bad = 0;
-
- private:
-  Air& air_;
-  LinkParams config_{};
-  bool sending_ = false;
-  uint32_t tx_end_us_ = 0;
-  std::deque<std::vector<uint8_t>> rx_;
-};
-
-void Air::Advance(uint32_t now)
-{
-  for (size_t i = 0; i < flights.size();)
-  {
-    if (static_cast<int32_t>(flights[i].end_us - now) > 0)
-    {
-      ++i;
-      continue;
-    }
-    if (!flights[i].collided)
-    {
-      for (AirRadio* radio : radios_)
-      {
-        radio->Deliver(flights[i], now);
-      }
-    }
-    flights.erase(flights.begin() + static_cast<std::ptrdiff_t>(i));
-  }
-}
-
-// 命令第二个字节是所属的对，远端执行时核对 / The second byte of a command names its pair,
-// which the remote checks when it executes it.
-class PairExec
-{
- public:
-  using Forwarder = bool (*)(void*, Transport, const uint8_t*, uint16_t, uint8_t*,
-                             uint16_t, uint16_t&);
-  explicit PairExec(uint8_t marker) : marker_(marker) {}
-  void SetForwarder(Forwarder f, void* ctx)
-  {
-    forwarder_ = f;
-    ctx_ = ctx;
-  }
-  std::vector<uint8_t> Usb(const std::vector<uint8_t>& req)
-  {
-    uint8_t resp[kMaxMessage];
-    uint16_t out = 0;
-    if (!forwarder_(ctx_, Transport::USB, req.data(), static_cast<uint16_t>(req.size()),
-                    resp, sizeof(resp), out))
-    {
-      ++local;
-      return {};
-    }
-    return {resp, resp + out};
-  }
-  void ExecuteHere(Transport, const uint8_t* req, uint16_t len, uint8_t* resp,
-                   uint16_t cap, uint16_t& out)
-  {
-    if (len >= 2U && req[1] != marker_)
-    {
-      ++foreign;
-    }
-    resp[0] = req[0];
-    for (uint16_t i = 1; i < len && i < cap; ++i)
-    {
-      resp[i] = req[len - i];
-    }
-    out = len;
-  }
-  void ControlHere(const uint8_t* req, uint16_t, uint8_t* resp, uint16_t cap,
-                   uint16_t& out)
-  {
-    out = Control::StatusOnly(req[0], Control::kStatusUnsupported, resp, cap);
-  }
-  void LinkLost(Transport) {}
-
-  uint32_t local = 0;
-  uint32_t foreign = 0;
-
- private:
-  uint8_t marker_;
-  Forwarder forwarder_ = nullptr;
-  void* ctx_ = nullptr;
-};
-
-class NoStore final : public Store
-{
- public:
-  bool Save(const Settings&) override { return true; }
-};
-
-using PairLink = RadioLink<AirRadio, PairExec>;
-
 // 所有对都觉得最安静的点，和每对自己次好的点：相同的扫描结果会让几个主机一起换到同一个点。
 // / The point every pair finds quietest, and each pair's own second best: identical scan
 // results would make the hosts move to the same point together.
@@ -290,20 +42,14 @@ constexpr uint8_t SecondChannel(uint8_t index)
 }
 
 // 一对探针和它们的计数 / A pair of probes and its counters.
-struct AirPair
+struct FleetPair : Pair
 {
-  AirPair(Air& air, uint8_t index, Rate rate, const std::function<void()>& drive)
-      : marker(static_cast<uint8_t>(0x40U + index)),
-        radio_a(air),
-        radio_b(air),
-        exec_a(marker),
-        exec_b(marker)
+  FleetPair(Air& shared, const uint8_t* a_id, const uint8_t* b_id, uint8_t index,
+            Rate rate)
+      : Pair(shared, a_id, b_id, rate), marker(static_cast<uint8_t>(0x40U + index))
   {
-    std::memset(uid_a, 0x10 + index, sizeof(uid_a));
-    std::memset(uid_b, 0x80 + index, sizeof(uid_b));
-    a = std::make_unique<PairLink>(radio_a, exec_a, store, uid_a);
-    b = std::make_unique<PairLink>(radio_b, exec_b, store, uid_b);
-    radio_a.on_poll = drive;
+    exec_a.marker = marker;
+    exec_b.marker = marker;
     radio_a.noise = [index](uint32_t hz) -> int16_t
     {
       if (hz == ChannelHz(kSharedChannel))
@@ -312,42 +58,25 @@ struct AirPair
       }
       return hz == ChannelHz(SecondChannel(index)) ? -190 : -150;
     };
-    Settings settings;
-    settings.paired = 1;
-    settings.link_id = LinkId(uid_a, uid_b);
-    settings.rate = rate;
-    a->Begin(settings, false);
-    b->Begin(settings, false);
   }
 
-  std::vector<uint8_t> Command(uint8_t id, uint16_t size) const
+  std::vector<uint8_t> Marked(uint8_t id, uint16_t size) const
   {
-    std::vector<uint8_t> c(size);
-    c[0] = id;
-    for (uint16_t i = 1; i < size; ++i)
-    {
-      c[i] = static_cast<uint8_t>(i * 13U);
-    }
+    auto c = Command(id, size);
     c[1] = marker;
     return c;
   }
 
   // 发一条命令，核对应答。 / Send one command and check the answer.
-  void Send(const std::vector<uint8_t>& c)
+  void Forward(const std::vector<uint8_t>& c)
   {
     const auto answer = exec_a.Usb(c);
     ++total;
     if (answer.size() == 2U && answer[1] == Byte(DapStatus::ERROR))
     {
       ++failed;  // 转发失败，上位机看得到 / a failed forward the PC sees
-      return;
     }
-    bool same = answer.size() == c.size() && answer[0] == c[0];
-    for (size_t k = 1; same && k < c.size(); ++k)
-    {
-      same = answer[k] == c[c.size() - k];
-    }
-    if (!same)
+    else if (answer != Expected(c))
     {
       ++wrong;
     }
@@ -364,8 +93,8 @@ struct AirPair
     busy = true;
     turn_taken = true;
     static constexpr uint16_t kSizes[] = {16, 64, 1024};
-    Send(connect_next ? Command(Byte(DapCmd::CONNECT), 2)
-                      : Command(Byte(DapCmd::TRANSFER), kSizes[total % 3U]));
+    Forward(connect_next ? Marked(Byte(DapCmd::CONNECT), 2)
+                         : Marked(Byte(DapCmd::TRANSFER), kSizes[total % 3U]));
     connect_next = false;
     busy = false;
   }
@@ -375,19 +104,13 @@ struct AirPair
     const uint8_t request[] = {Op::kStats};
     uint8_t resp[sizeof(StatsAnswer)];
     uint16_t out = 0;
-    CHECK(a->HandleControl(request, sizeof(request), resp, sizeof(resp), out));
+    CHECK(a.HandleControl(request, sizeof(request), resp, sizeof(resp), out));
     StatsAnswer answer;
     std::memcpy(&answer, resp, sizeof(answer));
     return answer;
   }
 
   uint8_t marker;
-  uint8_t uid_a[kUidSize] = {};
-  uint8_t uid_b[kUidSize] = {};
-  AirRadio radio_a, radio_b;
-  PairExec exec_a, exec_b;
-  NoStore store;
-  std::unique_ptr<PairLink> a, b;
   bool connect_next = false;
   bool busy = false;
   bool turn_taken = false;
@@ -401,11 +124,16 @@ class Fleet
  public:
   Fleet(size_t count, Rate rate) : rate_(rate)
   {
-    RadioTest::VirtualClock::StartBeforeWrap(RadioTest::VirtualClock::kLeadUs);
+    VirtualClock::StartBeforeWrap(VirtualClock::kLeadUs);
     for (size_t i = 0; i < count; ++i)
     {
-      pairs_.push_back(std::make_unique<AirPair>(air_, static_cast<uint8_t>(i), rate,
-                                                 [this] { Drive(); }));
+      uint8_t uid_a[kUidSize];
+      uint8_t uid_b[kUidSize];
+      std::memset(uid_a, static_cast<int>(0x10U + i), sizeof(uid_a));
+      std::memset(uid_b, static_cast<int>(0x80U + i), sizeof(uid_b));
+      pairs_.push_back(
+          std::make_unique<FleetPair>(air_, uid_a, uid_b, static_cast<uint8_t>(i), rate));
+      pairs_.back()->radio_a.on_poll = [this] { Drive(); };
     }
   }
 
@@ -415,8 +143,8 @@ class Fleet
   {
     for (auto& pair : pairs_)
     {
-      pair->Send(pair->Command(Byte(DapCmd::CONNECT), 2));
-      pair->Send(pair->Command(Byte(DapCmd::DISCONNECT), 2));
+      pair->Forward(pair->Marked(Byte(DapCmd::CONNECT), 2));
+      pair->Forward(pair->Marked(Byte(DapCmd::DISCONNECT), 2));
       CHECK(pair->radio_a.Frequency() == ChannelHz(kControlChannel));
     }
   }
@@ -466,7 +194,7 @@ class Fleet
     CHECK_EQ(before_.size(), pairs_.size());
     for (size_t i = 0; i < pairs_.size() && i < before_.size(); ++i)
     {
-      AirPair& pair = *pairs_[i];
+      FleetPair& pair = *pairs_[i];
       const StatsAnswer stats = pair.Stats();
       std::printf(
           "    pair %zu: %u commands, %u failed, %u resends, %u bad, channel %u\n", i,
@@ -515,7 +243,7 @@ class Fleet
   {
     for (auto& pair : pairs_)
     {
-      (void)pair->b->Service();
+      (void)pair->b.Service();
     }
     if (!together_)
     {
@@ -550,7 +278,7 @@ class Fleet
   Rate rate_;
   bool together_ = false;
   Air air_;
-  std::vector<std::unique_ptr<AirPair>> pairs_;
+  std::vector<std::unique_ptr<FleetPair>> pairs_;
   std::vector<StatsAnswer> before_;
 };
 
