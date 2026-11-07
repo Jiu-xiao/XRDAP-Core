@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "check.hpp"
-#include "radio_test_time.hpp"
+#include "radio_fakes.hpp"
 
 using namespace XrDap;
 using namespace XrDap::Radio;
@@ -236,7 +236,7 @@ struct Pair
 
   explicit Pair(bool paired, Rate rate = Rate::kHigh)
   {
-    (void)RadioTestTime();
+    RadioTest::VirtualClock::StartBeforeWrap(RadioTest::VirtualClock::kLeadUs);
     radio_a.peer = &radio_b;
     radio_b.peer = &radio_a;
     // 只有主机在等应答时阻塞；远端不阻塞，不必反过来驱动主机 / Only the host blocks,
@@ -745,16 +745,6 @@ TEST(radio_link_control)
   CHECK(!p.a.HandleControl(other, sizeof(other), resp, sizeof(resp), out));
 }
 
-// 探针开机超过远端的沉默时限：只有这时沉默规则才会动作 / The probe has been up for longer
-// than the remote's silence limit, the only time that rule can act.
-void PastSilenceLimit()
-{
-  (void)RadioTestTime();
-  while (Now() < 3'000'000U)
-  {
-  }
-}
-
 void AnswerControlOnB(Pair& p)
 {
   p.exec_b.control =
@@ -768,7 +758,6 @@ void AnswerControlOnB(Pair& p)
 // target.
 TEST(radio_link_forward_outside_session)
 {
-  PastSilenceLimit();
   Pair p(true);
   AnswerControlOnB(p);
   std::vector<uint8_t> answer;
@@ -789,7 +778,6 @@ TEST(radio_link_forward_outside_session)
 // 对方不应答时也回到 F / Back on F when the peer does not answer either.
 TEST(radio_link_forward_no_answer)
 {
-  PastSilenceLimit();
   Pair p(true);
   p.radio_a.drop = [](uint32_t) { return true; };
   CHECK_EQ(ControlStatus(p.a, {Op::kForward, Op::kSettings}, nullptr), Status::kTimeout);
@@ -801,7 +789,6 @@ TEST(radio_link_forward_no_answer)
 // neither ends the session nor changes channel.
 TEST(radio_link_forward_in_session)
 {
-  PastSilenceLimit();
   Pair p(true);
   AnswerControlOnB(p);
   p.radio_a.noise = QuietAt(40);
@@ -829,7 +816,7 @@ class SlowStore final : public Store
     until_ = Now() + ms_ * 1000U;
     return true;
   }
-  bool Busy() const { return static_cast<int32_t>(until_ - Now()) > 0; }
+  bool Busy() const { return saves != 0U && static_cast<int32_t>(until_ - Now()) > 0; }
   Settings saved{};
   uint32_t saves = 0;
 
@@ -849,6 +836,7 @@ struct SlowSavePair
 
   explicit SlowSavePair(uint32_t ms) : store_b(ms)
   {
+    RadioTest::VirtualClock::StartBeforeWrap(RadioTest::VirtualClock::kLeadUs);
     radio_a.peer = &radio_b;
     radio_b.peer = &radio_a;
     radio_a.on_poll = [this]
@@ -876,7 +864,6 @@ struct SlowSavePair
 // no channel change, and the PC gets success.
 TEST(radio_link_forward_slow_save)
 {
-  PastSilenceLimit();
   const std::vector<std::vector<uint8_t>> requests = {
       {Op::kForward, Op::kSetRate, 1},
       {Op::kForward, Op::kSetRole, static_cast<uint8_t>(RoleSetting::LOCAL)},

@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "check.hpp"
-#include "radio_test_time.hpp"
+#include "radio_fakes.hpp"
 #include "xrdap/radio/radio_link.hpp"
 
 using namespace XrDap;
@@ -376,7 +376,7 @@ struct AirPair
 // two overlap and that held for a while, or until limit_ms.
 void RunPairs(size_t count, Rate rate, uint32_t limit_ms)
 {
-  (void)RadioTestTime();
+  RadioTest::VirtualClock::StartBeforeWrap(RadioTest::VirtualClock::kLeadUs);
   Air air;
   std::vector<std::unique_ptr<AirPair>> pairs;
   for (size_t i = 0; i < count; ++i)
