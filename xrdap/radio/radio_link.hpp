@@ -92,8 +92,10 @@ class RadioLink
 
   /// @brief 装上转发钩子并按设置启动 / Install the forwarder hook and start from the
   ///        settings.
-  /// @param safe_mode 安全模式：设置照常读写，但不启动无线 / Safe mode: the settings are
-  ///        read and written as usual, but the radio stays off.
+  /// @param safe_mode 安全模式：不管设置是什么都不启动无线；读写设置仍交给 store，它可以
+  ///        拒绝（控制口应答状态 2）/ Safe mode: the radio stays off whatever the
+  ///        settings say; reading and writing them is still up to the store, which may
+  ///        refuse (status 2 on the control port).
   /// @note 初始化时、命令开始执行之前调用一次 / Call once at initialisation, before
   ///       commands run.
   void Begin(const Settings& settings, bool safe_mode)
