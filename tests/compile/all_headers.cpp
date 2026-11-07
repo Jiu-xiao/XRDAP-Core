@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// 每个公开头文件都能单独编译（只在 libxr 编译检查里构建）/ Every public header compiles
-// on its own (built only by the libxr compile check).
+// 所有公开头文件放在一起能编译（只在 libxr 编译检查里构建）/ All public headers compile
+// together (built only by the libxr compile check).
 #include "daplink_v2.hpp"
 #include "dfu_runtime.hpp"
 #include "xrdap/activity/dap_activity.hpp"
@@ -36,52 +36,15 @@
 #include "xrdap/vendor/sampling.hpp"
 #include "xrdap/vendor/wifi_command.hpp"
 
-namespace
-{
-// 有 Executor 用到的 libxr DAP 接口的最小类型 / Minimal type with the libxr DAP
-// interface Executor uses.
-struct FakeDap
-{
-  using Hook = bool (*)(void*, const uint8_t*, uint16_t, uint8_t*, uint16_t, uint16_t&);
-  using LengthHook = bool (*)(void*, const uint8_t*, uint16_t, uint16_t&);
-  void SetCommandHook(Hook, void*, LengthHook) {}
-  using SessionResetGate = bool (*)(void*);
-  void SetSessionResetGate(SessionResetGate, void*) {}
-  LibXR::ErrorCode WaitForWork(uint32_t) { return LibXR::ErrorCode::OK; }
-  void WakeStep(bool) {}
-  class VendorPort
-  {
-   public:
-    virtual LibXR::ErrorCode OnVendorOut(bool, uint8_t, LibXR::ConstRawData) = 0;
-    virtual LibXR::ConstRawData OnVendorIn(bool, uint8_t) = 0;
-
-   protected:
-    ~VendorPort() = default;
-  };
-  void SetVendorPort(VendorPort* port) { port_ = port; }
-  VendorPort* port_ = nullptr;
-  LibXR::ErrorCode Step(uint32_t) { return LibXR::ErrorCode::OK; }
-  LibXR::ErrorCode ExecuteExternal(const uint8_t*, uint16_t, uint8_t*, uint16_t,
-                                   uint16_t& out)
-  {
-    out = 0U;
-    return LibXR::ErrorCode::OK;
-  }
-};
-}  // namespace
-
-template class XrDap::Executor<FakeDap>;
-template class XrDap::Control::UsbControl<FakeDap>;
-
-template class XrDap::SerialLink<XrDap::Executor<FakeDap>, 64U>;
-
 // 真正的 libxr DAP 类：执行器对它的调用（包括带长度钩子的 SetCommandHook）都要能编译 /
 // The real libxr DAP class: every executor call into it (SetCommandHook with the length
 // hook included) must compile.
-template class XrDap::Executor<LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>>;
-template class XrDap::Control::UsbControl<LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>>;
+using RealDap = LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>;
+template class XrDap::Executor<RealDap>;
+template class XrDap::Control::UsbControl<RealDap>;
+template class XrDap::SerialLink<XrDap::Executor<RealDap>, 64U>;
 
 // 数总线复位的包装能套在端口用的 libxr USB 类上 / The reset-counting wrapper fits the
 // libxr USB classes the ports use.
-template class XrDap::ResetCountingUsb<LibXR::USB::DapLinkV2Class<LibXR::Debug::Swd>>;
+template class XrDap::ResetCountingUsb<RealDap>;
 template class XrDap::ResetCountingUsb<LibXR::USB::DfuRuntimeClass>;
