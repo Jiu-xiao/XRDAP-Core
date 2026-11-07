@@ -44,7 +44,7 @@ def select(spec):
 def add_run_args(p):
     p.add_argument("--link", required=True, help="usb[:SERIAL] | serial:PORT[@BAUD][,keep] | "
                    "tcp:HOST[:PORT] | usbip:HOST[:PORT]")
-    p.add_argument("--target", help="profile name in tests/targets or a .toml path")
+    p.add_argument("--target", help="target profile: a .toml path, or the name of a profile in tests/targets")
     p.add_argument("--cases", default="quick", help="quick (default), all, or ids/prefixes: SWD,VND-06")
     p.add_argument("--out", default="xrdap-results", help="results root; each run gets a subdirectory")
     p.add_argument("--build", default="", help="fw=SHA,libxr=SHA,core=SHA of the image under test")
