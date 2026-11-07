@@ -240,6 +240,34 @@ TEST(radio_execution_us)
   CHECK_EQ(SwjClockHz(clock, sizeof(clock)), 1'000'000U);
 }
 
+// 估计封顶 3 s：转发时主循环阻塞，请求里的计数没有检查，时钟也可能很慢。常用时钟下合法的
+// 最长命令（1024 字节的包，255 个字）不受影响 / The estimate stops at 3 s: the main loop
+// blocks while forwarding, the count in a request is unchecked and the clock may be very
+// slow. The longest legal commands (a packet of 1024 bytes, 255 words) at normal clocks
+// are not affected.
+TEST(radio_execution_us_is_bounded)
+{
+  const uint8_t words[] = {0x06, 0, 0xFF, 0x00, 0x0F};
+  CHECK_EQ(ExecutionUs(words, sizeof(words), 500'000), 46'920U);
+  CHECK_EQ(ExecutionUs(words, sizeof(words), 100'000), 234'600U);
+  const uint8_t transfer[] = {0x05, 0, 0xFF};
+  CHECK_EQ(ExecutionUs(transfer, sizeof(transfer), 1'000'000), 23'460U);
+  const uint8_t reset[] = {0x0A};
+  CHECK_EQ(ExecutionUs(reset, sizeof(reset), 500'000), 500'000U);
+  const uint8_t pins[] = {0x10, 0, 0, 0xC0, 0xC6, 0x2D, 0x00};  // 3 s
+  CHECK_EQ(ExecutionUs(pins, sizeof(pins), 500'000), 3'000'000U);
+
+  // 坏的计数：默认时钟下不封顶时是 12 s / A malformed count: 12 s at the default clock
+  // without the cap.
+  const uint8_t block[] = {0x06, 0, 0xFF, 0xFF, 0x0F};
+  CHECK_EQ(ExecutionUs(block, sizeof(block), 500'000), 3'000'000U);
+  // 很慢的时钟，有的乘积放不进 32 位 / Very slow clocks; some products do not fit 32
+  // bits.
+  CHECK_EQ(ExecutionUs(transfer, sizeof(transfer), 1'000), 3'000'000U);
+  CHECK_EQ(ExecutionUs(transfer, sizeof(transfer), 1), 3'000'000U);
+  CHECK_EQ(ExecutionUs(block, sizeof(block), 1), 3'000'000U);
+}
+
 TEST(radio_settings_replay)
 {
   SettingsReplay replay;
