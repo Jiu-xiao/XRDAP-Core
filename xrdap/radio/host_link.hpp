@@ -3,8 +3,8 @@
 
 // 主机一侧：把一条命令发给远端并等应答。会话规则见 session.hpp。
 //
-// 会话走无线时，主机在 1 s 没有命令后发心跳 PING，DAP_Disconnect 或电脑 5 s
-// 没有命令时结束 会话（会话号为 0 的 PING）。转发一条命令时阻塞到应答到达或超时。
+// 会话走无线时，主机在 1 s 没有命令后发心跳 PING，DAP_Disconnect 或电脑 5 s 没有命令时
+// 结束会话（会话号为 0 的 PING）。转发一条命令时阻塞到应答到达或超时。
 //
 // The host side: send one command to the remote and wait for the answer. Session rules:
 // session.hpp.

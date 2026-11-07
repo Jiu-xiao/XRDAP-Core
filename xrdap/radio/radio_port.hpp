@@ -171,10 +171,10 @@ class RadioPort
   uint8_t* Tx() { return tx_; }
   uint8_t* Rx() { return rx_; }
 
-  /// 等一个 PING 的应答多久：kPacketWaitUs
-  /// 加一段每次不同的偏移，让同时找对方的几对不会一直 撞在一起 / How long to wait for the
-  /// answer of a PING: kPacketWaitUs plus an offset that changes every time, which keeps
-  /// pairs looking for their peers at the same time from colliding again and again.
+  /// 等一个 PING 的应答多久：kPacketWaitUs 加一段每次不同的偏移，让同时找对方的几对不会
+  /// 一直撞在一起 / How long to wait for the answer of a PING: kPacketWaitUs plus an
+  /// offset that changes every time, which keeps pairs looking for their peers at the
+  /// same time from colliding again and again.
   uint32_t PingWaitUs() const
   {
     return kPacketWaitUs + ((NowUs() >> 3) ^ params_.crc_seed) % kPingOffsetUs;

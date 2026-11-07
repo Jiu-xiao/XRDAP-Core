@@ -194,8 +194,8 @@ class ChannelPicker
     return best != kNoChannel ? best : kControlChannel;
   }
 
-  // 在当前信道上让对方换到 target，双方都换过去并 PING 通时为
-  // true。失败时主机留在当前信道 或 F 上，对方可能已在 target 上，它沉默超时后会回 F。
+  // 在当前信道上让对方换到 target，双方都换过去并 PING 通时为 true。失败时主机留在当前
+  // 信道或 F 上，对方可能已在 target 上，它沉默超时后会回 F。
   // Make the peer move to `target` from the current channel; true once both are there and
   // a PING went through. On failure the host stays on the current channel or F; the peer
   // may be on `target` already and returns to F after its silence timeout.
