@@ -22,7 +22,7 @@ jobs:
       # WakeStep 和 VendorPort（release/0.6-candidate）/ The libxr required: SetCommandHook
       # with the vendor length hook, WaitForWork, SetSessionResetGate, WakeStep and
       # VendorPort (release/0.6-candidate).
-      LIBXR_COMMIT: 3645c90f0c6058cb6e1b473a551309a16ba26e32
+      LIBXR_COMMIT: 8d710143f8c9d283e4abc79367c576eaaa156787
     steps:
       - uses: actions/checkout@v4
       - name: libxr

@@ -85,7 +85,7 @@ That the probe is used over one link (USB, serial, TCP, radio peer) at a time is
 
 | Case | Connection that lapses |
 |---|---|
-| `DAP_Disconnect` is sent | the connection, on any link |
+| `DAP_Disconnect` is sent (refused with `FF` while sampling) | the connection, on any link |
 | A TCP client disconnects, the serial link stops | when the connection is on that link |
 | No serial request for 5 s | when the connection is on serial |
 | USB bus reset (unplugged or host reset) | when the connection is on USB |
