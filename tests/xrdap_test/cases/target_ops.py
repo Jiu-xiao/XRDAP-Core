@@ -86,7 +86,4 @@ def tgt_core(ctx):
         ctx.summary("halt, run, reset" + (", nRESET" if ctx.args.nreset_wired else ""))
 
 
-R.manual("TGT-04", "Multidrop SWD (DPv2 targets with TARGETSEL)", """
-XR-DAP does not implement SWD multidrop (DAP_SWD_Sequence based TARGETSEL selection is not used
-by the firmware). Record the case as unsupported for every probe; if a host tool is pointed at a
-multidrop target (RP2040 and similar), record what it reports.""")
+R.manual("TGT-04", "Multidrop SWD (DPv2 targets with TARGETSEL)")

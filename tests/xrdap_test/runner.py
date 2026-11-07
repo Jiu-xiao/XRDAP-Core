@@ -35,7 +35,6 @@ class CaseDef:
     mode: str
     links: tuple
     fn: object = None
-    procedure: str = ""
     oracle: str = ""
 
 
@@ -44,15 +43,14 @@ CASES = {}
 
 def case(case_id, title, mode=AUTO, links=LINKS):
     def register(fn):
-        CASES[case_id] = CaseDef(case_id, title, mode, tuple(links), fn,
-                                 (fn.__doc__ or "").strip(), ORACLES[case_id])
+        CASES[case_id] = CaseDef(case_id, title, mode, tuple(links), fn, ORACLES[case_id])
         return fn
     return register
 
 
-def manual(case_id, title, procedure, links=LINKS):
-    CASES[case_id] = CaseDef(case_id, title, MANUAL, tuple(links), None, procedure.strip(),
-                             ORACLES[case_id])
+def manual(case_id, title, links=LINKS):
+    """A case done by hand: its steps are in SPEC section 4, its result goes in with `record`."""
+    CASES[case_id] = CaseDef(case_id, title, MANUAL, tuple(links), None, ORACLES[case_id])
 
 
 class NotApplicable(Exception):
@@ -181,7 +179,7 @@ def run_cases(ctx, ids, meta):
             if cdef.mode == MANUAL:
                 res.status = TODO
                 res.summary = "manual: record with `record`"
-                ctx.log("  manual case, procedure:\n    " + cdef.procedure.replace("\n", "\n    "))
+                ctx.log("  manual case, steps in SPEC section 4")
             elif ctx.link_kind not in cdef.links:
                 raise NotApplicable(f"not for link {ctx.link_kind}")
             else:

@@ -164,9 +164,4 @@ def tool_pyocd(ctx):
     ctx.summary(f"attach {ok}/{ctx.args.attach_count}")
 
 
-R.manual("TOOL-04", "Keil MDK: connect, read memory, download + verify", """
-Keil uVision, Options for Target > Debug > CMSIS-DAP Debugger > Settings: select the probe by
-serial, SWD, the fixed clock. Check that the target is detected (IDCODE, device name), open a
-Memory window at the scratch address, then Flash > Download with Verify enabled. Record the
-probe serial, uVision and pack versions, Download time and the Verify result. Keil sees only
-local USB probes; for other links record n/a.""", links=("usb", "radio"))
+R.manual("TOOL-04", "Keil MDK: connect, read memory, download + verify", links=("usb", "radio"))
