@@ -6,11 +6,13 @@
 // 只在一个线程里访问，没有锁。别的链路（串口、TCP、无线）的任务只投递请求、等应答
 // （Execute）；单循环的板子里主循环就是这个循环。探针一次只使用一条链路由使用者保证。
 //
-// 一轮的顺序（决定 B9：命令最多被采样占一帧，跳拍照常计数）：
+// 一轮的顺序（命令最多被采样占一帧，跳拍照常计数）：
 //   1. 有 USB 命令：Step(0) 执行一条；否则邮箱里有请求：执行一条；
 //   2. 采样的节拍到了：采一帧（只采一帧，采完回头看有没有命令）；
 //   3. 什么都没做：在 WaitForWork 里等，USB 命令、别的链路的投递和节拍中断（WakeStep）都
-//   会叫醒。
+//      会叫醒。
+// USB 优先：邮箱里的请求要等到没有排着的 USB 命令才执行，可能排在好几条 USB 命令之后；
+// 邮箱里的链路之间轮流。
 // 命令钩子先交给平台的转发器（例如 CH32 的无线），再交给厂商扩展，其余的标准命令由 libxr
 // 执行。执行过的命令记进 DapActivity。装钩子时也把厂商命令的长度函数交给 libxr
 // （SetCommandHook 的第三个参数），DAP_ExecuteCommands / DAP_QueueCommands 里因此可以放
@@ -24,12 +26,13 @@
 // main loop is this loop. That the probe is used over one link at a time is up to the
 // user.
 //
-// One round (this decides B9: a command loses at most one frame to sampling, skips are
-// counted as usual):
+// One round (a command loses at most one frame to sampling, skips are counted as usual):
 //   1. a USB command: Step(0) runs one; otherwise a request in the mailbox: run one;
 //   2. a sampling tick is due: sample ONE frame, then look for commands again;
 //   3. nothing done: wait in WaitForWork; a USB command, a post from another link and the
 //      tick interrupt (WakeStep) all wake it.
+// USB goes first: a request in the mailbox runs only when no USB command is queued, so it
+// can wait behind several USB commands; the links in the mailbox take turns.
 // The command hook first offers the command to the platform's forwarder (for example the
 // CH32 radio), then to the vendor extension; libxr runs the remaining standard commands.
 // Commands that ran are recorded in DapActivity. The hook is installed together with the

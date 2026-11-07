@@ -79,7 +79,7 @@ This section is protocol version 2 and is not compatible with version 1: version
 
 #### One link at a time
 
-That the probe is used over one link (USB, serial, TCP, radio peer) at a time is up to the user; the probe does not arbitrate: there is no session owner, no queue and no busy reply. Every command runs whoever sends it; when two links send commands at once, the probe runs one at a time and the later one waits for the earlier to finish, not necessarily in arrival order, and using two links at once can corrupt the SWD state.
+That the probe is used over one link (USB, serial, TCP, radio peer) at a time is up to the user; the probe does not arbitrate: there is no session owner, no queue and no busy reply. Every command runs whoever sends it; when two links send commands at once, the probe runs one at a time and the others wait, not necessarily in arrival order: USB commands go first, so a command from another link runs only when no USB command is waiting and can wait behind several of them, and the other links take turns. Using two links at once can corrupt the SWD state.
 
 `DAP_Connect` (port 0 or 1) notes the link it came from. This connection lapses in the cases below; the extension commands then need a new `DAP_Connect`, and sampling in progress stops:
 
