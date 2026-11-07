@@ -4,11 +4,11 @@
 // 无线信道：频点索引、噪声测量、扫描结果和选点。纯逻辑。
 //
 // 频点用 0.5 MHz 为单位的索引表示：hz = 2402 MHz + index × 0.5 MHz，index 0..159，即
-// 2402.0–2481.5 MHz。这一段在免执照的 2400–2483.5 MHz 内，两种调制的带宽都放得下；
+// 2402.0–2481.5 MHz。这一段在免执照的 2400–2483.5 MHz 内，两档速率的带宽都放得下；
 // 射频只经 ChannelHz() 设频率，越界的索引落到 F。
 //
 // F（kControlChannel，2448.5 MHz，Wi-Fi 6 与 11 信道之间）是所有探针共用的控制信道：
-// 配对、建立会话和协商数据信道都在 F 上，不同的对靠 CRC 初值（GFSK 还有同步字）分开。
+// 配对、建立会话和协商数据信道都在 F 上，不同的对靠 CRC 初值和链路地址分开。
 // 数据信道由主机扫描后选出：每个点测一段时间，记下 RSSI 超过 -85 dBm 的时间占比（忙碌）
 // 和平均 RSSI；Wi-Fi 是突发的，扫几遍、每个点留最差的一遍。选忙碌最低的点，相同时选平均
 // RSSI 低的。会话中变差的点拉黑 10 分钟。
@@ -18,12 +18,12 @@
 //
 // A frequency is an index in steps of 0.5 MHz: hz = 2402 MHz + index × 0.5 MHz, index
 // 0..159, i.e. 2402.0–2481.5 MHz. This lies within the licence-free 2400–2483.5 MHz and
-// leaves room for the bandwidth of both modulations; the radio is tuned only through
+// leaves room for the bandwidth of both rates; the radio is tuned only through
 // ChannelHz(), which maps an index out of range to F.
 //
 // F (kControlChannel, 2448.5 MHz, between Wi-Fi channels 6 and 11) is the control channel
 // all probes share: pairing, opening a session and agreeing on the data channel happen
-// on F, and the CRC seed (and in GFSK the sync word) keeps pairs apart. The host picks
+// on F, and the CRC seed and link address keep pairs apart. The host picks
 // the data channel from a scan: each point is measured for a while, recording the share
 // of time the RSSI is above -85 dBm (busy) and the mean RSSI; Wi-Fi comes in bursts, so
 // the scan makes several passes and keeps the worst pass of each point. The point with
@@ -46,9 +46,10 @@ inline constexpr uint8_t kNoChannel = 0xFF;
 inline constexpr int16_t kBusyRssi = -170;
 /// 拉黑多久 / How long a ban lasts.
 inline constexpr uint32_t kBanUs = 600'000'000;
-/// 拉黑一个点时，索引相差不到这么多的点也不用：2 MHz，约为 GFSK 的带宽，离得更近的点还会
+/// 拉黑一个点时，索引相差不到这么多的点也不用：2 MHz，约为高速率的带宽，离得更近的点还会
 /// 受同样的干扰 / Banning a point also rules out points less than this many indices away:
-/// 2 MHz, about the GFSK bandwidth; closer points would meet the same interference.
+/// 2 MHz, about the bandwidth of the high rate; closer points would meet the same
+/// interference.
 inline constexpr uint8_t kBanSpan = 4;
 
 /// 是不是信道索引 / Whether `index` is a channel.

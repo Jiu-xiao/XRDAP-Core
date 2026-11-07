@@ -57,10 +57,10 @@ The probe's TCP port 3241 and the listening port of `xrdap share openocd` use th
 "DAP\0"(4) + length(2) + type(1) + reserved(1) + DAP packet
 ```
 
-Type 1 is a request, type 2 is a response; the reserved byte is 0. The length is the number of DAP packet bytes that follow.
+Type 1 is a request, type 2 is a response, types 3 and 4 are a control request and a control answer (section 3.7.1); the reserved byte is 0. The length is the number of DAP packet bytes that follow.
 
 - Only one client is served at a time; requests are executed and answered in order. When the client disconnects the TCP session ends (section 3.1).
-- The probe closes the connection when it receives an invalid header (wrong magic, type other than 1, length 0 or larger than 1024).
+- The probe closes the connection when it receives an invalid header (wrong magic, type other than 1 or 3, length 0 or larger than 1024).
 - A command with no response content (for example `DAP_TransferAbort`) gets no TCP frame back.
 - `xrdap share openocd` strips the 8-byte header from a TCP frame, hands the DAP packet to the probe (wrapped in a serial frame when the link is serial), and converts responses back; it does not interpret DAP content. After the client disconnects it sends `84 00` (stop sampling) to the probe once.
 
@@ -606,11 +606,11 @@ A full-speed USB Bulk packet is 64 bytes. When a request length is an exact mult
 
 ## 8. Radio link between two probes
 
-The radio XRDAP-CH32V307 (wdap) is used in pairs: one board on the PC's USB (the host) and one on the target (the remote). The host sends the PC's DAP commands over the SX1281 to the remote, which executes them, and returns the answers to USB. The implementation is in `xrdap/radio/`; the radio driver is the xrobot-org/SX1281 module.
+Radio probes are used in pairs: one board on the PC's USB (the host) and one on the target (the remote). The host sends the PC's DAP commands over the radio to the remote, which executes them, and returns the answers to USB. The implementation is in `xrdap/radio/`; the radio driver is a template parameter and meets the contract in `xrdap/radio/transceiver.hpp`. Probes with different transceivers cannot work together.
 
 ### 8.1 Packets
 
-A radio packet holds at most 255 bytes (GFSK) or 127 bytes (FLRC). Apart from HELLO, every packet starts with a 6-byte header:
+The radio has a high and a low rate, and each board defines their modulation and packet size (127 to 255 bytes). `wdap` uses the SX1281: the high rate is GFSK with packets of up to 255 bytes, the low rate is FLRC with packets of up to 127 bytes. Apart from HELLO, every packet starts with a 6-byte header:
 
 | Byte | Content |
 |---|---|
@@ -632,7 +632,7 @@ After sending a command the host waits for the answer: first 3 ms plus the comma
 
 In the AUTO role a paired probe acts as the remote while it has no session of its own; a `DAP_Connect` on USB that reaches the peer runs the session over the radio, otherwise locally. `SWJ_Clock`, `TransferConfigure` and `SWD_Configure` before `DAP_Connect` run locally, and the last of each is sent to the remote when the session goes over the radio.
 
-Pairing: once both probes are in pairing (for up to 10 s) they send a HELLO every 20 ms or so on the control channel F with the default identity (GFSK, sync word `XRDP`, CRC seed 0xFFFF); a probe that hears a HELLO naming its own UID is done and keeps answering for 1 s. Both probes compute the same link id from the two UIDs, and the CRC seed and the GFSK sync word follow from it; for the frequency see section 8.4.
+Pairing: once both probes are in pairing (for up to 10 s) they send a HELLO every 20 ms or so on the control channel F with the default identity (high rate, link address `XRDP`, CRC seed 0xFFFF); a probe that hears a HELLO naming its own UID is done and keeps answering for 1 s. Both probes compute the same link id from the two UIDs, and the CRC seed and the link address follow from it; for the frequency see section 8.4.
 
 ### 8.3 Control port operations
 
@@ -644,7 +644,7 @@ The settings and radio operations of a radio probe go through the control port (
 | 0x11 | None | Radio statistics, answer below |
 | 0x13 | None | Read the settings, answer below |
 | 0x14 | Role setting (0 AUTO, 1 local, 2 host, 3 remote) | Stored, in effect once the answer is out |
-| 0x15 | Modulation (0 GFSK, 1 FLRC) | Stored, in effect once the answer is out |
+| 0x15 | Rate (0 high, 1 low) | Stored, in effect once the answer is out |
 | 0x16 | None | Forget the pairing, in effect once the answer is out |
 | 0x17 | None | Bootloader slot information (CH32 boards) |
 | 0x19 | None, or mode and channel | Read the channel; mode 0 chooses the channel automatically, 1 locks this channel (stored, in effect at the next choice of channel). The answer is `19 00`, the current channel and the locked channel (0xFF when automatic) |
@@ -669,10 +669,10 @@ Answer of 0x11: `11 00 n` followed by n little-endian u32 (n = 13): packets sent
 
 ### 8.4 Channels
 
-A frequency is a channel index in steps of 0.5 MHz: frequency = 2402 MHz + index × 0.5 MHz, index 0 to 159 (2402.0–2481.5 MHz), all within the licence-free 2400–2483.5 MHz. The control channel F is 93 (2448.5 MHz) on every probe; the CRC seed keeps pairs apart, and in GFSK the sync word too (the FLRC sync word is fixed).
+A frequency is a channel index in steps of 0.5 MHz: frequency = 2402 MHz + index × 0.5 MHz, index 0 to 159 (2402.0–2481.5 MHz), all within the licence-free 2400–2483.5 MHz. The control channel F is 93 (2448.5 MHz) on every probe; the CRC seed and the link address keep pairs apart. On `wdap` the FLRC sync word is fixed at `XRDP` (SX1281 errata 16.4), so at the low rate only the CRC seed does.
 
 Pairing and opening a session happen on F. Once the host has reached its peer on F with a PING (waiting up to 300 ms on `DAP_Connect`), it picks the data channel: the locked one (0x19), or the best of the scan; the first session scans first (one point per MHz, 1.5 ms each, 4 passes keeping the worst pass of each point, about 0.6 s). Busy is the share of time the RSSI is above -85 dBm; the point with the lowest busy share wins, and the lower mean RSSI breaks a tie. The host sends CHANNEL on F, and the remote moves once its CHANNEL_ACK is out; on the ACK the host moves too and confirms with a PING (up to 30 ms) on the new channel. After every 4 CHANNELs without an ACK the host pings on the target channel once (the peer may have moved and only the ACK was lost); when the change does not succeed within 100 ms the host bans the point and stays on the channel the peer is on.
 
 During a session the host checks the resends every 200 exchanges: with more than 10, or when a command was sent 3 times with nothing heard for 60 ms, it bans the channel and the points less than 2 MHz from it for 10 minutes and moves to the next best point; when that fails it looks for the peer again, first on the data channel the peer may have stayed on, then on F. A locked channel does not change; after 3 sends with nothing heard, the radio is reset on F or on a locked channel. Only the host scans. The remote returns to F after 2.5 s on a data channel without a packet from the host, and when the session ends; the PING that ends the session (id 0) is sent on a data channel until the remote answers.
 
-Several pairs of probes can work at the same time: they share F and tell their packets apart by the CRC seed (in GFSK also by the sync word). The host sends a PING on F about every 3 ms, with an offset of up to about 1 ms in the interval computed from the time and the CRC seed, so that two pairs do not keep sending together. During pairing all probes use the default identity and hear each other, so only one pair is paired at a time. The behaviour of several pairs is checked by host tests (`tests/unit/radio_multi_pair_test.cpp`, 2 to 4 pairs) and by an isolation test between two probes; it has not been tested on several pairs of probes.
+Several pairs of probes can work at the same time: they share F and tell their packets apart by the CRC seed and the link address. The host sends a PING on F about every 3 ms, with an offset of up to about 1 ms in the interval computed from the time and the CRC seed, so that two pairs do not keep sending together. During pairing all probes use the default identity and hear each other, so only one pair is paired at a time. The behaviour of several pairs is checked by host tests (2 to 4 pairs), and the isolation between two probes was tested on hardware; it has not been tested on several pairs of probes.

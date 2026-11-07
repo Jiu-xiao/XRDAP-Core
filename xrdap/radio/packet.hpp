@@ -3,8 +3,7 @@
 
 // 两块探针之间无线链路的包格式（docs/protocol.md 第 8 节）。纯逻辑，不碰硬件。
 //
-// 包：6 字节包头，后接最多 fragment 字节载荷，fragment = 最大射频包长 - 6（GFSK 249，
-// FLRC 121）。
+// 包：6 字节包头，后接最多 fragment 字节载荷，fragment = 收发器的 MaxPayload() - 6。
 //   [0] 类型  [1] 序号  [2] 分片序号  [3] 分片数  [4..5] 消息总长，小端
 // 类型：
 //   1 COMMAND  DAP 命令，主机 -> 远端
@@ -24,8 +23,8 @@
 // Packet format of the radio link between two probes (docs/protocol.md section 8). Pure
 // logic, no hardware.
 //
-// Packet: a 6-byte header, then up to `fragment` payload bytes, where fragment =
-// largest radio packet - 6 (249 bytes in GFSK, 121 in FLRC).
+// Packet: a 6-byte header, then up to `fragment` payload bytes, where fragment = the
+// transceiver's MaxPayload() - 6.
 //   [0] kind  [1] sequence  [2] fragment index  [3] fragment count
 //   [4..5] message size (total), little endian
 // Kinds:
@@ -48,6 +47,8 @@
 
 #include <cstdint>
 
+#include "xrdap/radio/transceiver.hpp"
+
 namespace XrDap::Radio
 {
 
@@ -68,10 +69,10 @@ enum Kind : uint8_t
 inline constexpr uint8_t kHeader = 6;
 /// 一条消息（请求或应答）的最大长度 / Largest message (request or answer).
 inline constexpr uint16_t kMaxMessage = 1024;
-/// 一条消息最多的分片数（FLRC 的 127 字节包）/ Most fragments of one message (127-byte
-/// FLRC packets).
+/// 一条消息最多的分片数（最短的包）/ Most fragments of one message (the shortest
+/// packets).
 inline constexpr uint8_t kMaxFragments =
-    (kMaxMessage + (127 - kHeader) - 1) / (127 - kHeader);
+    (kMaxMessage + (kMinPayload - kHeader) - 1) / (kMinPayload - kHeader);
 static_assert(kMaxFragments <= 16, "the fragment mask has 16 bits");
 /// PING、PONG 的载荷字节数 / Payload size of PING and PONG.
 inline constexpr uint8_t kPingPayload = 2;
@@ -137,7 +138,7 @@ class Reassembler
 
   /// @brief 收下一片 / Take one fragment.
   /// @param packet 完整的包（含包头）/ The whole packet including the header.
-  /// @param fragment 当前调制下的分片长度 / Fragment size of the current modulation.
+  /// @param fragment 当前速率下的分片长度 / Fragment size at the current rate.
   /// @note 序号、片数或总长与在拼的消息不同时，先丢掉在拼的消息。消息拼齐后，同一消息
   ///       的分片都作为 DUPLICATE 丢弃 / A different sequence, count or total first drops
   ///       the message being assembled. After a message completes, its fragments are

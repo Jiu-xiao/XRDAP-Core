@@ -62,12 +62,7 @@ namespace XrDap::Radio
 {
 
 /// @brief 无线 DAP 会话 / DAP sessions over the radio.
-/// @tparam RadioT 收发器驱动，接口同 xrobot-org/SX1281：Config（modulation、
-///         frequency_hz、sync_word、crc_seed）、Start、MaxPayload、PrepareSend、Send、
-///         Sending、Poll、Receive、Tune、RssiInstant 和计数 / Transceiver driver with
-///         the interface of xrobot-org/SX1281: Config (modulation, frequency_hz,
-///         sync_word, crc_seed), Start, MaxPayload, PrepareSend, Send, Sending, Poll,
-///         Receive, Tune, RssiInstant and the counters.
+/// @tparam RadioT 收发器驱动（transceiver.hpp）/ Transceiver driver (transceiver.hpp).
 /// @tparam ExecT 命令执行器（Executor<DapT>）/ Command executor (Executor<DapT>).
 template <typename RadioT, typename ExecT>
 class RadioLink
@@ -79,17 +74,13 @@ class RadioLink
   ///        commands through its forwarder hook.
   /// @param store 设置存储 / The settings store.
   /// @param uid 本机芯片 UID，kUidSize 字节 / This chip's UID, kUidSize bytes.
-  /// @param base 射频的板级配置（功率、晶振微调等）；调制、频点、同步字和 CRC 初值由本类
-  ///        填 / Board configuration of the radio (power, crystal trim, ...); this class
-  ///        fills in the modulation, frequency, sync word and CRC seed.
   /// @note 初始化时调用；参数的生命周期需长于本对象 / Call at initialisation; the
   ///       arguments must outlive this object.
-  RadioLink(RadioT& radio, ExecT& exec, Store& store, const uint8_t* uid,
-            const typename RadioT::Config& base)
+  RadioLink(RadioT& radio, ExecT& exec, Store& store, const uint8_t* uid)
       : exec_(exec),
         store_(store),
         uid_(uid),
-        port_(radio, base),
+        port_(radio),
         host_(port_, settings_),
         remote_(port_, exec, &RadioLink::AnswerDoneHook, this),
         pairing_(port_, uid)
@@ -231,14 +222,14 @@ class RadioLink
   static bool IsOwnOp(uint8_t op)
   {
     return op == Op::kRole || op == Op::kStats || op == Op::kSettings ||
-           op == Op::kSetRole || op == Op::kSetModulation || op == Op::kUnpair ||
+           op == Op::kSetRole || op == Op::kSetRate || op == Op::kUnpair ||
            op == Op::kChannel || op == Op::kPair || op == Op::kForward;
   }
 
-  void StartRadio(Modulation modulation, const Identity& identity)
+  void StartRadio(Rate rate, const Identity& identity)
   {
     remote_.FinishAnswer();
-    port_.Start(modulation, identity);
+    port_.Start(rate, identity);
   }
 
   // 应用设置（或 Op::kRole 临时指定的角色）：未配对、LOCAL 或安全模式时不用无线（R4：
@@ -258,7 +249,7 @@ class RadioLink
     }
     if (settings_.paired != 0U && setting_ != RoleSetting::LOCAL && !safe_mode_)
     {
-      StartRadio(settings_.modulation, PairIdentity(settings_.link_id));
+      StartRadio(settings_.rate, PairIdentity(settings_.link_id));
       port_.SetRunning(true);
     }
     else
@@ -380,7 +371,7 @@ class RadioLink
     remote_.Reset();
     pair_state_ = PairState::RUNNING;
     port_.SetPairing(true);
-    StartRadio(Modulation::GFSK, DefaultIdentity());
+    StartRadio(Rate::kHigh, DefaultIdentity());
     pairing_.Begin();
   }
 
@@ -393,7 +384,7 @@ class RadioLink
       Settings settings = settings_;
       settings.paired = 1;
       settings.link_id = LinkId(uid_, pairing_.Peer());
-      settings.modulation = Modulation::GFSK;
+      settings.rate = Rate::kHigh;
       std::memcpy(settings.peer_uid, pairing_.Peer(), kUidSize);
       if (store_.Save(settings))
       {
@@ -449,7 +440,7 @@ class RadioLink
         answer.op = op;
         answer.status = Status::kOk;
         answer.role_setting = static_cast<uint8_t>(settings_.role);
-        answer.modulation = static_cast<uint8_t>(settings_.modulation);
+        answer.rate = static_cast<uint8_t>(settings_.rate);
         answer.paired = settings_.paired;
         answer.safe_mode = safe_mode_ ? 1U : 0U;
         answer.role = static_cast<uint8_t>(CurrentRole());
@@ -472,14 +463,14 @@ class RadioLink
         settings.role = static_cast<RoleSetting>(req[1]);
         return Save(resp, op, settings, cap);
       }
-      case Op::kSetModulation:
+      case Op::kSetRate:
       {
-        if (len < 2U || req[1] > static_cast<uint8_t>(Modulation::FLRC))
+        if (len < 2U || req[1] > static_cast<uint8_t>(Rate::kLow))
         {
           return Reply(resp, op, Status::kBadRequest, cap);
         }
         Settings settings = settings_;
-        settings.modulation = static_cast<Modulation>(req[1]);
+        settings.rate = static_cast<Rate>(req[1]);
         return Save(resp, op, settings, cap);
       }
       case Op::kUnpair:

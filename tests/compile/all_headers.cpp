@@ -23,6 +23,7 @@
 #include "xrdap/radio/remote_link.hpp"
 #include "xrdap/radio/session.hpp"
 #include "xrdap/radio/settings.hpp"
+#include "xrdap/radio/transceiver.hpp"
 #include "xrdap/serial/serial_frame.hpp"
 #include "xrdap/serial/serial_link.hpp"
 #include "xrdap/session/executor.hpp"

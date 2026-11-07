@@ -68,24 +68,9 @@ class Air
 class AirRadio
 {
  public:
-  enum class Modulation : uint8_t
-  {
-    LORA,
-    GFSK,
-    FLRC
-  };
-  struct Config
-  {
-    Modulation modulation = Modulation::LORA;
-    uint32_t frequency_hz = 0;
-    int8_t tx_power_dbm = 0;
-    uint8_t sync_word[4] = {};
-    uint16_t crc_seed = 0;
-  };
-
   explicit AirRadio(Air& air) : air_(air) { air_.Join(this); }
 
-  LibXR::ErrorCode Start(const Config& config)
+  LibXR::ErrorCode Start(const LinkParams& config)
   {
     std::lock_guard<std::mutex> hold(air_.lock);
     config_ = config;
@@ -93,10 +78,7 @@ class AirRadio
     sending_ = false;
     return LibXR::ErrorCode::OK;
   }
-  uint8_t MaxPayload() const
-  {
-    return config_.modulation == Modulation::FLRC ? 127 : 255;
-  }
+  uint8_t MaxPayload() const { return config_.rate == Rate::kLow ? 127 : 255; }
   void PrepareSend() {}
   LibXR::ErrorCode Tune(uint32_t frequency_hz)
   {
@@ -141,7 +123,7 @@ class AirRadio
       return LibXR::ErrorCode::BUSY;
     }
     // 2 Mb/s 或 1.3 Mb/s，加前导码和包头 / 2 Mb/s or 1.3 Mb/s, plus preamble and header.
-    const uint32_t us_per_byte = config_.modulation == Modulation::FLRC ? 7U : 4U;
+    const uint32_t us_per_byte = config_.rate == Rate::kLow ? 7U : 4U;
     Air::Flight flight{this, config_.frequency_hz, now + 40U + size * us_per_byte, false,
                        std::vector<uint8_t>(data, data + size)};
     for (auto& other : air_.flights)
@@ -203,8 +185,8 @@ class AirRadio
   {
     if (flight.from == this || flight.hz != config_.frequency_hz ||
         (sending_ && static_cast<int32_t>(tx_end_us_ - now) > 0) ||
-        flight.from->config_.modulation != config_.modulation ||
-        std::memcmp(flight.from->config_.sync_word, config_.sync_word, 4) != 0)
+        flight.from->config_.rate != config_.rate ||
+        std::memcmp(flight.from->config_.address, config_.address, 4) != 0)
     {
       return;
     }
@@ -222,7 +204,7 @@ class AirRadio
 
  private:
   Air& air_;
-  Config config_{};
+  LinkParams config_{};
   bool sending_ = false;
   uint32_t tx_end_us_ = 0;
   std::deque<std::vector<uint8_t>> rx_;
@@ -314,7 +296,7 @@ using PairLink = RadioLink<AirRadio, PairExec>;
 // 一对探针和它们的计数 / A pair of probes and its counters.
 struct AirPair
 {
-  AirPair(Air& air, uint8_t index, Modulation modulation)
+  AirPair(Air& air, uint8_t index, Rate rate)
       : marker(static_cast<uint8_t>(0x40U + index)),
         radio_a(air),
         radio_b(air),
@@ -323,13 +305,13 @@ struct AirPair
   {
     std::memset(uid_a, 0x10 + index, sizeof(uid_a));
     std::memset(uid_b, 0x80 + index, sizeof(uid_b));
-    a = std::make_unique<PairLink>(radio_a, exec_a, store, uid_a, AirRadio::Config{});
-    b = std::make_unique<PairLink>(radio_b, exec_b, store, uid_b, AirRadio::Config{});
+    a = std::make_unique<PairLink>(radio_a, exec_a, store, uid_a);
+    b = std::make_unique<PairLink>(radio_b, exec_b, store, uid_b);
     radio_a.on_poll = [this] { (void)b->Service(); };
     Settings settings;
     settings.paired = 1;
     settings.link_id = LinkId(uid_a, uid_b);
-    settings.modulation = modulation;
+    settings.rate = rate;
     a->Begin(settings, false);
     b->Begin(settings, false);
   }
@@ -392,14 +374,14 @@ struct AirPair
 
 // 几对同时跑到互不重叠、又稳定了一阵，或者到 limit_ms。 / Run the pairs together until no
 // two overlap and that held for a while, or until limit_ms.
-void RunPairs(size_t count, Modulation modulation, uint32_t limit_ms)
+void RunPairs(size_t count, Rate rate, uint32_t limit_ms)
 {
   (void)RadioTestTime();
   Air air;
   std::vector<std::unique_ptr<AirPair>> pairs;
   for (size_t i = 0; i < count; ++i)
   {
-    pairs.push_back(std::make_unique<AirPair>(air, static_cast<uint8_t>(i), modulation));
+    pairs.push_back(std::make_unique<AirPair>(air, static_cast<uint8_t>(i), rate));
   }
   std::atomic<bool> stop{false};
   std::vector<std::thread> threads;
@@ -464,8 +446,8 @@ void RunPairs(size_t count, Modulation modulation, uint32_t limit_ms)
 }
 }  // namespace
 
-TEST(radio_two_pairs_gfsk) { RunPairs(2, Modulation::GFSK, 20000); }
+TEST(radio_two_pairs_gfsk) { RunPairs(2, Rate::kHigh, 20000); }
 
-TEST(radio_two_pairs_flrc) { RunPairs(2, Modulation::FLRC, 20000); }
+TEST(radio_two_pairs_flrc) { RunPairs(2, Rate::kLow, 20000); }
 
-TEST(radio_four_pairs_gfsk) { RunPairs(4, Modulation::GFSK, 30000); }
+TEST(radio_four_pairs_gfsk) { RunPairs(4, Rate::kHigh, 30000); }

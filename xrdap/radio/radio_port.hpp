@@ -14,6 +14,7 @@
 #include "xrdap/radio/identity.hpp"
 #include "xrdap/radio/packet.hpp"
 #include "xrdap/radio/settings.hpp"
+#include "xrdap/radio/transceiver.hpp"
 
 namespace XrDap::Radio
 {
@@ -24,42 +25,30 @@ inline uint32_t NowUs()
 }
 
 /// @brief 探针自己的射频 / The probe's own radio.
-/// @tparam RadioT 收发器驱动，接口同 xrobot-org/SX1281 / Transceiver driver with the
-///         interface of xrobot-org/SX1281.
+/// @tparam RadioT 收发器驱动（transceiver.hpp）/ Transceiver driver (transceiver.hpp).
 template <typename RadioT>
 class RadioPort
 {
  public:
-  /// @param base 射频的板级配置（功率、晶振微调等）/ Board configuration of the radio
-  ///        (power, crystal trim, ...).
-  RadioPort(RadioT& radio, const typename RadioT::Config& base)
-      : radio_(radio), base_(base), config_(base)
-  {
-  }
+  explicit RadioPort(RadioT& radio) : radio_(radio) {}
 
-  /// 按调制和身份启动，在控制信道上 / Start with this modulation and identity, on the
-  /// control channel.
-  void Start(Modulation modulation, const Identity& identity)
+  /// 按速率和身份启动，在控制信道上 / Start with this rate and identity, on the control
+  /// channel.
+  void Start(Rate rate, const Identity& identity)
   {
-    config_ = base_;
-    config_.modulation = modulation == Modulation::GFSK ? RadioT::Modulation::GFSK
-                                                        : RadioT::Modulation::FLRC;
-    config_.frequency_hz = identity.frequency_hz;
-    config_.crc_seed = identity.crc_seed;
-    std::memcpy(config_.sync_word,
-                modulation == Modulation::GFSK ? identity.sync_word : kFlrcSyncWord,
-                sizeof(config_.sync_word));
-    // 启动失败时，射频驱动在静默超时后自己复位重试。 / A failed start recovers in the
-    // driver, which resets the radio after its silence timeout.
-    (void)radio_.Start(config_);
+    params_.rate = rate;
+    params_.frequency_hz = ChannelHz(kControlChannel);
+    params_.crc_seed = identity.crc_seed;
+    std::memcpy(params_.address, identity.address, sizeof(params_.address));
+    (void)radio_.Start(params_);
     channel_ = kControlChannel;
   }
 
   /// 复位射频，留在当前信道 / Reset the radio and stay on the current channel.
   void Restart()
   {
-    config_.frequency_hz = ChannelHz(channel_);
-    (void)radio_.Start(config_);
+    params_.frequency_hz = ChannelHz(channel_);
+    (void)radio_.Start(params_);
   }
 
   void TuneTo(uint8_t channel)
@@ -114,9 +103,9 @@ class RadioPort
     FinishSending();
   }
 
-  /// 主机：发 PING(session)，timeout_us 内对方回 PONG 时为 true；每 kPingWaitUs 重发 /
+  /// 主机：发 PING(session)，timeout_us 内对方回 PONG 时为 true；每 PingWaitUs() 重发 /
   /// Host: send PING(session); true when the peer answers with a PONG within timeout_us;
-  /// repeats every kPingWaitUs.
+  /// repeats every PingWaitUs().
   bool Ping(uint16_t session, uint32_t timeout_us)
   {
     if (!running_)
@@ -178,16 +167,15 @@ class RadioPort
   uint8_t* Tx() { return tx_; }
   uint8_t* Rx() { return rx_; }
 
-  /// 等一个 PING 的应答多久：kPingWaitUs 加一段每次不同的偏移，让同时找对方的几对不会一直
-  /// 撞在一起 / How long to wait for the answer of a PING: kPingWaitUs plus an offset
-  /// that changes every time, which keeps pairs looking for their peers at the same time
-  /// from colliding again and again.
+  /// 等一个 PING 的应答多久：kPacketWaitUs
+  /// 加一段每次不同的偏移，让同时找对方的几对不会一直 撞在一起 / How long to wait for the
+  /// answer of a PING: kPacketWaitUs plus an offset that changes every time, which keeps
+  /// pairs looking for their peers at the same time from colliding again and again.
   uint32_t PingWaitUs() const
   {
-    return kPingWaitUs + ((NowUs() >> 3) ^ config_.crc_seed) % kPingOffsetUs;
+    return kPacketWaitUs + ((NowUs() >> 3) ^ params_.crc_seed) % kPingOffsetUs;
   }
 
-  static constexpr uint32_t kPingWaitUs = 3'000;
   static constexpr uint32_t kPingOffsetUs = 1'024;
   /// 发一次、不重发的 PING：心跳和 F 上的结束会话 / A PING sent once: the heartbeat and
   /// ending a session on F.
@@ -197,8 +185,7 @@ class RadioPort
 
  private:
   RadioT& radio_;
-  const typename RadioT::Config base_;
-  typename RadioT::Config config_;
+  LinkParams params_{};
   uint8_t channel_ = kControlChannel;  // 射频现在所在的信道 / the channel the radio is on
   uint8_t host_sequence_ = 0;
   bool running_ = false;

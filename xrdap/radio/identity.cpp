@@ -3,7 +3,6 @@
 
 #include <cstring>
 
-#include "xrdap/radio/channel.hpp"
 #include "xrdap/radio/packet.hpp"
 
 namespace XrDap::Radio
@@ -20,10 +19,7 @@ int Transitions(uint32_t word)
 
 }  // namespace
 
-Identity DefaultIdentity()
-{
-  return {ChannelHz(kControlChannel), 0xFFFF, {'X', 'R', 'D', 'P'}};
-}
+Identity DefaultIdentity() { return {0xFFFF, {'X', 'R', 'D', 'P'}}; }
 
 uint32_t Fnv1a(const uint8_t* data, size_t size, uint32_t hash)
 {
@@ -47,12 +43,9 @@ uint32_t LinkId(const uint8_t* a, const uint8_t* b)
 Identity PairIdentity(uint32_t link_id)
 {
   Identity identity{};
-  // 建立会话在 F 上，数据信道另外协商（channel.hpp）。 / Sessions open on F; the data
-  // channel is agreed on separately (channel.hpp).
-  identity.frequency_hz = ChannelHz(kControlChannel);
   identity.crc_seed = static_cast<uint16_t>(link_id >> 16 ^ link_id);
-  // 同步字取相邻位变化 10 到 22 次的散列值，避开过于规则的位型。
-  // The sync word is a hash with 10 to 22 bit changes, avoiding too regular patterns.
+  // 地址取相邻位变化 10 到 22 次的散列值，避开过于规则的位型。
+  // The address is a hash with 10 to 22 bit changes, avoiding too regular patterns.
   uint8_t bytes[4];
   std::memcpy(bytes, &link_id, sizeof(bytes));
   uint32_t word = Fnv1a(bytes, sizeof(bytes));
@@ -63,7 +56,7 @@ Identity PairIdentity(uint32_t link_id)
   }
   for (int i = 0; i < 4; ++i)
   {
-    identity.sync_word[i] = static_cast<uint8_t>(word >> (24 - 8 * i));
+    identity.address[i] = static_cast<uint8_t>(word >> (24 - 8 * i));
   }
   return identity;
 }

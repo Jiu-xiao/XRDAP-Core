@@ -195,7 +195,7 @@ TEST(radio_remote_lease)
 TEST(radio_host_session)
 {
   using Action = HostSession::Action;
-  HostSession host(0xFFFE);
+  HostSession host;
   CHECK(host.OnCommand(0));  // H1
   const uint16_t first = host.Session();
   CHECK(first != 0 && !host.OnCommand(10));
@@ -222,10 +222,9 @@ TEST(radio_pair_identity)
   for (uint32_t id = 1; id < 5000; id = id * 3 + 1)
   {
     const Identity x = PairIdentity(id);
-    CHECK_EQ(x.frequency_hz, ChannelHz(kControlChannel));
-    const uint32_t word = static_cast<uint32_t>(x.sync_word[0]) << 24 |
-                          static_cast<uint32_t>(x.sync_word[1]) << 16 |
-                          static_cast<uint32_t>(x.sync_word[2]) << 8 | x.sync_word[3];
+    const uint32_t word = static_cast<uint32_t>(x.address[0]) << 24 |
+                          static_cast<uint32_t>(x.address[1]) << 16 |
+                          static_cast<uint32_t>(x.address[2]) << 8 | x.address[3];
     const int transitions =
         __builtin_popcount(word ^ (word >> 1)) - static_cast<int>(word >> 31);
     CHECK(transitions >= 10 && transitions <= 22);
@@ -287,8 +286,6 @@ TEST(radio_channel_plan)
   CHECK_EQ(ChannelHz(kControlChannel), 2'448'500'000U);
   CHECK_EQ(ChannelHz(kChannels), ChannelHz(kControlChannel));
   CHECK_EQ(ChannelHz(kNoChannel), ChannelHz(kControlChannel));
-  CHECK_EQ(DefaultIdentity().frequency_hz, ChannelHz(kControlChannel));
-  CHECK_EQ(PairIdentity(0x12345678).frequency_hz, ChannelHz(kControlChannel));
 }
 
 // 测量与选点：忙碌低者胜，平均 RSSI 破平局；拉黑的点不选；没有测量时没有最好的点 /
