@@ -8,6 +8,7 @@
 // stores, and a pair of probes. The fake transceiver follows the contract in
 // xrdap/radio/transceiver.hpp, and FakeRadio::Hear alone decides who hears whom.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -23,8 +24,8 @@ namespace RadioTest
 using namespace XrDap;
 using namespace XrDap::Radio;
 
-// 无线测试的时间：Core 只经 LibXR::Timebase 读时间，这个测试程序把它换成这个时钟
-// （radio_clock.cpp）。每读一次走一小步，所以忙等总会结束；同样的调用序列得到同样的时间。
+// 无线测试的时间：Core 只经 LibXR::Timebase 读时间，这个测试程序把它换成这个时钟（
+// radio_clock.cpp）。每读一次走一小步，所以忙等总会结束；同样的调用序列得到同样的时间。
 // Time for the radio tests: Core reads time only through LibXR::Timebase, which this test
 // program replaces with this clock (radio_clock.cpp). Every read moves it a small step,
 // so a busy-wait always ends, and the same calls see the same times.
@@ -36,8 +37,10 @@ class VirtualClock
   static constexpr uint32_t kStepUs = 10;
   // NowUs() 截成 32 位，这里回绕。 / NowUs() truncates to 32 bits, which wrap here.
   static constexpr uint64_t kWrapUs = 1ULL << 32;
-  // 一对探针开始时离回绕多久：短的用例走不到，长的用例会跨过。 / How far from the wrap a
-  // pair starts: short cases do not reach it, long ones cross it.
+  // 一对探针开始时离回绕多久：时钟早已过了远端的沉默时限 2.5 s，短的用例走不到回绕，长的
+  // 用例会跨过。 / How far from the wrap a pair starts: the clock is long past the
+  // remote's silence limit of 2.5 s, short cases do not reach the wrap, and long ones
+  // cross it.
   static constexpr uint32_t kLeadUs = 1'000'000;
 
   static void StartBeforeWrap(uint32_t lead_us) { now_us_ = kWrapUs - lead_us; }
@@ -53,8 +56,8 @@ class FakeRadio;
 struct Flight
 {
   const FakeRadio* from;
-  LinkParams
-      params;  ///< 发射时的频率、速率和身份 / Frequency, rate and identity it left with
+  // 发射时的频率、速率和身份 / Frequency, rate and identity it left with.
+  LinkParams params;
   uint64_t begin_us;
   uint64_t end_us;
   bool collided;  ///< 和别的包重叠 / Overlapped another packet
@@ -86,6 +89,7 @@ class Air
       {
         other.collided = true;
         flight.collided = true;
+        ++collisions;
       }
     }
     flights_.push_back(std::move(flight));
@@ -96,6 +100,7 @@ class Air
 
   /// 这一包丢掉时为 true / True makes this packet get lost.
   std::function<bool(const Flight&)> lose;
+  uint32_t collisions = 0;
 
  private:
   std::vector<FakeRadio*> radios_;
@@ -131,9 +136,11 @@ class FakeRadio
     {
       return LibXR::ErrorCode::BUSY;
     }
-    // 2 Mb/s 或 1.3 Mb/s，加前导码和包头 / 2 Mb/s or 1.3 Mb/s, plus preamble and header.
+    // 2 Mb/s 或 1.3 Mb/s，加收发切换、前导码和包头，最长的包也远小于契约里的 3 ms / The
+    // rates are 2 Mb/s and 1.3 Mb/s; with the switch to transmit, preamble and header the
+    // longest packet stays well below the 3 ms of the contract.
     const uint32_t us_per_byte = params_.rate == Rate::kLow ? 7U : 4U;
-    tx_end_us_ = now + 40U + size * us_per_byte;
+    tx_end_us_ = now + 100U + size * us_per_byte;
     listening_since_us_ = tx_end_us_;
     return_due_ = true;
     ++sent;
@@ -202,8 +209,8 @@ class FakeRadio
   uint32_t Rearms() const { return rearms; }
   uint32_t Restarts() const { return starts; }
 
-  // 谁听得到谁：这一包从头到尾都在接收、同频、同速率的收发器听得到，高速率还要同地址
-  // （低速率不比地址，协议 8.4 节）；CRC 初值不同时是坏包。发射一结束就算回到接收，不等
+  // 谁听得到谁：这一包从头到尾都在接收、同频、同速率的收发器听得到，高速率还要同地址（低
+  // 速率不比地址，协议 8.4 节）；CRC 初值不同时是坏包。发射一结束就算回到接收，不等
   // Poll()：单线程里主机阻塞时对方的主循环可能轮不到跑，真机上这时早已跑过 Poll() 了。
   // Who hears whom: a transceiver in receive for all of the packet, on the same frequency
   // and at the same rate; the high rate also needs the same address (the low rate does
@@ -374,24 +381,22 @@ class FakeStore final : public Store
   bool ok = true;
 };
 
-// 保存设置要一段时间：Save 立即返回，这段时间里 Busy()
-// 为真，测试让远端既不运行也收不到包， 和它阻塞在写 Flash 上一样，主机却还能继续发。 / A
-// save that takes time: Save returns at once and Busy() holds for that time; the test
-// keeps the remote from running and receiving meanwhile, as when it blocks writing flash,
-// while the host can go on sending.
+// 保存设置要一段时间：Save 立即返回，这段时间里 Busy() 为真，测试让远端既不运行也收不到
+// 包，和它阻塞在写 Flash 上一样，主机却还能继续发。 / A save that takes time: Save
+// returns at once and Busy() holds for that time; the test keeps the remote from running
+// and receiving meanwhile, as when it blocks writing flash, while the host can go on
+// sending.
 class SlowStore final : public Store
 {
  public:
-  bool Save(const Settings& s) override
+  bool Save(const Settings&) override
   {
-    saved = s;
     ++saves;
     until_us_ = VirtualClock::Read() + save_us;
     return true;
   }
   bool Busy() const { return VirtualClock::Read() < until_us_; }
   uint32_t save_us = 0;
-  Settings saved{};
   uint32_t saves = 0;
 
  private:
@@ -526,7 +531,7 @@ inline StatsAnswer ReadStats(Link& link)
   CHECK_EQ(ControlStatus(link, {Op::kStats}, &bytes), Status::kOk);
   StatsAnswer answer{};
   CHECK_EQ(bytes.size(), sizeof(answer));
-  std::memcpy(&answer, bytes.data(), sizeof(answer));
+  std::memcpy(&answer, bytes.data(), std::min(bytes.size(), sizeof(answer)));
   return answer;
 }
 
