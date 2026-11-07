@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-// 几对探针共用内存里的一段“空中”：频率相差不到一个带宽、时间重叠的包都丢掉，包要发射一段
-// 时间。这里不模拟近距离阻塞和接收灵敏度，带宽外完全不干扰。判据：docs/protocol.md 第 8
-// 节： 几对共用 F，不同的对靠 CRC 初值和链路地址分开，变差的信道被换掉。
+// 几对探针共用内存里的一段“空中”。判据：docs/protocol.md 第 8 节：几对共用 F，不同的对靠
+// CRC 初值和链路地址分开，变差的信道被换掉。这里不模拟近距离阻塞和接收灵敏度，带宽外完全
+// 不干扰。
 //
-// 单线程模拟：主机阻塞在一次转发里时，由它的 Poll
-// 带动别的探针，别的主机的命令就嵌套在这里
-// 跑，它们的包和外层的包在空中重叠。每轮每个主机一条命令，每轮换一个主机在最外层。第一次
-// 建立会话要扫描 0.6 s，这段时间外层不动，所以各对先单独建立一次。
+// 单线程模拟：主机阻塞在一次转发里时，由它的 Poll 带动别的探针，别的主机的命令就嵌套在这
+// 里跑，它们的包和外层的包在空中重叠。每轮每个主机一条命令，每轮换一个主机在最外层。第一
+// 次建立会话要扫描 0.6 s，这段时间外层不动，所以各对先单独建立一次。
 //
-// Several pairs of probes share an in-memory "air": packets less than one bandwidth apart
-// that overlap in time are lost, and a packet takes time on air. Blocking at short range
-// and receiver sensitivity are not modelled, and there is no interference beyond the
-// bandwidth. Oracle: docs/protocol.md section 8: the pairs share F, the CRC seed and the
-// link address keep them apart, and a channel that turned bad is left.
+// Several pairs of probes share an in-memory "air". Oracle: docs/protocol.md section 8:
+// the pairs share F, the CRC seed and the link address keep them apart, and a channel
+// that turned bad is left. Blocking at short range and receiver sensitivity are not
+// modelled, and there is no interference beyond the bandwidth.
 //
 // A single-thread simulation: a host blocked in a forward drives the other probes from
 // its Poll, so the other hosts' commands run nested there and their packets overlap the
@@ -32,9 +30,9 @@ using namespace RadioTest;
 
 namespace
 {
-// 所有对都觉得最安静的点，和每对自己次好的点：相同的扫描结果会让几个主机一起换到同一个点。
-// / The point every pair finds quietest, and each pair's own second best: identical scan
-// results would make the hosts move to the same point together.
+// 所有对都觉得最安静的点，和每对自己次好的点：扫描结果都一样时，几个主机会一起换到同一个
+// 点 / The point every pair finds quietest, and each pair's own second best: with
+// identical scan results the hosts would move to the same point together.
 constexpr uint8_t kSharedChannel = 20;
 constexpr uint8_t SecondChannel(uint8_t index)
 {
@@ -50,14 +48,7 @@ struct FleetPair : Pair
   {
     exec_a.marker = marker;
     exec_b.marker = marker;
-    radio_a.noise = [index](uint32_t hz) -> int16_t
-    {
-      if (hz == ChannelHz(kSharedChannel))
-      {
-        return -200;
-      }
-      return hz == ChannelHz(SecondChannel(index)) ? -190 : -150;
-    };
+    radio_a.noise = QuietAt(kSharedChannel, SecondChannel(index));
   }
 
   std::vector<uint8_t> Marked(uint8_t id, uint16_t size) const
@@ -99,17 +90,6 @@ struct FleetPair : Pair
     busy = false;
   }
 
-  StatsAnswer Stats()
-  {
-    const uint8_t request[] = {Op::kStats};
-    uint8_t resp[sizeof(StatsAnswer)];
-    uint16_t out = 0;
-    CHECK(a.HandleControl(request, sizeof(request), resp, sizeof(resp), out));
-    StatsAnswer answer;
-    std::memcpy(&answer, resp, sizeof(answer));
-    return answer;
-  }
-
   uint8_t marker;
   bool connect_next = false;
   bool busy = false;
@@ -122,7 +102,7 @@ struct FleetPair : Pair
 class Fleet
 {
  public:
-  Fleet(size_t count, Rate rate) : rate_(rate)
+  Fleet(size_t count, Rate rate)
   {
     VirtualClock::StartBeforeWrap(VirtualClock::kLeadUs);
     for (size_t i = 0; i < count; ++i)
@@ -156,7 +136,9 @@ class Fleet
     {
       pair->connect_next = true;
     }
-    Round(0);
+    const uint32_t collisions = air_.collisions;
+    Round();
+    CHECK(air_.collisions > collisions);
     for (auto& pair : pairs_)
     {
       CHECK_EQ(pair->exec_a.local, 0U);
@@ -165,67 +147,63 @@ class Fleet
     }
   }
 
-  // 长短命令交替，直到没有两对重叠，再稳定 kSettledRounds 轮；分开后不再有干扰，所以这段
-  // 时间一次重发都没有。 / Short and long commands in turn until no two pairs overlap and
-  // that held for kSettledRounds rounds; once apart nothing interferes, so there is not a
-  // single resend in that time.
+  // 长短命令交替，直到没有两对重叠 / Short and long commands in turn until no two pairs
+  // overlap.
   void RunUntilApart()
   {
-    uint32_t apart = 0;
-    for (uint32_t round = 0; round < kLimitRounds && apart < kSettledRounds; ++round)
+    while (round_ < kLimitRounds && !Apart())
     {
-      Round(round);
-      if (!Apart())
-      {
-        apart = 0;
-        continue;
-      }
-      if (apart == 0U)
-      {
-        before_.clear();
-        for (auto& pair : pairs_)
-        {
-          before_.push_back(pair->Stats());
-        }
-      }
-      ++apart;
+      Round();
     }
-    CHECK_EQ(apart, kSettledRounds);
-    CHECK_EQ(before_.size(), pairs_.size());
-    for (size_t i = 0; i < pairs_.size() && i < before_.size(); ++i)
+    CHECK(Apart());
+  }
+
+  // 分开以后没有干扰：不再有重发和失败，也不再换信道。 / Once apart nothing interferes:
+  // no more resends or failures, and no more changes of channel.
+  void CheckQuietOnceApart()
+  {
+    std::vector<StatsAnswer> before;
+    for (auto& pair : pairs_)
     {
-      FleetPair& pair = *pairs_[i];
-      const StatsAnswer stats = pair.Stats();
-      std::printf(
-          "    pair %zu: %u commands, %u failed, %u resends, %u bad, channel %u\n", i,
-          pair.total, pair.failed, stats.retries, pair.radio_a.bad + pair.radio_b.bad,
-          stats.channel);
-      CHECK_EQ(stats.retries, before_[i].retries);
-      CHECK_EQ(stats.failures, before_[i].failures);
-      // 串台是硬错误：命令到了别的对的目标，或者应答对不上。 / Crosstalk is a hard error:
-      // a command reaching another pair's target, or an answer that does not match.
-      CHECK_EQ(pair.exec_a.foreign, 0U);
-      CHECK_EQ(pair.exec_b.foreign, 0U);
-      CHECK_EQ(pair.wrong, 0U);
-      // 低速率不比地址，别的对的包到得了接收机、CRC 错；高速率到不了。 / The low rate
-      // does not compare addresses, so another pair's packets reach the receiver with a
-      // CRC error; at the high rate they do not reach it.
-      if (rate_ == Rate::kLow)
-      {
-        CHECK(pair.radio_a.bad + pair.radio_b.bad > 0U);
-      }
-      else
-      {
-        CHECK_EQ(pair.radio_a.bad + pair.radio_b.bad, 0U);
-      }
+      before.push_back(ReadStats(pair->a));
+    }
+    for (int i = 0; i < 50; ++i)
+    {
+      Round();
+    }
+    for (size_t i = 0; i < pairs_.size(); ++i)
+    {
+      const StatsAnswer stats = ReadStats(pairs_[i]->a);
+      CHECK_EQ(stats.retries, before[i].retries);
+      CHECK_EQ(stats.failures, before[i].failures);
+      CHECK_EQ(stats.channel, before[i].channel);
+      std::printf("    pair %zu: %u commands, %u resends, %u bad, channel %u\n", i,
+                  stats.commands, stats.retries,
+                  pairs_[i]->radio_a.bad + pairs_[i]->radio_b.bad, stats.channel);
+    }
+  }
+
+  // 串台是硬错误：命令到了别的对的目标，或者应答对不上。低速率不比地址，别的对的包到得了
+  // 接收机、 CRC 错；高速率到不了。 / Crosstalk is a hard error: a command reaching
+  // another pair's target, or an answer that does not match. The low rate does not
+  // compare addresses, so another pair's packets reach the receiver with a CRC error; at
+  // the high rate they do not reach it.
+  void CheckIsolation(Rate rate)
+  {
+    for (auto& pair : pairs_)
+    {
+      CHECK_EQ(pair->exec_a.foreign, 0U);
+      CHECK_EQ(pair->exec_b.foreign, 0U);
+      CHECK_EQ(pair->wrong, 0U);
+      const uint32_t bad = pair->radio_a.bad + pair->radio_b.bad;
+      CHECK(rate == Rate::kLow ? bad > 0U : bad == 0U);
     }
   }
 
  private:
-  static constexpr uint32_t kSettledRounds = 50;
   static constexpr uint32_t kLimitRounds = 2000;
 
-  void Round(uint32_t round)
+  void Round()
   {
     together_ = true;
     for (auto& pair : pairs_)
@@ -234,24 +212,26 @@ class Fleet
     }
     for (size_t i = 0; i < pairs_.size(); ++i)
     {
-      pairs_[(round + i) % pairs_.size()]->TakeTurn();
+      pairs_[(round_ + i) % pairs_.size()]->TakeTurn();
     }
     together_ = false;
+    ++round_;
   }
 
+  // 主机先走：外层的包还在空中，这样才撞得上。 / The hosts first: the outer packet is
+  // still on air, so that they can collide with it.
   void Drive()
   {
+    if (together_)
+    {
+      for (auto& pair : pairs_)
+      {
+        pair->TakeTurn();
+      }
+    }
     for (auto& pair : pairs_)
     {
       (void)pair->b.Service();
-    }
-    if (!together_)
-    {
-      return;
-    }
-    for (auto& pair : pairs_)
-    {
-      pair->TakeTurn();
     }
   }
 
@@ -275,11 +255,10 @@ class Fleet
     return true;
   }
 
-  Rate rate_;
+  uint32_t round_ = 0;
   bool together_ = false;
   Air air_;
   std::vector<std::unique_ptr<FleetPair>> pairs_;
-  std::vector<StatsAnswer> before_;
 };
 
 void RunPairs(size_t count, Rate rate)
@@ -288,11 +267,13 @@ void RunPairs(size_t count, Rate rate)
   fleet.OpenOneByOne();
   fleet.OpenTogether();
   fleet.RunUntilApart();
+  fleet.CheckQuietOnceApart();
+  fleet.CheckIsolation(rate);
 }
 }  // namespace
 
-TEST(radio_two_pairs_gfsk) { RunPairs(2, Rate::kHigh); }
+TEST(radio_two_pairs_high_rate) { RunPairs(2, Rate::kHigh); }
 
-TEST(radio_two_pairs_flrc) { RunPairs(2, Rate::kLow); }
+TEST(radio_two_pairs_low_rate) { RunPairs(2, Rate::kLow); }
 
-TEST(radio_four_pairs_gfsk) { RunPairs(4, Rate::kHigh); }
+TEST(radio_four_pairs_high_rate) { RunPairs(4, Rate::kHigh); }
