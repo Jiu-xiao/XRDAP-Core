@@ -3,9 +3,9 @@
 
 // 远端一侧：接收命令、执行、发应答。会话规则见 session.hpp。
 //
-// 远端收到会话号为 0 的 PING、新会话号或 3 s
-// 没有包时结束会话，并停止会话开始的采样。在数据 信道上 2.5 s
-// 没听到主机，或会话结束时，自己回到控制信道。应答逐包发出，不阻塞主循环。
+// 远端收到会话号为 0 的 PING、新会话号或 3 s 没有包时结束会话，并停止会话开始的采样。在
+// 数据信道上 2.5 s 没听到主机，或会话结束时，自己回到控制信道。这两个时间都不算命令执行的
+// 时间。应答逐包发出，不阻塞主循环。
 //
 // The remote side: receive commands, execute them, send the answers. Session rules:
 // session.hpp.
@@ -13,7 +13,8 @@
 // The remote ends a session on a PING with id 0, on a new id, or after 3 s without a
 // packet, and then stops the sampling the session started. It returns to the control
 // channel on its own after 2.5 s on a data channel without hearing the host, and when a
-// session ends. Answers go out packet by packet without blocking the main loop.
+// session ends. Neither time counts the execution of a command. Answers go out packet by
+// packet without blocking the main loop.
 
 #include <cstdint>
 
@@ -108,6 +109,11 @@ class RemoteLink
                         sizeof(answer_), size);
     }
     executing_ = false;
+    // 执行时听不到主机，这段时间不算它沉默：长命令执行完，主机还在等应答（R3）。 /
+    // The host cannot be heard during execution, so that time is not its silence: after a
+    // long command the host is still waiting for the answer (R3).
+    heard_host_us_ = NowUs();
+    (void)lease_.OnCommand(heard_host_us_);
     answer_size_ = size;
     cache_.Store(commands_.Sequence());
     StartAnswer(commands_.Sequence());

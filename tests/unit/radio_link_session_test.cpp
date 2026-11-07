@@ -330,6 +330,35 @@ Sent RunShortSession(uint32_t lead_us)
 }
 }  // namespace
 
+// 命令执行的时间不算主机沉默。SWJ_Pins 等 3 s：执行了超过信道的沉默时限（2.5 s）或租期
+// （3 s），会话还在，远端留在数据信道上，只执行一次 / The time a command executes is not
+// the host's silence. SWJ_Pins waits for 3 s: after an execution beyond the channel's
+// silence limit (2.5 s) or the lease (3 s) the session goes on, the remote stays on the
+// data channel, and the command runs once.
+static void CheckLongCommand(uint32_t execute_us)
+{
+  Pair p(true);
+  p.radio_a.noise = QuietAt(150);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  const uint32_t lost = p.exec_b.lost;
+  const std::vector<uint8_t> pins = {0x10, 0, 0, 0xC0, 0xC6, 0x2D, 0x00};
+  p.exec_b.execute_us = execute_us;
+  CHECK(p.exec_a.Usb(pins) == Expected(pins));
+  p.exec_b.execute_us = 0;
+  CHECK_EQ(p.exec_b.executed, 2U);
+  RunFor(p.b, 10'000);
+  CHECK_EQ(p.exec_b.lost, lost);
+  CHECK(p.radio_b.Frequency() == ChannelHz(150));
+  const auto next = Command(Byte(DapCmd::TRANSFER), 8);
+  CHECK(p.exec_a.Usb(next) == Expected(next));
+  CHECK_EQ(p.exec_b.lost, lost);
+  CHECK_EQ(p.exec_b.executed, 3U);
+}
+
+TEST(radio_link_command_longer_than_the_channel_silence) { CheckLongCommand(2'600'000); }
+
+TEST(radio_link_command_longer_than_the_lease) { CheckLongCommand(3'200'000); }
+
 // NowUs() 截成 32 位，约 71 分钟回绕一次：回绕点落在会话的任何地方，都不会多发一个包，因
 // 为没有等待会提前结束。步长小于 3 ms 的等待 / NowUs() truncates to 32 bits and wraps
 // about every 71 minutes: wherever the wrap falls in a session, not one more packet goes

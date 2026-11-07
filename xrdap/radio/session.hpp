@@ -14,7 +14,8 @@
 // 远端（RemoteLease）：
 //   R1 会话号为 0 的 PING 结束会话。
 //   R2 带别的会话号的 PING 结束当前会话，以新号开始一个会话。
-//   R3 主机的每个包（PING、COMMAND）续租；kLeaseUs 内一个都没有时会话结束。
+//   R3 主机的每个包（PING、COMMAND）续租，一条命令执行完也续租（执行时听不到主机）；
+//      kLeaseUs 内一个都没有时会话结束。
 //   R4 会话结束时清掉缓存的应答和在拼的命令，并停止会话开始的事（采样）。
 //   R5 会话外的 COMMAND 不执行、不应答。
 // 重复命令（AnswerCache）：会话内远端保留最后一个应答；同序号的命令用缓存应答，不再执行。
@@ -34,8 +35,9 @@
 // Remote (RemoteLease):
 //   R1 A PING with id 0 ends the session.
 //   R2 A PING with another id ends the session and opens one with the new id.
-//   R3 Every packet from the host (PING, COMMAND) renews the lease; kLeaseUs without one
-//      ends the session.
+//   R3 Every packet from the host (PING, COMMAND) renews the lease, and so does the end
+//      of a command's execution (the host cannot be heard meanwhile); kLeaseUs without
+//      one ends the session.
 //   R4 Ending a session clears the cached answer and the command being reassembled, and
 //      stops what the session started (sampling).
 //   R5 A COMMAND outside a session is not executed and not answered.

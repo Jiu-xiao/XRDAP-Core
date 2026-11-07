@@ -45,6 +45,8 @@ class VirtualClock
 
   static void StartBeforeWrap(uint32_t lead_us) { now_us_ = kWrapUs - lead_us; }
   static uint64_t Read() { return now_us_ += kStepUs; }
+  // 一下子过去这么久 / This much time passes at once.
+  static void Advance(uint64_t us) { now_us_ += us; }
 
  private:
   static inline uint64_t now_us_ = kWrapUs - kLeadUs;
@@ -325,6 +327,7 @@ class FakeExec
     uint16_t forwarded = 0;
     CHECK(!forwarder_(ctx_, t, req, len, resp, cap, forwarded));  // RADIO 不转发
     ++executed;
+    VirtualClock::Advance(execute_us);
     last.assign(req, req + len);
     if (marker != 0U && len >= 2U && req[1] != marker)
     {
@@ -354,6 +357,8 @@ class FakeExec
   std::function<bool(const uint8_t*, uint16_t, uint8_t*, uint16_t, uint16_t&)> control;
   std::vector<uint8_t> last;  ///< 上一条执行的命令 / the last command executed
   uint32_t executed = 0;
+  // 一条命令执行多久 / How long one command executes.
+  uint32_t execute_us = 0;
   uint32_t local = 0;
   uint32_t lost = 0;
   // 几对探针同时工作时命令第二个字节是所属的对：不是 0 时核对，对不上的算进 foreign。 /
