@@ -119,7 +119,7 @@ TEST(TheNextFrameRecoversOnce)
   CHECK_EQ(Get32(r.frame + kValues), ModelSwd::Value(0U, kAddr));
   CHECK_EQ(r.swd.resets, 1U);
   CHECK_EQ(r.swd.enters, 1U);
-  CHECK_EQ(r.swd.memory_reads, 2U);
+  CHECK_EQ(r.swd.memory_reads.load(), 2U);
 }
 
 // 反复读可能有外设副作用，所以目标不在时一秒最多恢复一次（sampler.cpp）/ Repeated reads
@@ -230,7 +230,7 @@ TEST(AFaultInABurstFailsEveryUnconfirmedWord)
   (void)r.SampleNow();
   CHECK_EQ(r.swd.tar_writes, 1U);
   CHECK_EQ(r.frame[kBitmap], 3U);
-  CHECK_EQ(r.swd.memory_reads, 1U);
+  CHECK_EQ(r.swd.memory_reads.load(), 1U);
 }
 
 TEST(BadRdbuffParityFailsOnlyTheLastWord)
