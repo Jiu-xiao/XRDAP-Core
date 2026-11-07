@@ -63,9 +63,12 @@ if(TRUE)
   target_include_directories(xrdap_core_compile PRIVATE ${XRDAP_LIBXR_USB_DIRS})
   target_include_directories(xrdap_core_unit PRIVATE ${XRDAP_LIBXR_USB_DIRS})
 
-  # 多线程下的执行器，用 libxr 的 Linux 系统层运行 / The executor with threads, run on
-  # libxr's Linux system layer.
-  add_executable(xrdap_core_threads "${CMAKE_CURRENT_LIST_DIR}/threads/executor_wait_test.cpp"
+  # 执行器，部分用例用真线程，时钟和厂商扩展的测试是同一个 / The executor, some cases with
+  # real threads, on the same clock as the vendor extension tests.
+  file(GLOB XRDAP_THREAD_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/threads/*.cpp")
+  add_executable(xrdap_core_threads ${XRDAP_THREAD_TESTS}
+                                    "${CMAKE_CURRENT_LIST_DIR}/vendor/test_clock.cpp"
+                                    "${CMAKE_CURRENT_LIST_DIR}/unit/main.cpp"
                                     ${XRDAP_CORE_SOURCES})
   target_include_directories(xrdap_core_threads PRIVATE "${CMAKE_CURRENT_LIST_DIR}/stub"
                                                         ${XRDAP_CORE_INCLUDE_DIRS}

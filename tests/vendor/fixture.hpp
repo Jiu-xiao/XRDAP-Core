@@ -23,6 +23,7 @@
 //   next AP access or RDBUFF read. A CTRL/STAT read does not wait for the AP transaction,
 //   so it cannot see the failure (V305-2).
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -73,7 +74,7 @@ class ModelSwd final : public LibXR::Debug::Swd
   // 观察 / Observations.
   unsigned resets = 0;
   unsigned enters = 0;
-  unsigned memory_reads = 0;
+  std::atomic<unsigned> memory_reads{0U};
   unsigned csw_reads = 0;
   unsigned tar_writes = 0;
   unsigned drw_attempts = 0;

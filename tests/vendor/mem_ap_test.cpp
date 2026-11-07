@@ -232,14 +232,14 @@ TEST(BurstRefusesToCrossThe1KiBWindow)
 {
   BurstTarget t;
   CHECK_EQ(t.mem.ReadWords(t.ap, kAddr + 0x3FCU, 2U, t.values), 0U);
-  CHECK_EQ(t.swd.memory_reads, 0U);
+  CHECK_EQ(t.swd.memory_reads.load(), 0U);
 }
 
 TEST(BurstRefusesAnUnalignedAddress)
 {
   BurstTarget t;
   CHECK_EQ(t.mem.ReadWords(t.ap, kAddr + 1U, 2U, t.values), 0U);
-  CHECK_EQ(t.swd.memory_reads, 0U);
+  CHECK_EQ(t.swd.memory_reads.load(), 0U);
 }
 
 // 复用的是 CSW，不是目标数据 / What is reused is the CSW, not target data.
@@ -252,7 +252,7 @@ TEST(ReusedCswStillReadsFreshData)
   t.mem.ResetCache(true);
   CHECK_EQ(t.Read(kAddr), ModelSwd::Value(0U, kAddr) + 7U);
   CHECK_EQ(t.swd.csw_reads, 1U);
-  CHECK_EQ(t.swd.memory_reads, 2U);
+  CHECK_EQ(t.swd.memory_reads.load(), 2U);
 }
 
 // 一次采样突发在命令的 AP 状态背后打开了 AddrInc，复用时要重新写 / A sampling burst turns
@@ -294,7 +294,7 @@ TEST(FailedReadForbidsCswReuse)
   const unsigned reads = t.swd.memory_reads;
   uint8_t value[4] = {};
   CHECK_EQ(t.mem.Read(WordAt(kAddr), value), kItemSwdFailed);
-  CHECK_EQ(t.swd.memory_reads, reads);
+  CHECK_EQ(t.swd.memory_reads.load(), reads);
   t.mem.ResetCache(true);
   CHECK_EQ(t.Read(kAddr), ModelSwd::Value(0U, kAddr));
   CHECK_EQ(t.swd.csw_reads, 2U);
