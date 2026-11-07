@@ -20,7 +20,7 @@ using Bytes = std::vector<uint8_t>;
 
 Bytes SaveRequest(const char* ssid, const char* password)
 {
-  Bytes r = {W::kCmd, 0x01, static_cast<uint8_t>(std::strlen(ssid))};
+  Bytes r = {0x86, 0x01, static_cast<uint8_t>(std::strlen(ssid))};
   r.insert(r.end(), ssid, ssid + std::strlen(ssid));
   r.push_back(static_cast<uint8_t>(std::strlen(password)));
   r.insert(r.end(), password, password + std::strlen(password));
@@ -39,14 +39,15 @@ bool Length(const Bytes& wire, uint16_t& len)
 }
 }  // namespace
 
-TEST(WifiFeatureBitIsBit4)
+TEST(FeatureBitsMatchTheDocument)
 {
-  // 文档 3.4：功能位 bit4 为 Wi-Fi 配置；bit5 控制口、bit6 紧凑帧不与它重叠 / Doc 3.4:
-  // feature bit 4 is Wi-Fi configuration; bit 5 (control port) and bit 6 (compact frames)
-  // do not overlap.
+  // 文档 3.4：bit4 Wi-Fi 配置，bit5 控制口，bit6 紧凑帧；没有 Wi-Fi 和控制口的探针报告
+  // 0x4F / Doc 3.4: bit 4 Wi-Fi configuration, bit 5 control port, bit 6 compact frames;
+  // a probe with neither Wi-Fi nor a control port reports 0x4F.
   CHECK_EQ(kFeatureWifi, 0x10U);
-  CHECK_EQ(kFeatureWifi & (kFeatureControl | kFeatureCompactFrames | kFeatures), 0U);
-  CHECK_EQ(W::kCmd, 0x86U);
+  CHECK_EQ(kFeatureControl, 0x20U);
+  CHECK_EQ(kFeatureCompactFrames, 0x40U);
+  CHECK_EQ(kFeatures, 0x4FU);
 }
 
 TEST(WifiRequestLengthMatchesDocument)
@@ -131,6 +132,11 @@ TEST(WifiParseRulesOfSave)
   CHECK(Parse(cut, r) == W::Parse::BAD_ARGUMENT);
   CHECK(Parse({0x86, 0x01}, r) == W::Parse::BAD_ARGUMENT);
   CHECK(Parse({0x86, 0x01, 0x03, 'l', 'a', 'b'}, r) == W::Parse::BAD_ARGUMENT);
+}
+
+TEST(WifiParseRejectsOtherOps)
+{
+  W::Request r{};
   // 查询的长度必须是 2 字节 / A query must be 2 bytes.
   CHECK(Parse({0x86, 0x00, 0x00}, r) == W::Parse::BAD_ARGUMENT);
   // op 未定义 / Undefined op.
@@ -170,18 +176,54 @@ TEST(WifiQueryAnswerMatchesDocumentExamples)
   CHECK(Bytes(resp, resp + m) == expect_cleared);
 }
 
-TEST(WifiQueryAnswerFlagsAndControlPortFirstByte)
+TEST(WifiQueryAnswerFlagBits)
+{
+  // 3.7 的标志：bit0 已启动，bit1 已拿到 IP，bit2 NVS 已重建 / The flags of 3.7: bit 0
+  // started, bit 1 got an IP, bit 2 NVS rebuilt.
+  uint8_t resp[64];
+  W::Query q{};
+  q.started = true;
+  CHECK_EQ(W::EncodeQuery(0x86, q, resp, sizeof(resp)), 11U);
+  CHECK_EQ(resp[2], 0x01U);
+  q = W::Query{};
+  q.connected = true;
+  CHECK_EQ(W::EncodeQuery(0x86, q, resp, sizeof(resp)), 11U);
+  CHECK_EQ(resp[2], 0x02U);
+  q = W::Query{};
+  q.storage_repaired = true;
+  CHECK_EQ(W::EncodeQuery(0x86, q, resp, sizeof(resp)), 11U);
+  CHECK_EQ(resp[2], 0x04U);
+}
+
+TEST(WifiQueryAnswerOnTheControlPortStartsWithTheOp)
 {
   uint8_t resp[64];
   W::Query q{};
-  q.storage_repaired = true;
   q.last_erase = W::EraseSource::STORAGE_REPAIR;
   q.reset_reason = W::ResetReason::OTHER;
   // 3.7.1：控制口应答的第 1 字节是 op / 3.7.1: the first byte of a control answer is the
   // op.
   const uint16_t n = W::EncodeQuery(0x00, q, resp, sizeof(resp));
   CHECK(Bytes(resp, resp + n) ==
-        (Bytes{0x00, 0x00, 0x04, 0, 0, 0, 0, 0x00, 0x00, 0x04, 0x06}));
+        (Bytes{0x00, 0x00, 0x00, 0, 0, 0, 0, 0x00, 0x00, 0x04, 0x06}));
+}
+
+TEST(WifiEraseSourceAndResetReasonBytes)
+{
+  // 3.7 op 0 应答末尾两个字节的取值 / The values of the last two bytes of the op 0 answer
+  // in 3.7.
+  CHECK_EQ(static_cast<uint8_t>(W::EraseSource::NONE), 0U);
+  CHECK_EQ(static_cast<uint8_t>(W::EraseSource::BUTTON), 1U);
+  CHECK_EQ(static_cast<uint8_t>(W::EraseSource::CONSOLE), 2U);
+  CHECK_EQ(static_cast<uint8_t>(W::EraseSource::VENDOR_COMMAND), 3U);
+  CHECK_EQ(static_cast<uint8_t>(W::EraseSource::STORAGE_REPAIR), 4U);
+  CHECK_EQ(static_cast<uint8_t>(W::ResetReason::UNKNOWN), 0U);
+  CHECK_EQ(static_cast<uint8_t>(W::ResetReason::POWER_ON), 1U);
+  CHECK_EQ(static_cast<uint8_t>(W::ResetReason::SOFTWARE), 2U);
+  CHECK_EQ(static_cast<uint8_t>(W::ResetReason::WATCHDOG), 3U);
+  CHECK_EQ(static_cast<uint8_t>(W::ResetReason::PANIC), 4U);
+  CHECK_EQ(static_cast<uint8_t>(W::ResetReason::BROWNOUT), 5U);
+  CHECK_EQ(static_cast<uint8_t>(W::ResetReason::OTHER), 6U);
 }
 
 TEST(WifiQueryAnswerWithoutRoomIsResourceStatus)
