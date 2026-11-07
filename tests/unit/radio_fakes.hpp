@@ -305,6 +305,14 @@ class FakeExec
     forwarder_ = f;
     ctx_ = ctx;
   }
+  // USB 来一条命令，应答写进只有 cap 字节的空间 / A command from USB, with the answer
+  // going into a space of cap bytes.
+  bool UsbInto(const std::vector<uint8_t>& req, uint8_t* resp, uint16_t cap,
+               uint16_t& out)
+  {
+    return forwarder_(ctx_, Transport::USB, req.data(), static_cast<uint16_t>(req.size()),
+                      resp, cap, out);
+  }
   // USB 来一条命令：转发钩子不处理时在本地执行 / A command from USB: runs locally when
   // the forwarder hook does not take it.
   std::vector<uint8_t> Usb(const std::vector<uint8_t>& req)

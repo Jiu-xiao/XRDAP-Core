@@ -87,7 +87,7 @@ class HostLink
     if (!ReachPeer())
     {
       peer_lost_ = true;
-      out = Fail(req, resp);
+      out = Fail(req, resp, cap);
       return false;
     }
     const bool disconnect = !control && IsCommand(req, len, DapCmd::DISCONNECT);
@@ -96,7 +96,7 @@ class HostLink
                   !disconnect, control))
     {
       peer_lost_ = true;
-      out = Fail(req, resp);
+      out = Fail(req, resp, cap);
       return false;
     }
     heard_peer_us_ = NowUs();
@@ -192,11 +192,19 @@ class HostLink
   // the next command pings first.
   static constexpr uint32_t kQuietUs = 1'000'000;
 
-  static uint16_t Fail(const uint8_t* req, uint8_t* resp)
+  // DAP_ExecuteCommands 的子命令可能只剩一两个字节的空间。 / A sub-command of
+  // DAP_ExecuteCommands may have only a byte or two of room left.
+  static uint16_t Fail(const uint8_t* req, uint8_t* resp, uint16_t cap)
   {
-    resp[0] = req[0];
-    resp[1] = Byte(DapStatus::ERROR);
-    return 2U;
+    if (cap >= 1U)
+    {
+      resp[0] = req[0];
+    }
+    if (cap >= 2U)
+    {
+      resp[1] = Byte(DapStatus::ERROR);
+    }
+    return cap < 2U ? cap : 2U;
   }
 
   // 转发一条命令并等应答；1 s 加 execution_us 内收到完整应答时为 true。more 表示之后还有
