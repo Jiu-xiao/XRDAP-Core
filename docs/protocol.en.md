@@ -628,7 +628,7 @@ HELLO is used for pairing only: `05`, the own 12-byte chip UID, and the peer's U
 
 A session is named by a 16-bit non-zero id the host picks. Before the first command of a session the host sends a PING with the new id, which the remote answers with a PONG; after 1 s without a command it sends a heartbeat PING; on `DAP_Disconnect`, or after 5 s without a command from the PC, it ends the session with a PING carrying id 0. The remote ends the session on id 0 or a new id, or after 3 s without a packet from the host; it drops the cached answer, and a connection on the radio lapses together with its sampling. COMMAND and CONTROL outside a session are neither executed nor answered.
 
-After sending a command the host waits for the answer: first 3 ms plus the command's expected execution time, then twice as long with every resend, up to 200 ms each and 1 s plus the execution time in total; each answer fragment that arrives adds 3 ms. The remote keeps its last answer and answers a command with the same sequence from it instead of executing it again. The host cannot hear an answer while it transmits, so the remote executes and answers only when the burst of fragments is over (the last fragment arrived, or no next fragment for 3 ms); for a resend of a completed command one fragment is enough for the cached answer.
+After sending a command the host waits for the answer: first 3 ms plus the command's expected execution time (250 ms for a control request, as the peer may be writing flash), then twice as long with every resend, up to 200 ms each and 1 s plus the execution time in total; each answer fragment that arrives adds 3 ms. The remote keeps its last answer and answers a command with the same sequence from it instead of executing it again. The host cannot hear an answer while it transmits, so the remote executes and answers only when the burst of fragments is over (the last fragment arrived, or no next fragment for 3 ms); for a resend of a completed command one fragment is enough for the cached answer.
 
 In the AUTO role a paired probe acts as the remote while it has no session of its own; a `DAP_Connect` on USB that reaches the peer runs the session over the radio, otherwise locally. `SWJ_Clock`, `TransferConfigure` and `SWD_Configure` before `DAP_Connect` run locally, and the last of each is sent to the remote when the session goes over the radio.
 
@@ -649,7 +649,7 @@ The settings and radio operations of a radio probe go through the control port (
 | 0x17 | None | Bootloader slot information (CH32 boards) |
 | 0x19 | None, or mode and channel | Read the channel; mode 0 chooses the channel automatically, 1 locks this channel (stored, in effect at the next choice of channel). The answer is `19 00`, the current channel and the locked channel (0xFF when automatic) |
 | 0x20 | None | Start pairing |
-| 0x30 | A control request (not 0x30) | Sent to the peer over the radio; the answer is the peer's; status 1 when the peer does not answer |
+| 0x30 | A control request (not 0x30) | Sent to the peer over the radio; the answer is the peer's; status 1 when the peer does not answer. Without a wireless DAP session both probes return to F after the forward |
 
 Answer of 0x13 (24 bytes):
 
