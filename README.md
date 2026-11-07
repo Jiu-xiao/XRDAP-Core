@@ -8,7 +8,7 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 |---|---|---|
 | [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3、ESP32-S2、ESP32-C3、ESP32 | 一个执行任务跑 `Run()`，gptimer 计节拍 |
 | [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8) | STM32F103（STLINK-V2 板） | 主循环跑 `Run()`，没有 RTOS |
-| [XRDAP-CH32V3](https://github.com/Jiu-xiao/XRDAP-CH32V3) | CH32V307、CH32V305 | 主循环跑 `Run()`，没有 RTOS，TIM7 计节拍 |
+| [XRDAP-CH32V3](https://github.com/Jiu-xiao/XRDAP-CH32V3) | CH32V307、CH32V305、CH32V208 | 主循环跑 `Run()`，没有 RTOS，TIM7（CH32V208 为 TIM4）计节拍 |
 
 电脑端工具在 [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host)。探针与电脑之间的协议见 [docs/protocol.md](docs/protocol.md)：第 1 节是串口帧，第 3 节是厂商扩展（协议版本 2）、一次一条链路的规则和控制口，第 4 节是探针身份，第 8 节是两块探针之间的无线链路。
 

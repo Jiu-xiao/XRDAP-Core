@@ -188,7 +188,7 @@ The response is always 22 bytes:
 | 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86), bit5 control port (3.7.1), bit6 compact frames (3.5); 0x7F on XRDAP-ESP, 0x6F on XRDAP-CH32V3, 0x4F on XRDAP-F103C8 (older firmware without compact frames: 0x3F or 0x1F, 0x2F, 0x0F) |
 | 7 | 2 | Maximum items per request or sampling run: 32 |
 | 9 | 1 | Maximum dereference depth: 8 |
-| 10 | 4 | Ring buffer size in bytes: 16384 on XRDAP-ESP (4096 on the ESP32-S2), 4096 on XRDAP-F103C8 and XRDAP-CH32V3 (2048 on the CH32V305 board) |
+| 10 | 4 | Ring buffer size in bytes: 16384 on XRDAP-ESP (4096 on the ESP32-S2), 4096 on XRDAP-F103C8 and XRDAP-CH32V3 (2048 on the CH32V305 and CH32V208 boards) |
 | 14 | 8 | Current probe time, µs |
 
 #### 0x81 READ
@@ -501,12 +501,12 @@ The firmware returns these strings in `DAP_Info` (`xrdap/probe/probe_identity.hp
 | Info ID | Meaning | Content |
 |---|---|---|
 | 0x01 | Vendor | `XRobot` |
-| 0x02 | Product | ESP32-S3: `XR-DAP-S3`; ESP32-S2: `XR-DAP-S2`; ESP32-C3: `XR-DAP-C3`; ESP32: `XR-DAP-ESP32`; STM32F103: `XR-DAP-F103`; CH32V307: `XR-DAP-V307`; CH32V305: `XR-DAP-V305` |
-| 0x03 | Serial number | `XRobot-XRDAP-` followed by the chip's unique id in upper-case hexadecimal: the factory MAC on ESP (6 bytes from eFuse, 12 digits), e.g. `XRobot-XRDAP-0123456789AB`; the 12-byte UID on STM32F103, CH32V307 and CH32V305 (24 digits) |
+| 0x02 | Product | ESP32-S3: `XR-DAP-S3`; ESP32-S2: `XR-DAP-S2`; ESP32-C3: `XR-DAP-C3`; ESP32: `XR-DAP-ESP32`; STM32F103: `XR-DAP-F103`; CH32V307: `XR-DAP-V307`; CH32V305: `XR-DAP-V305`; CH32V208: `XR-DAP-V208` |
+| 0x03 | Serial number | `XRobot-XRDAP-` followed by the chip's unique id in upper-case hexadecimal: the factory MAC on ESP (6 bytes from eFuse, 12 digits), e.g. `XRobot-XRDAP-0123456789AB`; the 12-byte UID on STM32F103, CH32V307, CH32V305 and CH32V208 (24 digits) |
 | 0x04 | CMSIS-DAP protocol version | `2.0.0` |
 | 0x05, 0x06 | Target device vendor, name | Not provided (empty) |
 | 0x07 | Board vendor | `XRobot` |
-| 0x08 | Board name | XRDAP-ESP: same as the product; XRDAP-F103C8: `STLINK-V2`; XRDAP-CH32V3: the board, e.g. `XR-DAP-WDAP`; the CH32V305 board is `CH32V305-LINKE` |
+| 0x08 | Board name | XRDAP-ESP: same as the product; XRDAP-F103C8: `STLINK-V2`; XRDAP-CH32V3: the board, e.g. `XR-DAP-WDAP`; the CH32V305 board is `CH32V305-LINKE`, the CH32V208 board `WCH-LINKW` |
 | 0x09 | Firmware version | The version of each firmware |
 
 The serial number is the same over every link (USB, serial, TCP, ...), which lets host tools recognise one probe across them.
@@ -610,7 +610,7 @@ Radio probes are used in pairs: one board on the PC's USB (the host) and one on 
 
 ### 8.1 Packets
 
-The radio has a high and a low rate, and each board defines their modulation and packet size (127 to 255 bytes). `wdap` uses the SX1281: the high rate is GFSK with packets of up to 255 bytes, the low rate is FLRC with packets of up to 127 bytes. Apart from HELLO, every packet starts with a 6-byte header:
+The radio has a high and a low rate, and each board defines their modulation and packet size (127 to 255 bytes). `wdap` uses the SX1281: the high rate is GFSK with packets of up to 255 bytes, the low rate is FLRC with packets of up to 127 bytes. `linkw` uses the CH32V208's own radio: the high rate is the 2M PHY with packets of up to 251 bytes, the low rate the 1M PHY with packets of up to 127 bytes. Apart from HELLO, every packet starts with a 6-byte header:
 
 | Byte | Content |
 |---|---|
@@ -669,7 +669,7 @@ Answer of 0x11: `11 00 n` followed by n little-endian u32 (n = 13): packets sent
 
 ### 8.4 Channels
 
-A frequency is a channel index in steps of 0.5 MHz: frequency = 2402 MHz + index × 0.5 MHz, index 0 to 159 (2402.0–2481.5 MHz), all within the licence-free 2400–2483.5 MHz. The control channel F is 93 (2448.5 MHz) on every probe; the CRC seed and the link address keep pairs apart. On `wdap` the FLRC sync word is fixed at `XRDP` (SX1281 errata 16.4), so at the low rate only the CRC seed does.
+A frequency is a channel index in steps of 0.5 MHz: frequency = 2402 MHz + index × 0.5 MHz, index 0 to 159 (2402.0–2481.5 MHz), all within the licence-free 2400–2483.5 MHz. The control channel F is 93 (2448.5 MHz) on every probe; the CRC seed and the link address keep pairs apart. On `wdap` the FLRC sync word is fixed at `XRDP` (SX1281 errata 16.4), so at the low rate only the CRC seed does; `linkw` uses the link address at both rates. The channels of `linkw` are 2 MHz apart (2402–2480 MHz); an index between two of them goes to the nearer one.
 
 Pairing and opening a session happen on F. Once the host has reached its peer on F with a PING (waiting up to 300 ms on `DAP_Connect`), it picks the data channel: the locked one (0x19), or the best of the scan; the first session scans first (one point per MHz, 1.5 ms each, 4 passes keeping the worst pass of each point, about 0.6 s). Busy is the share of time the RSSI is above -85 dBm; the point with the lowest busy share wins, and the lower mean RSSI breaks a tie. The host sends CHANNEL on F, and the remote moves once its CHANNEL_ACK is out; on the ACK the host moves too and confirms with a PING (up to 30 ms) on the new channel. After every 4 CHANNELs without an ACK the host pings on the target channel once (the peer may have moved and only the ACK was lost); when the change does not succeed within 100 ms the host bans the point and stays on the channel the peer is on.
 
