@@ -188,7 +188,7 @@ DAP-01 到 DAP-04 是 cmsis-dap-behavior-suite 分支目录在真实探针上的
 - DAP-02：DP 块读（IDCODE × 3）和 DP 块写（SELECT × 2）；计数 0；一个包能放下的最多字数完整返回，多一个字时响应不超过包长；从 `fault_address` 块读得到 FAULT；带匹配、时间戳位的块请求得到应答且链路同步。
 - DAP-03：请求长度取 MPS−1、MPS、MPS+1、2×MPS、包长−1、包长（MPS 为 USB 端点最大包长，其他链路取 64），响应长度取 MPS−4、MPS、包长、8 字节，每种 20 次。整包长度的请求由上位机补零长度包（协议“USB 主机的注意事项”）。
 - DAP-04：DAP_Info 各 ID、DAP_HostStatus、DAP_SWJ_Pins 读、DAP_Delay；ExecuteCommands 回显命令数；连续两个 QueueCommands 包加一个 ExecuteCommands 包得到三个按顺序的 0x7F 响应；未定义命令 0x3F 只回 `FF`。
-- DAP-05：用 ExecuteCommands 拼出长度正好为 n 的响应（一个写 TAR 再读 DRW 的 DAP_Transfer，偶数长度再加一个读 DP 的 DAP_Transfer，余下用 HostStatus 补齐），n 从 12 到包长每个长度请求一次；链路上的帧长落在 USB 包长（没有 USB 端点的链路按 64）整数倍减 1、整数倍、加 1 的长度各请求 5 次。串口的帧长是响应加 19 字节 Topic 帧头和校验。每个响应必须在 1 s 内完整到达；没到达的长度记录下来，并发一次 DAP_Info 把链路重新对齐后继续。这一项检查的是链路整体：USB 转串口芯片在帧长正好是 64 字节整数倍时可能要等下一个短包才把数据交给主机，这类问题只有逐个长度扫描才能发现。
+- DAP-05：用 ExecuteCommands 拼出长度正好为 n 的响应（一个写 TAR 再读 DRW 的 DAP_Transfer，偶数长度再加一个读 DP 的 DAP_Transfer，余下用 HostStatus 补齐），n 从 12 到包长每个长度请求一次；链路上的帧长落在 USB 包长（没有 USB 端点的链路按 64）整数倍减 1、整数倍、加 1 的长度各请求 5 次。串口的帧长是响应加 19 字节 Topic 帧头和校验。每个响应必须在 1 s 内完整到达；`radio` 链路上是 1.7 s，即主机板转发一条 `DAP_ExecuteCommands` 的最长等待（协议 8.2：1 s 加 0.5 s 预计执行时间，以及最后一次发送后至多 200 ms）；没到达的长度记录下来，并发一次 DAP_Info 把链路重新对齐后继续。这一项检查的是链路整体：USB 转串口芯片在帧长正好是 64 字节整数倍时可能要等下一个短包才把数据交给主机，这类问题只有逐个长度扫描才能发现。
 
 behavior-suite 分支与本规范用例的对应。标 N/A 的分支或描述上位机侧的调度模型，或需要在健康目标上注入线路错误，不属于探针在线测试：
 

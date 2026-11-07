@@ -1,11 +1,15 @@
 """The tool's encoders and decoders against the byte examples of docs/protocol.md."""
 
+import contextlib
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from xrdap_test import link
 from xrdap_test import runner as R
 from xrdap_test.cases import vendor_cases as V
+from xrdap_test.cases.dap_behavior import dap_response_lengths
+from xrdap_test.target import Region, Target
 from xrdap_test.vendor import OK, STATE, Item, decode_frames, numbered
 from xrdap_test.vendor import Vendor as VendorClient
 
@@ -170,3 +174,66 @@ class ResponseLengthScan(unittest.TestCase):
             self.assertEqual(self.response_length(request), n)
             self.assertLessEqual(request[2 + 2], 255)  # DAP_Transfer count
             self.assertLessEqual(len(request), 1024)
+
+
+class SlowLink:
+    """Every answer to DAP-05's requests takes `delay` seconds."""
+
+    kind = "usb"
+    mps = 64
+
+    def __init__(self, delay):
+        self.delay = delay
+
+    def xfer(self, request, timeout=2.0):
+        if timeout < self.delay:
+            raise TimeoutError
+        return b"\x7F" + bytes(ResponseLengthScan.response_length(request) - 1)
+
+    def send(self, request):
+        pass
+
+    def recv(self, timeout=2.0):
+        return b"\x00"
+
+
+class ScanContext:
+    """The part of runner.Context DAP-05 uses."""
+
+    def __init__(self, link_kind, delay):
+        self.link_kind, self.delay, self.metrics = link_kind, delay, {}
+
+    def need_target(self):
+        return Target("fake", Region(0x20000000, 0x4400))
+
+    @contextlib.contextmanager
+    def session(self):
+        yield SlowLink(self.delay), SimpleNamespace(packet_size=64), None
+
+    def check(self, name, ok, detail=""):
+        pass
+
+    def metric(self, name, value):
+        self.metrics[name] = value
+
+    def summary(self, text):
+        pass
+
+
+class ResponseWait(unittest.TestCase):
+    @staticmethod
+    def missing(link_kind, delay):
+        ctx = ScanContext(link_kind, delay)
+        dap_response_lengths(ctx)
+        return ctx.metrics["missing"]
+
+    def test_radio_answer_at_the_end_of_the_host_boards_wait_counts(self):
+        # Protocol 8.2 and forwarding.cpp: 1 s + 0.5 s of execution + 200 ms after the last send.
+        self.assertEqual(self.missing("radio", 1.7), {})
+
+    def test_radio_answer_after_the_host_boards_wait_is_missing(self):
+        self.assertTrue(self.missing("radio", 1.71))
+
+    def test_other_links_keep_one_second(self):
+        self.assertEqual(self.missing("usb", 1.0), {})
+        self.assertTrue(self.missing("usb", 1.01))

@@ -9,6 +9,10 @@ from ..dap import (ACK_FAULT, ACK_OK, AP_DRW, AP_TAR, DP_CTRL_STAT, DP_RDBUFF, D
                    MATCH_MASK, MATCH_VALUE, TIMESTAMP, req)
 
 VALUE_MISMATCH = 0x10
+# The longest a host board takes over one forwarded DAP_ExecuteCommands (protocol 8.2): 1 s plus
+# the 0.5 s of execution it allows for (xrdap/radio/forwarding.cpp), and up to 200 ms after a send
+# made just before those run out.
+RADIO_EXECUTE_WAIT_S = 1.7
 
 
 def in_sync(lk):
@@ -209,12 +213,13 @@ def dap_response_lengths(ctx):
         unit = getattr(lk, "mps", 64)
         edge = {n for n in range(12, p + 1) if (n + overhead) % unit in (unit - 1, 0, 1)}
         tar = t.at(t.BLOCK) & ~0x3FF
+        wait = RADIO_EXECUTE_WAIT_S if ctx.link_kind == "radio" else 1.0
         missing, wrong = {}, {}
         for n in range(12, p + 1):
             request = execute_of_length(n, tar)
             for _ in range(5 if n in edge else 1):
                 try:
-                    r = lk.xfer(request, timeout=1.0)
+                    r = lk.xfer(request, timeout=wait)
                 except TimeoutError:
                     missing[n] = missing.get(n, 0) + 1
                     resync(lk)
@@ -227,7 +232,7 @@ def dap_response_lengths(ctx):
         ctx.metric("frame_overhead", overhead)
         ctx.metric("edge_lengths", len(edge))
         ctx.metric("missing", missing)
-        ctx.check("every response length arrives within 1 s", not missing,
+        ctx.check(f"every response length arrives within {wait:g} s", not missing,
                   {n: ((n + overhead) % unit, v) for n, v in sorted(missing.items())})
         ctx.check("every response complete and in order", not wrong, wrong)
         ctx.summary(f"lengths 12..{p} ok" if not late else
