@@ -10,21 +10,13 @@
 #include <vector>
 
 #include "check.hpp"
+#include "vendor_item.hpp"
 #include "xrdap/vendor/protocol.hpp"
 
 using XrDap::Vendor::RequestLength;
 
 namespace
 {
-// READ 的一个条目：ap、id(2)、size、base(4)、n=0、final_off(2) 共 11 字节 / One READ
-// item: ap, id(2), size, base(4), n=0, final_off(2), 11 bytes in all.
-void PutItem(std::vector<uint8_t>& v, uint8_t size)
-{
-  const uint8_t item[] = {0x00, 0x01, 0x00, size, 0x00, 0x00,
-                          0x00, 0x20, 0x00, 0x00, 0x00};
-  v.insert(v.end(), item, item + sizeof(item));
-}
-
 uint16_t Len(const std::vector<uint8_t>& v)
 {
   uint16_t len = 0xFFFFU;
