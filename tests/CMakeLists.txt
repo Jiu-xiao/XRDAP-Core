@@ -78,6 +78,7 @@ if(TRUE)
   # fake SWD that models a posted write and a late fault (V305-2).
   add_executable(xrdap_mem_ap_test
                  "${CMAKE_CURRENT_LIST_DIR}/mem_ap/mem_ap_posted_write_test.cpp"
+                 "${CMAKE_CURRENT_LIST_DIR}/unit/main.cpp"
                  "${XRDAP_CORE_ROOT}/xrdap/vendor/mem_ap.cpp")
   target_include_directories(xrdap_mem_ap_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/stub"
                                                        ${XRDAP_CORE_INCLUDE_DIRS}
