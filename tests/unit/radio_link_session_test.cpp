@@ -3,8 +3,7 @@
 // 角色和会话规则，以及 docs/protocol.md 第 8.2 节 / Sessions and bursts through
 // RadioLink: a pair of probes over fake transceivers in memory. Oracle: the role and
 // session rules of radio_link.hpp and docs/protocol.md section 8.2.
-#include <cstring>
-#include <functional>
+#include <initializer_list>
 #include <vector>
 
 #include "check.hpp"
@@ -50,10 +49,10 @@ void Deliver(Pair& p, const std::vector<uint8_t>& packet)
 void Serve(Pair& p) { RunFor(p.b, 10'000); }
 }  // namespace
 
-// AUTO：DAP_Connect 找到对方后整个会话走无线，长短命令都逐字节到达；DAP_Disconnect
-// 结束会话，远端的连接作废 / AUTO: once DAP_Connect reaches the peer the whole session
-// goes over the radio and commands of any size arrive byte for byte; DAP_Disconnect ends
-// it and the remote's connection lapses.
+// AUTO：DAP_Connect 找到对方后整个会话走无线，长短命令都逐字节到达；DAP_Disconnect 结束会
+// 话，远端的连接作废 / AUTO: once DAP_Connect reaches the peer the whole session goes
+// over the radio and commands of any size arrive byte for byte; DAP_Disconnect ends it
+// and the remote's connection lapses.
 TEST(radio_link_session)
 {
   for (Rate m : {Rate::kHigh, Rate::kLow})
@@ -65,6 +64,7 @@ TEST(radio_link_session)
     const auto connect = Command(Byte(DapCmd::CONNECT), 2);
     CHECK(p.exec_a.Usb(connect) == Expected(connect));
     CHECK(p.a.CurrentRole() == Role::HOST && p.b.RemoteActive());
+    const uint32_t lost = p.exec_b.lost;
     for (uint16_t size : {3, 250, 1024})
     {
       const auto c = Command(Byte(DapCmd::TRANSFER), size);
@@ -72,9 +72,8 @@ TEST(radio_link_session)
     }
     const auto disconnect = Command(Byte(DapCmd::DISCONNECT), 1);
     CHECK(p.exec_a.Usb(disconnect) == Expected(disconnect));
-    (void)p.b.Service();
     CHECK(p.a.CurrentRole() == Role::REMOTE && !p.b.RemoteActive());
-    CHECK(p.exec_b.lost >= 1U);
+    CHECK_EQ(p.exec_b.lost, lost + 1U);
     CHECK_EQ(p.exec_a.local, 1U);
   }
 }
@@ -89,11 +88,12 @@ TEST(radio_link_resend)
   const uint32_t before = p.exec_b.executed;
   // 远端第一次应答的分片全部丢掉 / Every fragment of the remote's first answer is lost.
   int lost = 0;
-  p.air.lose = [&](const Flight& f)
-  { return f.from == &p.radio_b && f.data[0] == kAnswer && lost++ < 5; };
+  p.air.lose = [&lost](const Flight& f) { return f.data[0] == kAnswer && lost++ < 5; };
   const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
   CHECK(p.exec_a.Usb(c) == Expected(c));
   CHECK_EQ(p.exec_b.executed, before + 1U);
+  CHECK_EQ(ReadStats(p.a).retries, 1U);
+  CHECK_EQ(ReadStats(p.b).duplicates, 1U);
 }
 
 // 重发在中途拼齐命令时，远端等这一串发完才执行和应答：主机发射时听不到 / A resend that
@@ -138,9 +138,11 @@ TEST(radio_link_answer_after_burst)
   CHECK_EQ(p.radio_b.sent, sent + 5U);
 }
 
-// 最后一片丢了也会应答，只是多等一会 / With the last fragment lost the answer still
-// comes, a little later.
-TEST(radio_link_answer_when_last_fragment_lost)
+// 第一串丢了第 1 片；重发拼齐了命令，这一串却只到了 resend 这几片：远端等 3 ms 没有下一片
+// 才执行和应答 / The first burst lost fragment 1; a resend completes the command, but
+// only the fragments in `resend` of it arrive: the remote executes and answers only after
+// 3 ms without a next one.
+void CheckAnswerAfterShortResend(std::initializer_list<size_t> resend)
 {
   Pair p(true);
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
@@ -153,11 +155,25 @@ TEST(radio_link_answer_when_last_fragment_lost)
     Deliver(p, f[i]);
   }
   (void)p.b.Service();
-  Deliver(p, f[0]);
-  Deliver(p, f[1]);
+  CHECK_EQ(p.exec_b.executed, executed);
+  for (size_t i : resend)
+  {
+    Deliver(p, f[i]);
+  }
+  VirtualClock::StartBeforeWrap(1'000);  // 这 3 ms 跨过回绕 / These 3 ms cross the wrap.
+  const uint32_t begin = NowUs();
   (void)p.b.Service();
+  const uint32_t waited = NowUs() - begin;
   CHECK_EQ(p.exec_b.executed, executed + 1U);
   CHECK(p.exec_b.last == c);
+  CHECK(waited >= 3'000U && waited < 3'500U);
+}
+
+TEST(radio_link_answer_when_resend_stops_short) { CheckAnswerAfterShortResend({0, 1}); }
+
+TEST(radio_link_answer_when_last_fragment_lost)
+{
+  CheckAnswerAfterShortResend({0, 1, 2, 3});
 }
 
 // 已拼齐的命令再来重发：哪片到了都用缓存再答一次，不再执行 / A resend of a completed
@@ -224,19 +240,23 @@ TEST(radio_link_back_to_back)
   const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
   CHECK(p.exec_a.Usb(c) == Expected(c));
   RunFor(p.b, 2'000);
-  CHECK(p.radio_a.sent - sent_a > 1U && p.radio_b.sent - sent_b > 1U);
+  CHECK_EQ(p.radio_a.sent - sent_a, 5U);
+  CHECK_EQ(p.radio_b.sent - sent_b, 5U);
   CHECK_EQ(p.radio_a.receive_entries - entries_a, 1U);
   CHECK_EQ(p.radio_b.receive_entries - entries_b, 1U);
 }
 
-// 空闲结束（H3）后探针重新服务无线：对方能把它当远端用 / After the session ended on idle
-// (H3) the probe serves the radio again: its peer can use it as a remote.
+// 电脑 5 s 没有命令时会话结束（H3），探针重新服务无线：对方能把它当远端用 / After 5 s
+// without a command from the PC the session ends (H3) and the probe serves the radio
+// again: its peer can use it as a remote.
 TEST(radio_link_idle_end_serves_peer)
 {
   Pair p(true);
   (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
   CHECK(p.a.CurrentRole() == Role::HOST);
-  RunFor(p.a, 5'200'000);
+  RunFor(p.a, 4'900'000);
+  CHECK(p.a.CurrentRole() == Role::HOST);
+  RunFor(p.a, 200'000);
   CHECK(p.a.CurrentRole() == Role::REMOTE);
   CHECK(p.radio_a.Frequency() == ChannelHz(kControlChannel));
   p.radio_a.on_poll = nullptr;
@@ -254,4 +274,73 @@ TEST(radio_link_unpaired)
   CHECK(p.a.CurrentRole() == Role::LOCAL && !p.a.Service());
   CHECK(p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2)) == std::vector<uint8_t>{0xEE});
   CHECK_EQ(p.exec_b.executed, 0U);
+}
+
+// 探针正在当远端发应答时，它自己的 USB 上来了 DAP_Connect：这一包发完才回 F，因为 Tune 只
+// 能在没有发射时调用（FakeRadio 核对）/ A probe is sending an answer as a remote when
+// DAP_Connect comes from its own USB: it returns to F only when the packet is out, since
+// Tune may be called only when not sending (FakeRadio checks that).
+TEST(radio_link_connect_while_answering)
+{
+  Pair p(true);
+  p.radio_a.noise = QuietAt(40);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  Serve(p);
+  for (const auto& packet : Burst(Command(Byte(DapCmd::TRANSFER), 1024), 200))
+  {
+    Deliver(p, packet);
+  }
+  for (int i = 0; i < 2 && !p.radio_b.Sending(); ++i)
+  {
+    (void)p.b.Service();
+  }
+  CHECK(p.radio_b.Sending());
+  (void)p.exec_b.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  CHECK(p.radio_b.Frequency() == ChannelHz(93));
+}
+
+namespace
+{
+// 一个没有丢包的短会话发了多少包。锁定信道省掉扫描 / How many packets a short session
+// with nothing lost sends. A locked channel saves the scan.
+struct Sent
+{
+  uint32_t host;
+  uint32_t remote;
+};
+
+Sent RunShortSession(uint32_t lead_us)
+{
+  Pair p(true);
+  CHECK_EQ(ControlStatus(p.a, {Op::kChannel, 1, 40}, nullptr), Status::kOk);
+  VirtualClock::StartBeforeWrap(lead_us);
+  const auto connect = Command(Byte(DapCmd::CONNECT), 2);
+  CHECK(p.exec_a.Usb(connect) == Expected(connect));
+  const auto c = Command(Byte(DapCmd::TRANSFER), 1024);
+  CHECK(p.exec_a.Usb(c) == Expected(c));
+  CHECK(p.exec_a.Usb(c) == Expected(c));
+  const auto disconnect = Command(Byte(DapCmd::DISCONNECT), 1);
+  CHECK(p.exec_a.Usb(disconnect) == Expected(disconnect));
+  const StatsAnswer stats = ReadStats(p.a);
+  CHECK_EQ(stats.retries, 0U);
+  CHECK_EQ(stats.failures, 0U);
+  CHECK(p.radio_a.Frequency() == ChannelHz(93));
+  CHECK(p.radio_b.Frequency() == ChannelHz(93));
+  return {p.radio_a.sent, p.radio_b.sent};
+}
+}  // namespace
+
+// NowUs() 截成 32 位，约 71 分钟回绕一次：回绕点落在会话的任何地方，都不会多发一个包，因
+// 为没有等待会提前结束。步长小于 3 ms 的等待 / NowUs() truncates to 32 bits and wraps
+// about every 71 minutes: wherever the wrap falls in a session, not one more packet goes
+// out, because no wait ends early. The step is below the wait of 3 ms.
+TEST(radio_link_session_across_the_wrap)
+{
+  const Sent far = RunShortSession(VirtualClock::kLeadUs);
+  for (uint32_t lead_us = 0; lead_us < 30'000U; lead_us += 250U)
+  {
+    const Sent sent = RunShortSession(lead_us);
+    CHECK_EQ(sent.host, far.host);
+    CHECK_EQ(sent.remote, far.remote);
+  }
 }
