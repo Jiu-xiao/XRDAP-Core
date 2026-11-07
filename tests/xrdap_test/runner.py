@@ -111,12 +111,10 @@ class Context:
             raise NotApplicable("needs an operator (run without --no-prompt)")
 
     def ask(self, text):
-        """Operator step of an assisted case; returns False when prompts are off."""
-        if not self.prompt:
-            raise NotApplicable("needs an operator (run without --no-prompt)")
+        """Operator step of an assisted case; n/a when prompts are off."""
+        self.need_operator()
         self.log(f"  >>> {text}")
         input("      press Enter when done ")
-        return True
 
     # ------------------------------------------------------------- sessions
     @contextlib.contextmanager
