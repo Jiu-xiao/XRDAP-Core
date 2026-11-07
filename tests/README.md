@@ -81,7 +81,7 @@ python -m xrdap_test ab --link usb --target my-target.toml --cases PERF,VND-06 \
 
 ## 目标描述
 
-目标描述是一个 TOML 文件，写明工具可以改写的 RAM（scratch，运行结束时恢复原内容）、主机工具读出的区域（dump）、可以擦写的 Flash 区（flash_test）和各主机工具的目标名，格式见 [targets/example.toml](targets/example.toml)。目标描述放在使用者自己的目录里，用 `--target 路径` 指定；本仓库只带这个示例。scratch 要选目标程序不用的 RAM；临时改用别的区域时用 `--scratch BASE:SIZE`。
+目标描述是一个 TOML 文件，写明工具可以改写的 RAM（scratch，运行结束时恢复原内容）、主机工具读出的区域（dump）、可以擦写的 Flash 区（flash_test）和各主机工具的目标名，格式见 [targets/example.toml](targets/example.toml)。目标描述放在使用者自己的目录里，用 `--target 路径` 指定；本仓库只带这个示例。`--target` 的值不是现有路径时，按 `targets/` 下的文件名（不带 `.toml`）查找。scratch 要选目标程序不用的 RAM；临时改用别的区域时用 `--scratch BASE:SIZE`。
 
 ## 串口会话卫生（STAB-08）
 

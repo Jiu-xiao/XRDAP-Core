@@ -81,7 +81,7 @@ python -m xrdap_test ab --link usb --target my-target.toml --cases PERF,VND-06 \
 
 ## Target profile
 
-A target profile is a TOML file that states the RAM the tool may overwrite (scratch, restored at the end of the run), the region read out by the host tools (dump), the Flash region that may be erased and written (flash_test) and the target name for each host tool; the format is in [targets/example.toml](targets/example.toml). Target profiles are kept in the user's own directory and given with `--target PATH`; this repository only carries that example. Scratch must be RAM the target program does not use; to use another region temporarily, use `--scratch BASE:SIZE`.
+A target profile is a TOML file that states the RAM the tool may overwrite (scratch, restored at the end of the run), the region read out by the host tools (dump), the Flash region that may be erased and written (flash_test) and the target name for each host tool; the format is in [targets/example.toml](targets/example.toml). Target profiles are kept in the user's own directory and given with `--target PATH`; this repository only carries that example. A `--target` value that is not an existing path is looked up as a file name in `targets/`, without `.toml`. Scratch must be RAM the target program does not use; to use another region temporarily, use `--scratch BASE:SIZE`.
 
 ## Serial session hygiene (STAB-08)
 

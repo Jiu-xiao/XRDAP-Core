@@ -1,5 +1,5 @@
-"""Target profiles (tests/targets/*.toml) and the test fixture the tool writes into the
-target's scratch RAM, so that no special target program is needed."""
+"""Target profiles (TOML, format in tests/targets/example.toml) and the test fixture the tool
+writes into the target's scratch RAM, so that no special target program is needed."""
 
 import os
 import tomllib

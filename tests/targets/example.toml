@@ -1,5 +1,5 @@
-# Target profile format. Keep real profiles next to your own results, not in this repository,
-# and pass them with --target PATH. The addresses are placeholders.
+# Target profile format. Real profiles are kept outside this repository and given with
+# --target PATH. The addresses are placeholders.
 name = "example-cortex-m4"
 dpidr = 0x2BA01477                      # optional: TGT-01 compares it
 openocd_target = "target/your-chip.cfg"  # OpenOCD target script (TOOL-01, STAB-02, STAB-08)
