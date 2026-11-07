@@ -11,17 +11,18 @@
 //       当前速率下一包的最大字节数，kMinPayload 到 255。只取决于速率，一对探针上相同。
 //   LibXR::ErrorCode Send(const uint8_t* data, uint8_t size)
 //       开始发一包就返回，size 为 1 到 MaxPayload()。只有上一包还在发射时返回 BUSY，这个
-//       状态不靠 Poll()
-//       也会结束；其他返回值都表示这一包已被收下。紧接着发的包之间不回接收。
+//       状态不靠 Poll() 也会结束；其他返回值都表示这一包已被收下。紧接着发的包之间不回
+//       接收。
 //   bool Sending() const
-//       还有一包在发射。
+//       Send() 收下一包后为 true，驱动知道发射结束时变为 false：可以在结束时立刻变，最晚
+//       在结束之后的下一次 Poll() 或 Send() 里变。
 //   void Poll()
 //       发射结束时回到接收，也处理收到的包。
 //   int Receive(uint8_t* out)
 //       取一个收到的包：返回字节数；没有包返回 0；坏包返回负数。out 至少放得下
 //       MaxPayload() 字节。
 //   LibXR::ErrorCode Tune(uint32_t frequency_hz)
-//       只在没有发射时调用。换到最接近的可用频率，留在接收，丢掉没取走的包。
+//       只在 Sending() 为 false 时调用。换到最接近的可用频率，留在接收，丢掉没取走的包。
 //   int16_t RssiInstant()
 //       当前频率上的信号强度，单位 0.5 dBm，不要求校准。
 //   void PrepareSend()
@@ -47,15 +48,17 @@
 //       means the packet was taken. Packets sent right after each other do not return
 //       to receive in between.
 //   bool Sending() const
-//       A packet is on air.
+//       True once Send() has taken a packet, false once the driver knows the transmission
+//       is over: right at its end, or at the latest in the next Poll() or Send() after
+//       it.
 //   void Poll()
 //       Returns to receive once the transmission is over, and handles received packets.
 //   int Receive(uint8_t* out)
 //       Fetch one received packet: its size; 0 for none; negative for a bad packet. out
 //       holds at least MaxPayload() bytes.
 //   LibXR::ErrorCode Tune(uint32_t frequency_hz)
-//       Called only when not sending. Move to the nearest usable frequency, stay in
-//       receive and drop any packet not yet fetched.
+//       Called only while Sending() is false. Move to the nearest usable frequency, stay
+//       in receive and drop any packet not yet fetched.
 //   int16_t RssiInstant()
 //       Signal level at the current frequency, in units of 0.5 dBm; it need not be
 //       calibrated.
