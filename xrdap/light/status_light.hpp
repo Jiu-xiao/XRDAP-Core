@@ -79,10 +79,25 @@ struct Frame
   ///        permille of the LED's peak, 0 is off; includes the activity pulse.
   uint16_t level;
   /// @brief 活动脉冲，千分比，命令到达时为 1000，随后线性降到 0；只能亮灭的灯在脉冲大于
-  ///        500 时熄灭 / Activity pulse in permille: 1000 when a command arrives, then
-  ///        falling linearly to 0. An on/off-only LED goes dark while it is above 500.
+  ///        500 时熄灭，见 LitOnOff / Activity pulse in permille: 1000 when a command
+  ///        arrives, then falling linearly to 0. An on/off-only LED goes dark while it is
+  ///        above 500, see LitOnOff.
   uint16_t pulse;
 };
+
+/// 活动脉冲高于此值时只能亮灭的灯熄灭 / An on/off-only light is dark while the activity
+/// pulse is above this value.
+inline constexpr uint16_t kPulseDarkAbove = 500U;
+
+/// @brief 只能亮灭的灯此刻亮不亮：亮度不为 0，且活动脉冲不高于 kPulseDarkAbove（脉冲
+///        高于 500 时熄灭，正好 500 仍亮）/ Whether an on/off-only light is lit now: the
+///        level is not 0 and the activity pulse is not above kPulseDarkAbove (dark while
+///        the pulse is above 500, still lit at exactly 500).
+/// @note 纯函数，任何上下文 / Pure function, any context.
+constexpr bool LitOnOff(const Frame& frame)
+{
+  return frame.level != 0U && frame.pulse <= kPulseDarkAbove;
+}
 
 /// 状态灯规则 / Status light rule.
 /// @note 只在平台刷新灯的那一个任务里用 / Used only in the one task where the platform

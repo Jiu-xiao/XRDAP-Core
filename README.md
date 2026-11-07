@@ -2,15 +2,15 @@
 
 [English](README.en.md)
 
-XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://github.com/xrobot-org/libxr)。它包含 XR 厂商扩展（一次读写多个地址、沿指针链读变量、在探针上按固定周期采样）、唯一的执行上下文（命令执行器）、与 DAP 分开的控制口、串口 DAP 链路、全系列统一的状态灯规则、探针身份和家族常量。各探针固件以 git 子模块引用本仓库：
+XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://github.com/xrobot-org/libxr)。它包含 XR 厂商扩展（一次读写多个地址、沿指针链读变量、在探针上按固定周期采样）、唯一的执行上下文（命令执行器）、与 DAP 分开的控制口、串口 DAP 链路、两块探针之间的无线链路、全系列统一的状态灯规则、探针身份和家族常量。各探针固件以 git 子模块引用本仓库：
 
 | 固件 | 芯片 | 采样的运行方式 |
 |---|---|---|
 | [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3、ESP32-S2、ESP32-C3、ESP32 | 一个执行任务跑 `Run()`，gptimer 计节拍 |
 | [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8) | STM32F103（STLINK-V2 板） | 主循环跑 `Run()`，没有 RTOS |
-| XRDAP-CH32V307 | CH32V307、CH32V305 | 主循环跑 `Run()`，没有 RTOS，TIM7 计节拍 |
+| [XRDAP-CH32V3](https://github.com/Jiu-xiao/XRDAP-CH32V3) | CH32V307、CH32V305、CH32V208 | 主循环跑 `Run()`，没有 RTOS，TIM7（CH32V208 为 TIM4）计节拍 |
 
-电脑端工具在 [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host)。探针与电脑之间的协议见 [docs/protocol.md](docs/protocol.md)：第 1 节是串口帧，第 3 节是厂商扩展（协议版本 2）、一次一条链路的规则和控制口，第 4 节是探针身份。
+电脑端工具在 [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host)。探针与电脑之间的协议见 [docs/protocol.md](docs/protocol.md)：第 1 节是串口帧，第 3 节是厂商扩展（协议版本 2）、一次一条链路的规则和控制口，第 4 节是探针身份，第 8 节是两块探针之间的无线链路。
 
 ## 内容
 
@@ -19,8 +19,10 @@ XR-DAP 系列 CMSIS-DAP 探针共用的固件代码，基于 [libxr](https://git
 | 模块 | 内容 |
 |---|---|
 | `session/` | `Executor`：所有进入 libxr DAP 实例的调用都经过它，`Run()` 循环把 USB 命令、别的链路投来的请求和采样一件一件做，没有锁；`Transport` 只是命令来源的标签 |
-| `vendor/` | `DapVendor`（命令 0x80 到 0x85，以及平台挂上的一条附加命令，例如 XRDAP-ESP 的 0x86 Wi-Fi 配置）、`MemAp`（经 SWD 沿指针链访问 MEM-AP）、`Sampler`、`TickAccount`、`FrameRing`（探针端采样）、请求检查和回复空间 |
+| `vendor/` | `DapVendor`（命令 0x80 到 0x85，以及平台挂上的一条附加命令，例如 XRDAP-ESP 的 0x86 Wi-Fi 配置）、`MemAp`（经 SWD 沿指针链访问 MEM-AP）、`Sampler`、`TickAccount`、`FrameRing`（探针端采样）、请求检查和回复空间、`WifiCommand`（0x86 的编解码）、`ResetCountingUsb`（数 USB 总线复位的 USB 类） |
+| `net/` | `tcp_frame.hpp`：TCP 帧头的编码和解码（docs/protocol.md 第 2 节），不碰套接字 |
 | `serial/` | `Framer`（串口帧：帧头和 CRC 用 libxr Topic 的打包格式，这里只做 payload 和流式重同步）、`SerialLink`（串口收发线程） |
+| `radio/` | `RadioLink`：两块配对探针之间的无线 DAP 会话（转发、远端执行、会话租期、配对、信道选择和控制口操作），射频驱动以模板参数传入（`transceiver.hpp` 是它要满足的契约）；包格式、会话规则、配对身份、信道表和转发用的命令估计是纯逻辑（docs/protocol.md 第 8 节） |
 | `activity/` | `DapActivity`：DAP 活动和 DAP_HostStatus 报告的上位机状态 |
 | `control/` | 控制口：设置类请求（Wi-Fi、射频）与 DAP 无关；`op + 载荷` 的请求、`op + 状态 + 载荷` 的应答，由 `Executor::Control` 交给执行上下文一次处理一条 |
 | `light/` | `StatusLight`：由连接、设置和 DAP 活动算出每一刻的灯色和亮度 |
@@ -85,10 +87,10 @@ static XrDap::DapVendor vendor(swd);
 static XrDap::DapActivity activity;
 static XrDap::Executor<Dap> exec(dap, vendor, activity);  // 装好命令钩子和节拍唤醒
 
-vendor.SetUsbResetSource(&BusResetCount, &usb);  // 复位计数变了，连接在 USB 上时连接作废
+vendor.SetUsbResetSource(&usb.BusResets());  // 复位计数变了，连接在 USB 上时连接作废
 ```
 
-`BusResetCount` 代表平台读取 USB 总线复位次数的函数。别的链路（串口、TCP、无线）的任务只投递请求并等应答，各链路在自己丢失时告诉执行器：
+`usb` 是平台用 `ResetCountingUsb` 包了一层的 libxr USB 类，它数 libxr 报给每个类的总线复位。别的链路（串口、TCP、无线）的任务只投递请求并等应答，各链路在自己丢失时告诉执行器：
 
 ```cpp
 // TCP 服务：每个请求（在链路自己的任务里，不是执行上下文）
@@ -193,7 +195,7 @@ XrDap::SetProbeInfo(dap, {"XR-DAP-F103", "STLINK-V2", serial, "0.6.0"});
 | 目标运行中（DAP_HostStatus） | 红蓝来回，1 s 一次 |
 | 每条 DAP 命令 | 一次活动脉冲，命令不断时约 15 次每秒 |
 
-上位机状态由 `DAP_Disconnect` 或 5 s 没有命令清除。`Frame::level` 是相对于灯峰值亮度的千分比，已含活动脉冲；只能亮灭的灯在 `Frame::pulse` 大于 500 时熄灭：
+上位机状态由 `DAP_Disconnect` 或 5 s 没有命令清除。`Frame::level` 是相对于灯峰值亮度的千分比，已含活动脉冲；只能亮灭的灯用 `LitOnOff(frame)` 判断，它在 `Frame::pulse` 大于 500 时熄灭：
 
 ```cpp
 #include "xrdap/light/status_light.hpp"
@@ -213,7 +215,7 @@ for (;;)
 
 ## 测试
 
-`tests/` 在电脑上编译不依赖硬件和 libxr 的纯逻辑（回复空间、请求长度、SUB_START 检查、节拍账目、帧缓冲、条目解析、串口帧和补位、DAP 活动、序列号），用 ctest 运行，带 AddressSanitizer 和 UBSan；判据来自协议文档、CMSIS-DAP 规范和用户的决定。另一个 ctest 检查 `xrdap/` 里的原子变量只用 32 位整数。给出 libxr 的路径时，另外把全部源文件和公开头文件按 libxr 的 Linux 系统层编译一遍，并运行三个用 libxr 的测试：多线程下的执行器（USB 等命令时别的链路的命令照常执行、采样和命令共用执行上下文、`ExecuteHere`、控制请求和 `Call` 在执行上下文里运行、USB 控制口的两次传输、连接跟着链路、USB 复位只让 USB 上的连接作废、几条链路同时发命令时一次只执行一条、USB 重新连接不动别的链路的 SWD、串口写的结果归类），MEM-AP 的写入与总线错误，以及采样在总线错误后的恢复：
+`tests/` 是电脑上的测试，要给出 libxr 的路径：Core 的命令号取自 libxr 的 CMSIS-DAP 定义，全部源文件和公开头文件也按 libxr 的 Linux 系统层编译一遍，每个头文件还单独编译一遍。它们用 ctest 运行，带 AddressSanitizer 和 UBSan；判据来自协议文档、CMSIS-DAP 规范和用户的决定。一部分是不依赖硬件的纯逻辑：回复空间、请求长度、SUB_START 检查、节拍账目、帧缓冲、条目解析、串口帧和补位、DAP 活动、序列号，以及无线的包、会话、信道和配对，两块探针之间的无线链路用假收发器和虚拟时钟运行。另一个 ctest 检查 `xrdap/` 里的原子变量只用 32 位整数，有 Python 3.11 时还有两个 ctest 检查 `xrdap_test` 工具自身。其余的测试用 libxr：多线程下的执行器（USB 等命令时别的链路的命令照常执行、采样和命令共用执行上下文、`ExecuteHere`、控制请求和 `Call` 在执行上下文里运行、USB 控制口的两次传输、连接跟着链路、USB 复位只让 USB 上的连接作废、几条链路同时发命令时一次只执行一条、USB 重新连接不动别的链路的 SWD、串口写的结果归类），MEM-AP 的写入与总线错误，以及采样在总线错误后的恢复：
 
 ```bash
 cmake -S tests -B build -DLIBXR_DIR=<libxr>

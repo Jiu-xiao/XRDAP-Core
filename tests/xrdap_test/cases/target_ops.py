@@ -5,7 +5,7 @@ import struct
 import time
 
 from .. import runner as R
-from ..dap import AP_CSW, AP_DRW, AP_IDR, AP_TAR, req
+from ..dap import AP_CSW, AP_DRW, AP_IDR, AP_TAR, DP_SELECT, req
 from ..target import CORES, CPUID, DBGKEY, DEMCR, DHCSR, AIRCR, DWT_CTRL, S_HALT, S_RESET_ST
 
 
@@ -34,7 +34,7 @@ def tgt_memory(ctx):
         rw = t.at(t.RW)
         dap.write32(rw, 0)
         csw = dap.ap_read(AP_CSW) & ~0x37
-        dap.dp_write(0x8, 0)
+        dap.dp_write(DP_SELECT, dap.ap_select())
         # Byte write to rw+1 and halfword write to rw+2: data sits in its byte lane.
         dap.transfer_ok([(req(1, 0, AP_CSW), csw | 0x0), (req(1, 0, AP_TAR), rw + 1),
                          (req(1, 0, AP_DRW), 0xAB << 8),
@@ -86,7 +86,4 @@ def tgt_core(ctx):
         ctx.summary("halt, run, reset" + (", nRESET" if ctx.args.nreset_wired else ""))
 
 
-R.manual("TGT-04", "Multidrop SWD (DPv2 targets with TARGETSEL)", """
-XR-DAP does not implement SWD multidrop (DAP_SWD_Sequence based TARGETSEL selection is not used
-by the firmware). Record the case as unsupported for every probe; if a host tool is pointed at a
-multidrop target (RP2040 and similar), record what it reports.""")
+R.manual("TGT-04", "Multidrop SWD (DPv2 targets with TARGETSEL)")

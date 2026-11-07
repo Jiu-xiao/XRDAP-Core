@@ -4,9 +4,10 @@ import struct
 import time
 from dataclasses import dataclass, field
 
-OK, ARG, STATE, RESOURCE, NO_TARGET, BUSY = 0x00, 0x01, 0x02, 0x03, 0x04, 0x05
+OK, ARG, STATE, RESOURCE, NO_TARGET = 0x00, 0x01, 0x02, 0x03, 0x04
 PROTOCOL_VERSION = 2
 WIFI_CLEAR_CONFIRM = 0xA5  # protocol 3.7: 86 02 A5
+STOP_TRIES = 5
 
 
 @dataclass
@@ -141,25 +142,46 @@ class Capture:
     left: int  # ring bytes still unread after the drain
 
 
-def capture(vendor, items, seconds, period_us, poll_s=0.0, max_bytes=0xFFFF):
-    """Start sampling, poll SUB_READ for `seconds`, stop and drain."""
+def stop_sampling(vendor):
+    """SUB_CTRL stop until the probe answers OK, which it also does when not sampling (protocol
+    3.4). A stop whose reply is lost may not have arrived, and the probe refuses SUB_START while
+    sampling runs, so raises when no stop gets through."""
+    answer = None
+    for _ in range(STOP_TRIES):
+        try:
+            answer = vendor.stop()
+        except TimeoutError as exc:
+            answer = exc
+        if answer == OK:
+            return
+    raise RuntimeError(f"sampling may still run: SUB_CTRL stop answered {answer}")
+
+
+def capture(vendor, items, seconds, period_us, poll_s=0.0):
+    """Start sampling, poll SUB_READ for `seconds`, stop and drain. However the run ends sampling
+    is stopped, so that the next one can start. A lost reply raises, also in the drain, where it
+    would otherwise read as zero counters and an empty ring."""
     frames, last = [], SubRead(0)
-    status = vendor.start(period_us, items)
-    if status != OK:
-        raise RuntimeError(f"start refused: {status}")
-    t0 = time.monotonic()
-    end = t0 + seconds
-    while time.monotonic() < end:
-        last = vendor.sub_read(items, max_bytes)
-        if last.status != OK:
-            raise RuntimeError(f"SUB_READ status {last.status}")
-        frames += last.frames
-        if poll_s and not last.remaining:
-            time.sleep(poll_s)
-    elapsed = time.monotonic() - t0
-    vendor.stop()
+    try:
+        status = vendor.start(period_us, items)
+        if status != OK:
+            raise RuntimeError(f"start refused: {status}")
+        t0 = time.monotonic()
+        end = t0 + seconds
+        while time.monotonic() < end:
+            last = vendor.sub_read(items)
+            if last.status != OK:
+                raise RuntimeError(f"SUB_READ status {last.status}")
+            frames += last.frames
+            if poll_s and not last.remaining:
+                time.sleep(poll_s)
+        elapsed = time.monotonic() - t0
+    finally:
+        stop_sampling(vendor)
     for _ in range(200):
-        last = vendor.sub_read(items, max_bytes)
+        last = vendor.sub_read(items)
+        if last.status not in (OK, STATE):  # STATE: not sampling any more, protocol 3.4
+            raise RuntimeError(f"SUB_READ status {last.status} in the drain")
         frames += last.frames
         if not last.remaining:
             break

@@ -37,5 +37,7 @@ inline constexpr uint16_t kBcdF103 = 0x0400U;
 inline constexpr uint16_t kBcdEsp32S2 = 0x0500U;
 /// CH32V305 板（CH32V305-LINKE）/ The CH32V305 board (CH32V305-LINKE).
 inline constexpr uint16_t kBcdCh32V305 = 0x0600U;
+/// CH32V208 板（WCH-LinkW）/ The CH32V208 board (WCH-LinkW).
+inline constexpr uint16_t kBcdCh32V208 = 0x0700U;
 
 }  // namespace XrDap::Family

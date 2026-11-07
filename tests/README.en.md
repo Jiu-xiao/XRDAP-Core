@@ -81,7 +81,7 @@ python -m xrdap_test ab --link usb --target my-target.toml --cases PERF,VND-06 \
 
 ## Target profile
 
-A target profile is a TOML file that states the RAM the tool may overwrite (scratch, restored at the end of the run), the region read out by the host tools (dump), the Flash region that may be erased and written (flash_test) and the target name for each host tool; the format is in [targets/example.toml](targets/example.toml). Target profiles are kept in the user's own directory and given with `--target PATH`; this repository only carries that example. Scratch must be RAM the target program does not use; to use another region temporarily, use `--scratch BASE:SIZE`.
+A target profile is a TOML file that states the RAM the tool may overwrite (scratch, restored at the end of the run), the region read out by the host tools (dump), the Flash region that may be erased and written (flash_test) and the target name for each host tool; the format is in [targets/example.toml](targets/example.toml). Target profiles are kept in the user's own directory and given with `--target PATH`; this repository only carries that example. A `--target` value that is not an existing path is looked up as a file name in `targets/`, without `.toml`. Scratch must be RAM the target program does not use; to use another region temporarily, use `--scratch BASE:SIZE`.
 
 ## Serial session hygiene (STAB-08)
 
@@ -111,4 +111,14 @@ code: 55 cases ({'auto': 39, 'assisted': 5, 'manual': 11})
 coverage OK
 ```
 
-The unit tests use the byte examples in the protocol document to check frames, item encoding and SUB_READ decoding.
+The unit tests use the byte examples in the protocol document to check frames, item encoding and SUB_READ decoding, and check with fake links the case logic that runs without a probe.
+
+## Host tests
+
+`unit/`, `threads/`, `mem_ap/` and `compile/` are C++ tests without a probe, built and run on a computer; they need the path of libxr, and every target is built with AddressSanitizer, UBSan and `-Werror`. ctest runs these tests, checks that atomics in `xrdap/` are 32-bit integers only, and, with Python 3.11 or newer, runs the coverage check and the unit tests above; every test has a timeout. The commands below are run in the repository root:
+
+```bash
+cmake -S tests -B build -DLIBXR_DIR=<libxr>
+cmake --build build
+ctest --test-dir build --output-on-failure
+```

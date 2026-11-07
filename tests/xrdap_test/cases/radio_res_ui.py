@@ -7,16 +7,25 @@ from .. import runner as R
 from .link_perf import block_rates
 
 RADIO = ("radio",)
-# Diagnostic command 0x9F of the wireless (SX1281) firmware: 0x11 statistics, 0x13 settings.
+# Control port operations of a radio probe (protocol 8.3): 0x11 statistics, 0x13 settings.
 RADIO_FIELDS = ["radio_tx", "radio_rx", "crc_errors", "tx_timeouts", "commands", "retries",
-                "failures", "duplicates", "last_rtt_us", "max_rtt_us"]
+                "failures", "duplicates", "last_rtt_us", "max_rtt_us", "channel", "rearms",
+                "restarts"]
+
+
+def radio_control(lk, request, what):
+    try:
+        r = lk.control(request)
+    except (NotImplementedError, TimeoutError) as exc:
+        raise R.NotApplicable(f"no radio {what} (control {request.hex(' ')}): {exc}")
+    if len(r) < 3 or r[1] != 0:
+        raise R.NotApplicable(f"no radio {what} (control {request.hex(' ')} -> {r.hex(' ')})")
+    return r
 
 
 def radio_stats(lk):
-    r = lk.xfer(b"\x9F\x11")
-    if len(r) < 3 or r[1] != 0:
-        raise R.NotApplicable(f"no radio statistics command (0x9F 0x11 -> {r.hex(' ')})")
-    count = min(len(RADIO_FIELDS), (len(r) - 3) // 4)
+    r = radio_control(lk, b"\x11", "statistics")
+    count = min(len(RADIO_FIELDS), r[2], (len(r) - 3) // 4)
     return dict(zip(RADIO_FIELDS, struct.unpack_from(f"<{count}I", r, 3)))
 
 
@@ -27,12 +36,14 @@ def rad_load(ctx):
         before = radio_stats(lk)
         rates = block_rates(ctx, lk, dap, t.at(t.BLOCK), 4096, passes=5)
         after = radio_stats(lk)
-        delta = {k: after[k] - before[k] for k in before if k not in ("last_rtt_us", "max_rtt_us")}
+        delta = {k: after[k] - before[k] for k in before
+                 if k not in ("last_rtt_us", "max_rtt_us", "channel")}
         cmds = max(1, delta["commands"])
         ctx.metric("block", rates)
         ctx.metric("delta", delta)
         ctx.metric("retry_rate", round(delta["retries"] / cmds, 4))
         ctx.metric("max_rtt_us", after.get("max_rtt_us"))
+        ctx.metric("channel", after.get("channel"))
         ctx.check("data intact over the radio", rates["ok"])
         ctx.check("no failed radio command", delta["failures"] == 0, delta["failures"])
         ctx.summary(f"retries {delta['retries']}/{cmds}, R {rates['read_kib_s']} KiB/s")
@@ -42,9 +53,9 @@ def rad_load(ctx):
 def rad_pairing(ctx):
     def settings():
         with ctx.link() as lk:
-            r = lk.xfer(b"\x9F\x13")
-            if len(r) < 12 or r[1] != 0:
-                raise R.NotApplicable("no radio settings command (0x9F 0x13)")
+            r = radio_control(lk, b"\x13", "settings")
+            if len(r) < 12:
+                raise R.NotApplicable(f"short radio settings answer {r.hex(' ')}")
             return r[4], struct.unpack_from("<I", r, 8)[0]
 
     ctx.need_operator()
@@ -58,17 +69,10 @@ def rad_pairing(ctx):
     ctx.summary(f"link id {link_id2:08x}")
 
 
-R.manual("RAD-04", "Radio session end: new session id, id 0 or no ping stops remote sampling", """
-Start sampling over the radio pair, then in turn: reopen the session on the host (new session
-id), send session id 0, unplug the host board for more than 3 s. Each time, read the remote's
-frame count through a fresh session: the remote must have ended the old session, stopped its
-sampling and dropped any cached answer.""", links=RADIO)
-
-R.manual("RAD-03", "Range and interference", """
-Run PERF-02 and RAD-01 over the radio pair at 1 m, 5 m, 10 m and through one wall, then with
-a 2.4 GHz Wi-Fi link busy next to the pair (for example a file copy on an access point
-within 1 m). Record distance, wall, interferer, retry rate and read KiB/s per point.""",
+R.manual("RAD-04", "Radio session end: new session id, id 0 or no ping stops remote sampling",
          links=RADIO)
+
+R.manual("RAD-03", "Range and interference", links=RADIO)
 
 
 def elf_sizes(path):
@@ -104,45 +108,17 @@ def res_size(ctx):
     ctx.summary(f"flash {flash} B, RAM {ram} B")
 
 
-R.manual("RES-02", "Heap headroom and stack peak", """
-F103 / CH32: fill the stack with a pattern at boot (or use the linker's stack fill), run
-SWD-01, PERF-02 and VND-06, then read the deepest overwritten word with a second debugger
-(J-Link / WCH-Link) without halting; heap end from `__sbrk_heap_end` (newlib) or FreeRTOS
-xPortGetMinimumEverFreeHeapSize. ESP: `heap_caps_get_minimum_free_size` and
-uxTaskGetStackHighWaterMark of the DAP, sampling and network tasks from the console.
-Record bytes free at the worst point.""")
+R.manual("RES-02", "Heap headroom and stack peak")
 
-R.manual("RES-03", "CPU load of the core that runs SWD", """
-Toggle a spare GPIO around the DAP command and sampling tick handlers (debug build) and
-measure the duty cycle with a logic analyser during PERF-02 and during VND-06 at the minimum
-period. Record busy percent for both loads.""")
+R.manual("RES-03", "CPU load of the core that runs SWD")
 
 
-R.manual("RES-04", "Firmware update: DFU / web flasher time, settings kept", """
-Update the probe with its normal path (ESP: web flasher or `esptool write_flash 0x0 merged.bin`;
-CH32: `tools/dfu_update.py`; F103: SWD flash of the release image). Record the time from start
-to the probe answering DAP_Info, and check that settings survive: ESP Wi-Fi credentials (0x86
-op 0 shows the same SSID), CH32 radio pairing and role (0x9F 0x13).""")
+R.manual("RES-04", "Firmware update: DFU / web flasher time, settings kept")
 
-R.manual("RES-05", "Power and temperature", """
-USB power meter in line with the probe: record mA idle, during PERF-02 and during sampling at
-the minimum period. After 10 minutes of PERF-02 in a loop, record the hottest point of the
-board (IR thermometer or thermocouple) and the room temperature.""")
+R.manual("RES-05", "Power and temperature")
 
-R.manual("UI-01", "Status light: link colours", """
-Family rule: red = wired (USB configured or a USB/serial DAP command within 5 s), blue =
-wireless (network client or radio session), purple = no link or a setting change. Check by
-eye on each probe: power on without host (purple), USB host (red), network client only
-(blue, ESP), radio session (blue, wireless pair).""")
+R.manual("UI-01", "Status light: link colours")
 
-R.manual("UI-02", "Status light: activity and host status", """
-DAP traffic (PERF-02 loop) makes the light pulse; DAP_HostStatus connected alternates the
-main colour with purple every 2 s, running alternates red and blue every 1 s; both clear on
-DAP_Disconnect or 5 s without commands. Check each state by eye while OpenOCD runs
-`init; halt` then `resume`.""")
+R.manual("UI-02", "Status light: activity and host status")
 
-R.manual("UI-03", "Keys: Wi-Fi clear (ESP Lite) and pairing (wireless pair)", """
-ESP boards with a key: hold it 5 s -> fast purple blink, then solid purple, Wi-Fi credentials
-cleared and the probe restarts without Wi-Fi (0x86 op 0 shows no SSID). Wireless pair: long
-press KEY2 on both unpaired boards -> purple blink, both report paired with the same link id
-(RAD-02 settings). Record pass/fail per board.""")
+R.manual("UI-03", "Keys: Wi-Fi clear (ESP Lite) and pairing (wireless pair)")

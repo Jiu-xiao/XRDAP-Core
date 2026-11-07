@@ -1,5 +1,5 @@
-"""Target profiles (tests/targets/*.toml) and the test fixture the tool writes into the
-target's scratch RAM, so that no special target program is needed."""
+"""Target profiles (TOML, format in tests/targets/example.toml) and the test fixture the tool
+writes into the target's scratch RAM, so that no special target program is needed."""
 
 import os
 import tomllib
@@ -39,6 +39,8 @@ class Target:
     openocd_target: str | None = None
     pyocd_target: str | None = None
     probe_rs_chip: str | None = None
+    targetsel: int | None = None  # SWD multidrop: the value of TARGETSEL
+    ap_base: int | None = None  # ADIv6: the base address of the MEM-AP
     path: str = ""
 
     # Fixture layout, offsets from scratch.base (the first 0x400 bytes; blocks use the rest).
@@ -109,6 +111,8 @@ def load_target(name_or_path, overrides=None):
         openocd_target=raw.get("openocd_target"),
         pyocd_target=raw.get("pyocd_target"),
         probe_rs_chip=raw.get("probe_rs_chip"),
+        targetsel=raw.get("targetsel"),
+        ap_base=raw.get("ap_base"),
         path=path,
     )
 

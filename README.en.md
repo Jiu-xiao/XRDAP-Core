@@ -2,15 +2,15 @@
 
 [中文](README.md)
 
-Firmware code shared by the XR-DAP family of CMSIS-DAP probes, built on [libxr](https://github.com/xrobot-org/libxr). It holds the XR vendor extension (multi-address read/write, pointer-chain reads, periodic sampling on the probe), the one execution context (the command executor), a control port apart from DAP, the serial DAP link, the status light rule of the whole family, the probe identity and the family constants. Each probe firmware uses this repository as a git submodule:
+Firmware code shared by the XR-DAP family of CMSIS-DAP probes, built on [libxr](https://github.com/xrobot-org/libxr). It holds the XR vendor extension (multi-address read/write, pointer-chain reads, periodic sampling on the probe), the one execution context (the command executor), a control port apart from DAP, the serial DAP link, the radio link between two probes, the status light rule of the whole family, the probe identity and the family constants. Each probe firmware uses this repository as a git submodule:
 
 | Firmware | Chip | How sampling runs |
 |---|---|---|
 | [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP) | ESP32-S3, ESP32-S2, ESP32-C3, ESP32 | one execution task runs `Run()`, ticks counted by a gptimer |
 | [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8) | STM32F103 (STLINK-V2 board) | the main loop runs `Run()`, no RTOS |
-| XRDAP-CH32V307 | CH32V307, CH32V305 | the main loop runs `Run()`, no RTOS, ticks counted by TIM7 |
+| [XRDAP-CH32V3](https://github.com/Jiu-xiao/XRDAP-CH32V3) | CH32V307, CH32V305, CH32V208 | the main loop runs `Run()`, no RTOS, ticks counted by TIM7 (TIM4 on the CH32V208) |
 
-The host tool is [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host). The protocol between probe and host is in [docs/protocol.en.md](docs/protocol.en.md): section 1 is the serial frame, section 3 the vendor extension (protocol version 2), the one-link-at-a-time rule and the control port, section 4 the probe identity.
+The host tool is [XRDAP-Host](https://github.com/Jiu-xiao/XRDAP-Host). The protocol between probe and host is in [docs/protocol.en.md](docs/protocol.en.md): section 1 is the serial frame, section 3 the vendor extension (protocol version 2), the one-link-at-a-time rule and the control port, section 4 the probe identity, section 8 the radio link between two probes.
 
 ## Contents
 
@@ -19,8 +19,10 @@ Headers are included as `xrdap/<module>/<file>.hpp`:
 | Module | Contents |
 |---|---|
 | `session/` | `Executor`: every call into the libxr DAP instance goes through it, its `Run()` loop does USB commands, requests posted by other links and sampling one after the other, without locks; `Transport` is only a label of where a command came from |
-| `vendor/` | `DapVendor` (commands 0x80 to 0x85, plus one extra command a platform attaches, such as XRDAP-ESP's 0x86 Wi-Fi configuration), `MemAp` (MEM-AP access along pointer chains over SWD), `Sampler`, `TickAccount`, `FrameRing` (sampling on the probe), request checks and reply space |
+| `vendor/` | `DapVendor` (commands 0x80 to 0x85, plus one extra command a platform attaches, such as XRDAP-ESP's 0x86 Wi-Fi configuration), `MemAp` (MEM-AP access along pointer chains over SWD), `Sampler`, `TickAccount`, `FrameRing` (sampling on the probe), request checks and reply space, `WifiCommand` (the codec of 0x86), `ResetCountingUsb` (a USB class that counts bus resets) |
+| `net/` | `tcp_frame.hpp`: encoding and decoding the TCP frame header (docs/protocol.md section 2), without sockets |
 | `serial/` | `Framer` (serial frames: the header and CRCs are libxr Topic's packing format, only the payload and the streaming resync live here), `SerialLink` (the serial worker thread) |
+| `radio/` | `RadioLink`: DAP sessions over the radio between two paired probes (forwarding, remote execution, the session lease, pairing, the choice of channel and the control port operations), with the radio driver as a template parameter (`transceiver.hpp` is its contract); the packet format, session rules, pair identity, channel table and the command estimates for forwarding are pure logic (docs/protocol.md section 8) |
 | `activity/` | `DapActivity`: DAP activity and the host state reported by DAP_HostStatus |
 | `control/` | the control port: settings requests (Wi-Fi, radio) separate from DAP; a request is `op + payload`, an answer `op + status + payload`, and `Executor::Control` hands it to the execution context one at a time |
 | `light/` | `StatusLight`: computes the colour and level of the light at each moment from the link, the settings and DAP activity |
@@ -85,10 +87,10 @@ static XrDap::DapVendor vendor(swd);
 static XrDap::DapActivity activity;
 static XrDap::Executor<Dap> exec(dap, vendor, activity);  // installs the command hook and the tick wake
 
-vendor.SetUsbResetSource(&BusResetCount, &usb);  // a changed reset count ends a connection on USB
+vendor.SetUsbResetSource(&usb.BusResets());  // a changed reset count ends a connection on USB
 ```
 
-`BusResetCount` stands for the platform's function that reads the USB bus reset count. The tasks of the other links (serial, TCP, radio) only post a request and wait for the reply, and each link tells the executor when it is lost:
+`usb` is a libxr USB class of the platform wrapped in `ResetCountingUsb`, which counts the bus resets libxr reports to every class. The tasks of the other links (serial, TCP, radio) only post a request and wait for the reply, and each link tells the executor when it is lost:
 
 ```cpp
 // TCP server: each request (in the link's own task, not the execution context)
@@ -193,7 +195,7 @@ The serial is the prefix `XRobot-XRDAP-` followed by the chip's unique id in upp
 | Target running (DAP_HostStatus) | red and blue back and forth every second |
 | Every DAP command | one activity pulse, about 15 per second under steady traffic |
 
-The host state is cleared by `DAP_Disconnect` or 5 s without commands. `Frame::level` is in permille of the LED's peak and includes the activity pulse; an on/off-only LED goes dark while `Frame::pulse` is above 500:
+The host state is cleared by `DAP_Disconnect` or 5 s without commands. `Frame::level` is in permille of the LED's peak and includes the activity pulse; an on/off-only LED asks `LitOnOff(frame)`, which goes dark while `Frame::pulse` is above 500:
 
 ```cpp
 #include "xrdap/light/status_light.hpp"
@@ -213,7 +215,7 @@ for (;;)
 
 ## Tests
 
-`tests/` builds the pure logic that depends on neither hardware nor libxr (reply space, request lengths, SUB_START checks, tick accounting, frame ring, item parsing, serial frames and padding, DAP activity, serial numbers) on a PC and runs it with ctest under AddressSanitizer and UBSan; the oracles come from the protocol document, the CMSIS-DAP specification and the user's decisions. Another ctest checks that atomics in `xrdap/` are 32-bit integers only. Given a libxr path, every source and public header is also compiled against libxr's Linux system layer, and three tests that use libxr run: the executor with threads (another link's command answered while USB waits, sampling sharing the execution context with commands, `ExecuteHere`, control requests and `Call` running in the execution context, the two transfers of the USB control port, the connection following its link, a USB reset lapsing only a connection on USB, one command at a time when several links send at once, a USB re-attach leaving another link's SWD alone, serial write results), MEM-AP writes and bus faults, and sampling recovering after bus faults:
+`tests/` holds the tests on a PC and needs the path of libxr: Core takes its command ids from libxr's CMSIS-DAP definitions, every source and public header is also compiled against libxr's Linux system layer, and each header once more on its own. They run with ctest under AddressSanitizer and UBSan; the oracles come from the protocol document, the CMSIS-DAP specification and the user's decisions. One part is pure logic that needs no hardware: reply space, request lengths, SUB_START checks, tick accounting, frame ring, item parsing, serial frames and padding, DAP activity, serial numbers, and the radio's packets, sessions, channels and pairing, with the radio link between two probes on a fake transceiver and a virtual clock. Another ctest checks that atomics in `xrdap/` are 32-bit integers only, and with Python 3.11 two more check the `xrdap_test` tool itself. The other tests use libxr: the executor with threads (another link's command answered while USB waits, sampling sharing the execution context with commands, `ExecuteHere`, control requests and `Call` running in the execution context, the two transfers of the USB control port, the connection following its link, a USB reset lapsing only a connection on USB, one command at a time when several links send at once, a USB re-attach leaving another link's SWD alone, serial write results), MEM-AP writes and bus faults, and sampling recovering after bus faults:
 
 ```bash
 cmake -S tests -B build -DLIBXR_DIR=<libxr>

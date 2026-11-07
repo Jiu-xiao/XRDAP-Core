@@ -1,14 +1,18 @@
 """The tool's encoders and decoders against the byte examples of docs/protocol.md."""
 
-import os
-import sys
+import contextlib
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from xrdap_test import cli, link  # noqa: E402
-from xrdap_test.vendor import Item, decode_frames  # noqa: E402
-from xrdap_test.vendor import Vendor as VendorClient  # noqa: E402
+from xrdap_test import dap as dapmod
+from xrdap_test import link
+from xrdap_test import runner as R
+from xrdap_test.cases import vendor_cases as V
+from xrdap_test.cases.dap_behavior import dap_response_lengths
+from xrdap_test.target import Region, Target
+from xrdap_test.vendor import OK, STATE, Item, capture, decode_frames, numbered
+from xrdap_test.vendor import Vendor as VendorClient
 
 
 def hexb(text):
@@ -67,10 +71,10 @@ class FakeLink:
 
 class ProtocolV2(unittest.TestCase):
     def test_info_example(self):
-        info = VendorClient(FakeLink(hexb("80 00 02 1F000000 2000 08 00400000 40420F0000000000"))).info()
+        info = VendorClient(FakeLink(hexb("80 00 02 7F000000 2000 08 00400000 40420F0000000000"))).info()
         self.assertEqual((info["version"], info["length"], info["features"], info["max_items"],
                           info["max_depth"], info["ring_bytes"], info["probe_time_us"]),
-                         (2, 22, 0x1F, 32, 8, 16384, 1_000_000))
+                         (2, 22, 0x7F, 32, 8, 16384, 1_000_000))
 
     def test_sub_start_example(self):
         items = [Item(0x20000100, 4, id=0x10), Item(0x20000104, 2, id=0x11, div=10, phase=3)]
@@ -81,10 +85,50 @@ class ProtocolV2(unittest.TestCase):
                                        "00 1100 02 04010020 00 0000 0A00 0300"))
 
 
+class AnsweringLink:
+    """Answers every DAP command with success; keeps the requests. CTRL/STAT reads as powered."""
+
+    def __init__(self):
+        self.sent = []
+
+    def xfer(self, request, timeout=2.0):
+        self.sent.append(request)
+        if request[0] == 0x02:
+            return b"\x02\x01"
+        if request[0] == 0x05:
+            return bytes([0x05, request[2], 1]) + (0xF0000000).to_bytes(4, "little")
+        return bytes([request[0], 0])
+
+    def selects(self):
+        return [int.from_bytes(r[4:8], "little") for r in self.sent
+                if r[0] == 0x05 and r[3] == 0x08]
+
+
+class Attach(unittest.TestCase):
+    def test_default_target(self):
+        lk = AnsweringLink()
+        dap = dapmod.Dap(lk)
+        dap.attach(1000000)
+        dap.read32(0x20000000)
+        self.assertIn(dapmod.JTAG_TO_SWD, lk.sent)
+        self.assertFalse([r for r in lk.sent if r[0] == 0x1D])
+        self.assertEqual(set(lk.selects()), {0})
+        self.assertEqual(dap.ap_select(0xFC), 0xF0)
+
+    def test_multidrop_adiv6(self):
+        lk = AnsweringLink()
+        dap = dapmod.Dap(lk, targetsel=0x00040927, ap_base=0x2000)
+        dap.attach(1000000)
+        dap.read32(0x20000000)
+        self.assertNotIn(dapmod.JTAG_TO_SWD, lk.sent)
+        self.assertIn(hexb("1D 03 08 99 85 21 27 09 04 00 01"), lk.sent)
+        # SELECT 0 for CTRL/STAT, then the group of CSW, TAR and DRW.
+        self.assertEqual(lk.selects(), [0, 0x2D00, 0x2D00])
+        self.assertEqual(dap.ap_select(0xFC), 0x2DF0)
+
+
 class MinimumPeriodSearch(unittest.TestCase):
     def test_doubling_then_25_us_steps(self):
-        from xrdap_test.cases import vendor_cases as V
-
         calls = []
 
         def keeps_up(vendor, items, period, tried):
@@ -101,8 +145,6 @@ class MinimumPeriodSearch(unittest.TestCase):
                                  250, 250, 275, 275, 300, 300, 325, 325, 350])
 
     def test_one_failed_run_is_retried(self):
-        from xrdap_test.cases import vendor_cases as V
-
         flaky = {200: [False, True]}  # 200 us: a burst of drops once, then fine
 
         def keeps_up(vendor, items, period, tried):
@@ -116,6 +158,104 @@ class MinimumPeriodSearch(unittest.TestCase):
         finally:
             V.keeps_up = real
         self.assertEqual(best, 150)
+
+
+class SamplingProbe:
+    """SUB_START, SUB_CTRL stop and SUB_READ of protocol 3.4, one frame per read while sampling.
+    The first `lost` SUB_READs answer 85 FF, the host board's answer to a failed forward."""
+
+    def __init__(self, lost):
+        self.lost, self.sampling, self.tick = lost, False, 0
+
+    def xfer(self, request, timeout=2.0):
+        command = request[0]
+        if command == 0x83:
+            refused, self.sampling = self.sampling, True
+            return bytes([command, STATE if refused else OK])
+        if command == 0x84:
+            self.sampling = self.sampling and request[1] != 0
+            return bytes([command, OK])
+        if self.lost:
+            self.lost -= 1
+            return bytes([command, 0xFF])
+        if not self.sampling:
+            return bytes([command, STATE]) + bytes(22)
+        self.tick += 1
+        head = bytes(20) + (1).to_bytes(2, "little")  # time, remaining, dropped, skipped, frames
+        return bytes([command, OK]) + head + self.tick.to_bytes(4, "little") + bytes(11)
+
+
+class LostForward(unittest.TestCase):
+    def test_period_search_goes_on_after_one_failed_read(self):
+        vendor = VendorClient(SamplingProbe(lost=1))
+        with mock.patch.object(R, "SEARCH_RUN_S", 0.01):
+            best, _ = V.search_min_period(vendor, numbered([Item(0x20000000)]))
+        self.assertEqual(best, R.SEARCH_STEP_US)
+
+
+class LossyProbe(SamplingProbe):
+    """A SamplingProbe whose answers can get lost. A lost stop did not reach the probe, so sampling
+    goes on. Failed forwards answer 84 FF or 85 FF, and a link without an answer raises."""
+
+    def __init__(self, lost_stops=0, stop_timeouts=0, lost_drains=0, read_timeouts=0):
+        super().__init__(lost=0)
+        self.lost_stops, self.stop_timeouts = lost_stops, stop_timeouts
+        self.lost_drains, self.read_timeouts = lost_drains, read_timeouts
+
+    def xfer(self, request, timeout=2.0):
+        command = request[0]
+        if command == 0x84 and self.stop_timeouts:
+            self.stop_timeouts -= 1
+            raise TimeoutError("no answer")
+        if command == 0x84 and self.lost_stops:
+            self.lost_stops -= 1
+            return bytes([command, 0xFF])
+        if command == 0x85 and self.read_timeouts:
+            self.read_timeouts -= 1
+            raise TimeoutError("no answer")
+        if command == 0x85 and self.lost_drains and not self.sampling:
+            self.lost_drains -= 1
+            return bytes([command, 0xFF])
+        return super().xfer(request, timeout)
+
+
+class LostReplies(unittest.TestCase):
+    ITEMS = numbered([Item(0x20000000)])
+
+    def run_capture(self, probe):
+        return capture(VendorClient(probe), self.ITEMS, 0.01, 1000)
+
+    def test_nothing_lost(self):
+        probe = LossyProbe()
+        result = self.run_capture(probe)
+        self.assertFalse(probe.sampling)
+        self.assertTrue(result.frames)
+        self.assertEqual(result.left, 0)
+
+    def test_stop_with_a_lost_answer_is_sent_again(self):
+        for probe in (LossyProbe(lost_stops=2), LossyProbe(stop_timeouts=2)):
+            self.assertTrue(self.run_capture(probe).frames)
+            self.assertFalse(probe.sampling)
+            self.assertEqual(VendorClient(probe).start(1000, self.ITEMS), OK)
+
+    def test_stop_that_never_gets_through_raises(self):
+        probe = LossyProbe(lost_stops=1000)
+        with self.assertRaises(RuntimeError):
+            self.run_capture(probe)
+
+    def test_lost_read_in_the_drain_raises_and_the_next_run_starts(self):
+        probe = LossyProbe(lost_drains=1)
+        with self.assertRaises(RuntimeError):
+            self.run_capture(probe)
+        self.assertFalse(probe.sampling)
+        self.assertTrue(self.run_capture(probe).frames)
+
+    def test_read_without_an_answer_stops_sampling(self):
+        probe = LossyProbe(read_timeouts=1)
+        with self.assertRaises(TimeoutError):
+            self.run_capture(probe)
+        self.assertFalse(probe.sampling)
+        self.assertTrue(self.run_capture(probe).frames)
 
 
 class ResponseLengthScan(unittest.TestCase):
@@ -144,10 +284,64 @@ class ResponseLengthScan(unittest.TestCase):
             self.assertLessEqual(len(request), 1024)
 
 
-class Coverage(unittest.TestCase):
-    def test_case_table_matches_registry(self):
-        self.assertEqual(cli.cmd_coverage(None), 0)
+class SlowLink:
+    """Every answer to DAP-05's requests takes `delay` seconds."""
+
+    kind = "usb"
+    mps = 64
+
+    def __init__(self, delay):
+        self.delay = delay
+
+    def xfer(self, request, timeout=2.0):
+        if timeout < self.delay:
+            raise TimeoutError
+        return b"\x7F" + bytes(ResponseLengthScan.response_length(request) - 1)
+
+    def send(self, request):
+        pass
+
+    def recv(self, timeout=2.0):
+        return b"\x00"
 
 
-if __name__ == "__main__":
-    unittest.main()
+class ScanContext:
+    """The part of runner.Context DAP-05 uses."""
+
+    def __init__(self, link_kind, delay):
+        self.link_kind, self.delay, self.metrics = link_kind, delay, {}
+
+    def need_target(self):
+        return Target("fake", Region(0x20000000, 0x4400))
+
+    @contextlib.contextmanager
+    def session(self):
+        yield SlowLink(self.delay), SimpleNamespace(packet_size=64), None
+
+    def check(self, name, ok, detail=""):
+        pass
+
+    def metric(self, name, value):
+        self.metrics[name] = value
+
+    def summary(self, text):
+        pass
+
+
+class ResponseWait(unittest.TestCase):
+    @staticmethod
+    def missing(link_kind, delay):
+        ctx = ScanContext(link_kind, delay)
+        dap_response_lengths(ctx)
+        return ctx.metrics["missing"]
+
+    def test_radio_answer_at_the_end_of_the_host_boards_wait_counts(self):
+        # Protocol 8.2 and forwarding.cpp: 1 s + 0.5 s of execution + 200 ms after the last send.
+        self.assertEqual(self.missing("radio", 1.7), {})
+
+    def test_radio_answer_after_the_host_boards_wait_is_missing(self):
+        self.assertTrue(self.missing("radio", 1.71))
+
+    def test_other_links_keep_one_second(self):
+        self.assertEqual(self.missing("usb", 1.0), {})
+        self.assertTrue(self.missing("usb", 1.01))
