@@ -9,7 +9,9 @@
 // RECV takes the answer and gets 0 bytes until it is ready, and a new SEND is refused
 // until the answer is taken.
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <thread>
 
 #include "fake_dap.hpp"
@@ -36,6 +38,14 @@ uint16_t AnswerLength(void*, const uint8_t* req, uint16_t len, uint8_t* resp, ui
   return 3U;
 }
 
+// 取走的应答，拷了出来；没有应答时内容全 0 / The answer taken, copied out; all zeros when
+// there is none.
+struct UsbAnswer
+{
+  size_t size = 0U;
+  uint8_t bytes[96] = {};
+};
+
 struct UsbRig
 {
   Probe p;
@@ -46,9 +56,16 @@ struct UsbRig
   {
     return p.dap.port_->OnVendorOut(false, request, {kRequest, sizeof(kRequest)});
   }
-  LibXR::ConstRawData Recv(uint8_t request = kUsbRecv)
+  UsbAnswer Recv(uint8_t request = kUsbRecv)
   {
-    return p.dap.port_->OnVendorIn(false, request);
+    const LibXR::ConstRawData data = p.dap.port_->OnVendorIn(false, request);
+    UsbAnswer answer;
+    answer.size = data.size_;
+    if (data.size_ != 0U)
+    {
+      std::memcpy(answer.bytes, data.addr_, data.size_);
+    }
+    return answer;
   }
   // SEND 的唤醒由 Step 吸收，下一轮才轮到控制请求 / Step absorbs SEND's wake-up; the
   // control request comes on the next round.
@@ -58,11 +75,6 @@ struct UsbRig
     p.exec.Run(timer, 0U);
   }
 };
-
-const uint8_t* Bytes(const LibXR::ConstRawData& data)
-{
-  return static_cast<const uint8_t*>(data.addr_);
-}
 }  // namespace
 
 TEST(ControlWithoutAHandlerIsUnsupported)
@@ -154,13 +166,13 @@ TEST(UsbControlAnswerIsEmptyUntilHandled)
   UsbRig rig;
   rig.p.exec.SetControl(&AnswerLength, nullptr);
   CHECK_EQ(rig.Send(), ErrorCode::OK);
-  CHECK_EQ(rig.Recv().size_, 0U);
+  CHECK_EQ(rig.Recv().size, 0U);
   rig.Handle();
-  const LibXR::ConstRawData answer = rig.Recv();
-  CHECK_EQ(answer.size_, 3U);
-  CHECK_EQ(Bytes(answer)[0], kRequest[0]);
-  CHECK_EQ(Bytes(answer)[1], kStatusOk);
-  CHECK_EQ(Bytes(answer)[2], sizeof(kRequest));
+  const UsbAnswer answer = rig.Recv();
+  CHECK_EQ(answer.size, 3U);
+  CHECK_EQ(answer.bytes[0], kRequest[0]);
+  CHECK_EQ(answer.bytes[1], kStatusOk);
+  CHECK_EQ(answer.bytes[2], sizeof(kRequest));
 }
 
 TEST(UsbControlRefusesASecondSendUntilTheAnswerIsTaken)
@@ -170,7 +182,7 @@ TEST(UsbControlRefusesASecondSendUntilTheAnswerIsTaken)
   CHECK(rig.Send() != ErrorCode::OK);
   rig.Handle();
   CHECK(rig.Send() != ErrorCode::OK);
-  CHECK(rig.Recv().size_ != 0U);
+  CHECK(rig.Recv().size != 0U);
   CHECK_EQ(rig.Send(), ErrorCode::OK);
 }
 
@@ -179,10 +191,10 @@ TEST(UsbControlWithoutAHandlerAnswersUnsupported)
   UsbRig rig;
   CHECK_EQ(rig.Send(), ErrorCode::OK);
   rig.Handle();
-  const LibXR::ConstRawData answer = rig.Recv();
-  CHECK_EQ(answer.size_, 2U);
-  CHECK_EQ(Bytes(answer)[0], kRequest[0]);
-  CHECK_EQ(Bytes(answer)[1], kStatusUnsupported);
+  const UsbAnswer answer = rig.Recv();
+  CHECK_EQ(answer.size, 2U);
+  CHECK_EQ(answer.bytes[0], kRequest[0]);
+  CHECK_EQ(answer.bytes[1], kStatusUnsupported);
 }
 
 TEST(UsbControlAnswerIsTakenOnce)
@@ -190,8 +202,8 @@ TEST(UsbControlAnswerIsTakenOnce)
   UsbRig rig;
   CHECK_EQ(rig.Send(), ErrorCode::OK);
   rig.Handle();
-  CHECK(rig.Recv().size_ != 0U);
-  CHECK_EQ(rig.Recv().size_, 0U);
+  CHECK(rig.Recv().size != 0U);
+  CHECK_EQ(rig.Recv().size, 0U);
 }
 
 TEST(UsbControlRefusesOtherRequests)
@@ -200,8 +212,8 @@ TEST(UsbControlRefusesOtherRequests)
   CHECK(rig.Send(9U) != ErrorCode::OK);
   CHECK_EQ(rig.Send(), ErrorCode::OK);
   rig.Handle();
-  CHECK_EQ(rig.Recv(9U).size_, 0U);
-  CHECK(rig.Recv().size_ != 0U);
+  CHECK_EQ(rig.Recv(9U).size, 0U);
+  CHECK(rig.Recv().size != 0U);
 }
 
 TEST(UsbControlSendWakesTheExecutionContext)
@@ -211,5 +223,5 @@ TEST(UsbControlSendWakesTheExecutionContext)
   ExecThread exec(rig.p);
   CHECK(WaitFor([&]() { return rig.p.dap.waits.load() != 0U; }));
   CHECK_EQ(rig.Send(), ErrorCode::OK);
-  CHECK(WaitFor([&]() { return rig.Recv().size_ != 0U; }));
+  CHECK(WaitFor([&]() { return rig.Recv().size != 0U; }));
 }

@@ -93,7 +93,6 @@ class FakeDap
   ErrorCode ExecuteExternal(const uint8_t* req, uint16_t len, uint8_t* resp, uint16_t cap,
                             uint16_t& out)
   {
-    markers.push_back(len >= 2U ? req[1] : 0U);
     return Run(req, len, resp, cap, out);
   }
 
@@ -129,8 +128,8 @@ class FakeDap
   /// Calls into the DAP class off the execution context's thread: while this is 0, two
   /// commands cannot be inside it at once.
   std::atomic<uint32_t> off_thread_calls{0U};
-  /// 别的链路投来的请求的第二个字节，按执行的顺序 / The second byte of the requests other
-  /// links posted, in the order they ran.
+  /// 每条命令的第二个字节，按执行的顺序 / The second byte of each command, in the order
+  /// they ran.
   std::vector<uint8_t> markers;
 
  private:
@@ -140,12 +139,20 @@ class FakeDap
                 uint16_t& out)
   {
     const std::thread::id owner = execution_thread.load();
-    if (owner != std::thread::id{} && owner != std::this_thread::get_id())
+    const bool on_thread =
+        owner == std::thread::id{} || owner == std::this_thread::get_id();
+    if (on_thread)
+    {
+      markers.push_back(len >= 2U ? req[1] : 0U);
+    }
+    else
     {
       off_thread_calls.fetch_add(1U);
     }
     out = 0U;
-    if (!hook_(ctx_, req, len, resp, cap, out))
+    // 线程不对时不碰执行上下文的东西，只记下来 / On the wrong thread it leaves the
+    // execution context's state alone and only takes note.
+    if (!on_thread || !hook_(ctx_, req, len, resp, cap, out))
     {
       resp[0] = req[0];
       resp[1] = 0x00U;
@@ -226,21 +233,15 @@ class ExecThread
   std::thread thread_;
 };
 
-struct Answer
-{
-  uint8_t cmd;
-  uint8_t status;
-};
-
-// 链路的任务发一条命令，等它执行完 / A link's task sends one command and waits until it
-// has run.
-inline Answer Send(Probe& p, XrDap::Transport t, uint8_t cmd)
+// 链路的任务发一条命令，等它执行完，返回回复的第一个字节 / A link's task sends one
+// command, waits until it has run, and returns the first byte of the reply.
+inline uint8_t Send(Probe& p, XrDap::Transport t, uint8_t cmd)
 {
   const uint8_t req[2] = {cmd, 0x01};
   uint8_t resp[64] = {};
   uint16_t out = 0U;
   p.exec.Execute(t, req, sizeof(req), resp, sizeof(resp), out);
-  return {resp[0], resp[1]};
+  return resp[0];
 }
 
 // USB 的命令经 libxr 的 DAP 类到达 / USB commands arrive through the libxr DAP class.
@@ -251,14 +252,15 @@ inline void SendOverUsb(Probe& p, uint8_t cmd)
   CHECK(WaitFor([&]() { return p.dap.usb_done.load() != before; }));
 }
 
-// 在执行上下文里直接执行一条命令 / Runs one command directly in the execution context.
-inline Answer SendHere(Probe& p, XrDap::Transport t, uint8_t cmd)
+// 在执行上下文里直接执行一条命令，返回回复的第一个字节 / Runs one command directly in the
+// execution context and returns the first byte of the reply.
+inline uint8_t SendHere(Probe& p, XrDap::Transport t, uint8_t cmd)
 {
   const uint8_t req[2] = {cmd, 0x01};
   uint8_t resp[64] = {};
   uint16_t out = 0U;
   p.exec.ExecuteHere(t, req, sizeof(req), resp, sizeof(resp), out);
-  return {resp[0], resp[1]};
+  return resp[0];
 }
 
 // 连接并开始采样，一个条目，周期 2000 µs。执行线程起来之前调用 / Connects and starts

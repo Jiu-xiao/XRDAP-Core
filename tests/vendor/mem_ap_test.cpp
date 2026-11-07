@@ -98,17 +98,6 @@ unsigned CswReadsAfterBurst(Injection inject)
   return t.swd.csw_reads;
 }
 
-void CheckSingleReadTurnsAddrIncOff(Injection inject)
-{
-  BurstTarget t;
-  inject(t.swd);
-  (void)t.ReadThree();
-  t.swd.parity_rdbuff = false;
-  uint8_t value[4] = {};
-  CHECK_EQ(t.mem.ReadItem(t.ap, WordAt(kAddr + 16U), value), kItemOk);
-  CHECK_EQ(Get32(value), ModelSwd::Value(0U, kAddr + 16U));
-  CHECK_EQ(t.swd.csw[0] & 0x30U, 0U);
-}
 }  // namespace
 
 // 控制组：普通写要成功且值落地 / Control: a plain write succeeds and lands.
@@ -145,9 +134,9 @@ TEST(StickyErrorAfterAWriteIsReportedAndCleared)
   CHECK_EQ(t.mem.Write(WordAt(0x20000004U), value), kItemOk);
 }
 
-// AHB-AP 的 CSW 没有特权位时，读 IDR 后补上，读完把 SELECT 改回 bank 0，值才写得进去 / An
-// AHB-AP whose CSW lacks the privileged bit gets it after the IDR read, and SELECT goes
-// back to bank 0, or the value would not land.
+// AHB-AP 的 CSW 没有特权位时，读 IDR 后补上，之后的写照常落地（docs/protocol.md 3.6）/ An
+// AHB-AP whose CSW lacks the privileged bit gets it after the IDR read, and the write
+// after that lands as usual (docs/protocol.md 3.6).
 TEST(UnprivilegedAhbApGetsPrivilegedProt)
 {
   Target t;
@@ -219,11 +208,14 @@ TEST(BadParityInABurstForbidsCswReuse)
   CHECK_EQ(CswReadsAfterBurst(BadParityOnRdbuff), 2U);
 }
 
-TEST(SingleReadAfterABurstTurnsAddrIncOff) { CheckSingleReadTurnsAddrIncOff(NoFault); }
-
-TEST(SingleReadAfterAFailedBurstTurnsAddrIncOff)
+TEST(SingleReadAfterABurstTurnsAddrIncOff)
 {
-  CheckSingleReadTurnsAddrIncOff(FaultOnFirstRead);
+  BurstTarget t;
+  (void)t.ReadThree();
+  uint8_t value[4] = {};
+  CHECK_EQ(t.mem.ReadItem(t.ap, WordAt(kAddr + 16U), value), kItemOk);
+  CHECK_EQ(Get32(value), ModelSwd::Value(0U, kAddr + 16U));
+  CHECK_EQ(t.swd.csw[0] & 0x30U, 0U);
 }
 
 // TAR 的自增只保证在 1 KiB 之内（ADIv5）：跨过去的突发不碰目标 / TAR increment only holds

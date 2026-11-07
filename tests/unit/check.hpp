@@ -45,17 +45,13 @@ struct Register
   Register(const char* name, void (*fn)()) { Cases().push_back({name, fn}); }
 };
 
-template <typename T>
-inline constexpr bool kIntegerLike =
-    std::is_integral_v<T> || (std::is_enum_v<T> && std::is_convertible_v<T, long long>);
-
 // 整数按值比较，不管有没有符号；一元加号把布尔和字符提升成 cmp_equal 接受的类型 /
 // Integers compare by value whatever their signs; unary plus promotes bool and char to
 // types cmp_equal accepts.
 template <typename A, typename B>
 bool Equal(const A& a, const B& b)
 {
-  if constexpr (kIntegerLike<A> && kIntegerLike<B>)
+  if constexpr (std::is_integral_v<A> && std::is_integral_v<B>)
   {
     return std::cmp_equal(+a, +b);
   }
@@ -70,11 +66,7 @@ bool Equal(const A& a, const B& b)
 template <typename T>
 void Format(const T& v, char* text, size_t cap)
 {
-  if constexpr (std::is_same_v<T, bool>)
-  {
-    std::snprintf(text, cap, "%s", v ? "true" : "false");
-  }
-  else if constexpr (std::is_enum_v<T>)
+  if constexpr (std::is_enum_v<T>)
   {
     Format(static_cast<std::underlying_type_t<T>>(v), text, cap);
   }
@@ -86,14 +78,6 @@ void Format(const T& v, char* text, size_t cap)
   {
     const auto u = static_cast<unsigned long long>(v);
     std::snprintf(text, cap, "%llu (0x%llX)", u, u);
-  }
-  else if constexpr (std::is_floating_point_v<T>)
-  {
-    std::snprintf(text, cap, "%g", static_cast<double>(v));
-  }
-  else if constexpr (std::is_pointer_v<T>)
-  {
-    std::snprintf(text, cap, "%p", reinterpret_cast<const void*>(v));
   }
   else
   {
