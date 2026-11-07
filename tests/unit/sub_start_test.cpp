@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "check.hpp"
+#include "vendor_item.hpp"
 #include "xrdap/vendor/protocol.hpp"
 
 using namespace XrDap::Vendor;
@@ -17,27 +18,13 @@ constexpr uint8_t kOk = 0x00U;
 constexpr uint8_t kBadArgument = 0x01U;
 constexpr uint8_t kNoResource = 0x03U;
 
-// 一个采样条目：ap、id、size、base、无解引用、final 0、div、phase / One sampling item:
-// ap, id, size, base, no dereference, final 0, div, phase.
+// 一个采样条目：条目后面跟 div、phase / One sampling item: the item, then div and phase.
 void AddItem(std::vector<uint8_t>& r, uint8_t ap, uint8_t size, uint16_t div = 1,
              uint16_t phase = 0)
 {
-  const uint8_t item[] = {ap,
-                          0x01,
-                          0x00,
-                          size,
-                          0x00,
-                          0x00,
-                          0x00,
-                          0x20,
-                          0x00,
-                          0x00,
-                          0x00,
-                          static_cast<uint8_t>(div),
-                          static_cast<uint8_t>(div >> 8),
-                          static_cast<uint8_t>(phase),
-                          static_cast<uint8_t>(phase >> 8)};
-  r.insert(r.end(), item, item + sizeof(item));
+  PutItem(r, size, ap);
+  r.insert(r.end(), {static_cast<uint8_t>(div), static_cast<uint8_t>(div >> 8),
+                     static_cast<uint8_t>(phase), static_cast<uint8_t>(phase >> 8)});
 }
 
 std::vector<uint8_t> Head(uint32_t period, uint8_t flags, uint16_t count)

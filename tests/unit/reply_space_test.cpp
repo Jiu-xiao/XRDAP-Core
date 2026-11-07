@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "check.hpp"
+#include "vendor_item.hpp"
 #include "xrdap/vendor/protocol.hpp"
 
 using XrDap::Vendor::RequiredReply;
@@ -20,14 +21,6 @@ using Bytes = std::vector<uint8_t>;
 // docs/protocol.md 3.8 "READ, one item", answered by 81 00 01 0100 00 78563412.
 const Bytes kReadExample = {0x81, 0x01, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00,
                             0x00, 0x20, 0x01, 0x08, 0x00, 0x04, 0x00};
-
-// READ 的一个条目，不解引用 / One READ item without dereference.
-void PutItem(Bytes& r, uint8_t size)
-{
-  const uint8_t item[] = {0x00, 0x01, 0x00, size, 0x00, 0x00,
-                          0x00, 0x20, 0x00, 0x00, 0x00};
-  r.insert(r.end(), item, item + sizeof(item));
-}
 
 uint16_t Required(const Bytes& r)
 {
