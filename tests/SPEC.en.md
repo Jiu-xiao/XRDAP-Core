@@ -2,7 +2,7 @@
 
 [中文](SPEC.md)
 
-This document defines the test cases, fixed conditions and result format shared by the XR-DAP probe family (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307). All three probes and all links use the same cases and the same settings, so the measured numbers can be compared directly. The cases are run by the test tool `xrdap_test` in this directory; usage is in [README.en.md](README.en.md); protocol details are in [docs/protocol.en.md](../docs/protocol.en.md).
+This document defines the test cases, fixed conditions and result format shared by the XR-DAP probe family (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V3). All three probes and all links use the same cases and the same settings, so the measured numbers can be compared directly. The cases are run by the test tool `xrdap_test` in this directory; usage is in [README.en.md](README.en.md); protocol details are in [docs/protocol.en.md](../docs/protocol.en.md).
 
 Contents: 1 Scope; 2 Fixed conditions; 3 Case table; 4 Case descriptions; 5 Result records.
 
@@ -16,7 +16,7 @@ Contents: 1 Scope; 2 Fixed conditions; 3 Case table; 4 Case descriptions; 5 Resu
 | `serial` | libxr Topic serial frames (protocol section 1) | XRDAP-ESP |
 | `tcp` | OpenOCD CMSIS-DAP TCP frames (protocol section 2) | XRDAP-ESP; any probe shared with `xrdap share openocd` |
 | `usbip` | USB/IP, TCP 3240 (protocol section 6) | Any probe shared with `xrdap share usbip` |
-| `radio` | To the target through the wireless peer; the host side is USB | XRDAP-CH32V307 wireless board pair |
+| `radio` | To the target through the wireless peer; the host side is USB | XRDAP-CH32V3 wireless board pair |
 
 Section 3 lists the applicable links of each case. If a probe does not have a link, that cell is recorded as n/a.
 
