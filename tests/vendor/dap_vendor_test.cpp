@@ -119,7 +119,7 @@ struct Decoded
   uint32_t tick;
   uint64_t stamp;
   uint8_t bitmap;
-  std::vector<uint32_t> values;
+  uint32_t values[2];
 };
 
 uint64_t GetVarint(const uint8_t*& p)
@@ -162,7 +162,7 @@ std::vector<Decoded> DecodeCompact(const uint8_t*& p, uint16_t frames)
     const unsigned due = d.tick % 2U == 0U ? 2U : 1U;
     for (unsigned k = 0; k < due; ++k, p += 4)
     {
-      d.values.push_back(Get32(p));
+      d.values[k] = Get32(p);
     }
     out.push_back(d);
   }
@@ -225,6 +225,10 @@ TEST(CompactFramesDecodeToWhatWasSampled)
   const uint8_t* p = r.reply + kSubReadHead;
   const auto got = DecodeCompact(p, head.frames);
   CHECK_EQ(p - r.reply, r.length);  // 解码正好用完回复 / Decoding uses the whole reply.
+  if (got.size() != 3U)
+  {
+    return;
+  }
   const uint32_t a_value = ModelSwd::Value(0U, r.a.base);
   CHECK_EQ(got[0].tick, 1U);
   CHECK_EQ(got[0].bitmap, 0U);

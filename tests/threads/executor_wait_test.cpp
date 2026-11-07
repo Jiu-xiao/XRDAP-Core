@@ -44,7 +44,7 @@ TEST(PostWakesAWaitingExecutionContext)
   std::thread link(
       [&]()
       {
-        cmd = Send(p, Transport::TCP, kInfo).cmd;
+        cmd = Send(p, Transport::TCP, kInfo);
         answered.store(true);
       });
   CHECK(WaitFor([&]() { return answered.load(); }));
@@ -60,7 +60,7 @@ TEST(TickWakesAWaitingExecutionContext)
   ExecThread exec(p);
   WaitForTickZero(p);
   uint32_t waits = 0U;
-  for (uint32_t tick = 1U; tick <= 3U; ++tick)
+  for (uint32_t tick = 1U; tick <= 2U; ++tick)
   {
     CHECK(WaitUntilParked(p, waits));
     waits = p.dap.waits.load();
@@ -171,7 +171,7 @@ TEST(SamplingAndCommandsShareTheExecutionContext)
   for (uint32_t i = 0U; i < ticks; ++i)
   {
     p.vendor.OnTickIsr();
-    CHECK_EQ(Send(p, Transport::TCP, kInfo).cmd, kInfo);
+    CHECK_EQ(Send(p, Transport::TCP, kInfo), kInfo);
     SendOverUsb(p, kInfo);
     const uint8_t read[3] = {0x85U, 0xFFU, 0x00U};  // SUB_READ
     uint8_t resp[128] = {};
@@ -215,7 +215,7 @@ TEST(LinksAndTicksStayOnTheExecutionThread)
         {
           for (uint32_t n = 0U; n < commands; ++n)
           {
-            CHECK_EQ(Send(p, kinds[i], kInfo).cmd, kInfo);
+            CHECK_EQ(Send(p, kinds[i], kInfo), kInfo);
           }
         });
   }

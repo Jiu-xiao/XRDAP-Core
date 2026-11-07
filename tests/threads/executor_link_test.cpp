@@ -26,7 +26,7 @@ const uint8_t kDisconnect = XrDap::Byte(XrDap::DapCmd::DISCONNECT);
 TEST(ExecuteHereRunsInTheCallersContext)
 {
   Probe p;
-  CHECK_EQ(SendHere(p, Transport::RADIO, kConnect).cmd, kConnect);
+  CHECK_EQ(SendHere(p, Transport::RADIO, kConnect), kConnect);
   CHECK_EQ(p.vendor.ConnectedLink(), Transport::RADIO);
 }
 
@@ -93,12 +93,10 @@ TEST(UsbResetEndsAUsbConnection)
   CHECK_EQ(p.vendor.ConnectedLink(), Transport::NONE);
 }
 
-// USB 绑定或解绑时：连接在别的链路上不复位 SWD，连接在 USB 上或没有连接时照常复位（CH32
-// 上开关一次 USB 曾让无线连接的 DP 读一直回 ACK 7）。复位是 libxr 做的，这里只看 Core
-// 怎么回答 / On a USB bind or unbind: SWD is not reset while the connection is on another
-// link, and is as usual when it is on USB or there is none (opening and closing USB once
-// on the CH32 used to make every DP read of the radio connection answer ACK 7). libxr
-// does the reset; this only looks at what Core answers.
+// USB 绑定或解绑时：连接在别的链路上不复位 SWD，连接在 USB 上或没有连接时照常复位。复位
+// 是 libxr 做的，这里只看 Core 怎么回答 / On a USB bind or unbind: SWD is not reset while
+// the connection is on another link, and is as usual when it is on USB or there is none.
+// libxr does the reset; this only looks at what Core answers.
 TEST(SessionResetIsRefusedWhileAnotherLinkIsConnected)
 {
   Probe p;
