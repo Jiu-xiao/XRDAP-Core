@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-// 执行上下文的等待、轮次和线程。判据：用户的要求（2026-10-22）：没有传输在等输入时占着
+// 执行上下文的等待、轮次和线程。判据：用户的要求：没有传输在等输入时占着
 // 执行上下文，它等命令时别的链路照样得到回应；docs/protocol.md 3.5：一轮最多采一帧，命令
 // 和采样轮流；executor.hpp：DAP 类只在一个线程里访问，邮箱里的链路轮流。
 //
-// The execution context's waiting, rounds and thread. Oracle: the user's requirement
-// (2026-10-22): no transport holds the execution context while waiting for input, and
+// The execution context's waiting, rounds and thread. Oracle: the user's requirement:
+// no transport holds the execution context while waiting for input, and
 // other links are still answered while it waits for a command; docs/protocol.md 3.5: a
 // round samples at most one frame, and commands and sampling take turns; executor.hpp:
 // the DAP class is accessed by one thread only, and the links in the mailbox take turns.

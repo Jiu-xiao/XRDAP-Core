@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-// 节拍账目。判据：用户决定 C4（定时器是唯一时钟，中断只把节拍计数加 1，按计数差算跳拍）、
-// B9（能否跟上只看跳拍、丢帧、缓冲占用）和 docs/protocol.md 3.5（来不及时不补做；下一个
+// 节拍账目。判据：用户的决定（定时器是唯一时钟，中断只把节拍计数加 1，按计数差算跳拍；
+// 能否跟上只看跳拍、丢帧、缓冲占用）和 docs/protocol.md 3.5（来不及时不补做；下一个
 // 要采的节拍至少晚“占用 + 间隙”，间隙为 max(15 µs, 周期 / 8, 占用 / 4)）/ Tick
-// accounting. Oracles: user decisions C4 (the timer is the only clock, the interrupt only
-// adds 1 to the tick count, skips come from count differences) and B9 (keep-up is judged
-// by skipped ticks, dropped frames and ring fill), and docs/protocol.md 3.5 (late ticks
+// accounting. Oracles: user decisions (the timer is the only clock, the interrupt only
+// adds 1 to the tick count, skips come from count differences; keep-up is judged by
+// skipped ticks, dropped frames and ring fill) and docs/protocol.md 3.5 (late ticks
 // are not made up; the next tick to sample is at least "busy + gap" later, with gap =
 // max(15 µs, period / 8, busy / 4)).
 #include "check.hpp"

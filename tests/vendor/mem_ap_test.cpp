@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // MEM-AP 经 SWD 的读写（docs/protocol.md 3.6）。写是 posted 的，总线故障可能要到下一次
-// AP 访问才回来，而 DP CTRL/STAT 的读并不等 AP 事务（V305-2）：故障报在写它的那个条目
+// AP 访问才回来，而 DP CTRL/STAT 的读并不等 AP 事务：故障报在写它的那个条目
 // 上，下一个条目照常写进去。突发读里，每个字要等后面一次读才确认。
 //
 // MEM-AP reads and writes over SWD (docs/protocol.md 3.6). A write is posted, so a bus
 // fault may only come back on the next AP access, while a DP CTRL/STAT read does not wait
-// for the AP transaction (V305-2): the failure is reported on the item that wrote it and
+// for the AP transaction: the failure is reported on the item that wrote it and
 // the next item is still written. In a burst read, each word is confirmed by the read
 // after it.
 #include "xrdap/vendor/mem_ap.hpp"

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// SUB_START 请求检查。判据：用户决定 B9（不估计耗时，SUB_SET 并入开始命令）和
-// docs/protocol.md 3.2、3.4 的状态规则 / SUB_START request check. Oracles: user
-// decision B9 (no time estimate, SUB_SET merged into the start command) and the status
+// SUB_START 请求检查。判据：用户的决定（不估计耗时，SUB_SET 并入开始命令）和
+// docs/protocol.md 3.2、3.4 的状态规则 / SUB_START request check. Oracles: a user
+// decision (no time estimate, SUB_SET merged into the start command) and the status
 // rules of docs/protocol.md 3.2 and 3.4.
 #include <vector>
 
@@ -185,8 +185,8 @@ TEST(FrameMustFitTheRingWithItsLengthHead)
 
 TEST(ShortPeriodIsAccepted)
 {
-  // B9：周期 1 us 也接受，能否跟上运行时看 / B9: even a 1 us period is accepted;
-  // keeping up is judged at run time.
+  // 周期 1 us 也接受，能否跟上运行时看 / Even a 1 us period is accepted; keeping up is
+  // judged at run time.
   SubStartRequest req;
   auto r = Head(1, 0, 1);
   AddItem(r, 0, 4);
