@@ -3,8 +3,6 @@
 // docs/protocol.md 第 8.2 节 / Pairing through RadioLink: a pair of probes over fake
 // transceivers in memory. Oracle: identity.hpp and docs/protocol.md section 8.2.
 #include <cstring>
-#include <functional>
-#include <vector>
 
 #include "check.hpp"
 #include "radio_fakes.hpp"
@@ -13,8 +11,8 @@ using namespace XrDap;
 using namespace XrDap::Radio;
 using namespace RadioTest;
 
-// 配对：两块未配对的探针得到同一个链路号并保存 / Pairing: two unpaired probes end with
-// the same link id, stored.
+// 两块未配对的探针在配对的 10 s 内得到同一个链路号并保存 / Two unpaired probes end with
+// the same link id, stored, within the 10 s of pairing.
 TEST(radio_link_pairing)
 {
   Pair p(false);
@@ -24,7 +22,7 @@ TEST(radio_link_pairing)
   const uint32_t begin = NowUs();
   while ((p.a.Pairing() == PairState::IDLE || p.a.Pairing() == PairState::RUNNING ||
           p.b.Pairing() == PairState::IDLE || p.b.Pairing() == PairState::RUNNING) &&
-         NowUs() - begin < 15'000'000U)
+         NowUs() - begin < 10'000'000U)
   {
     (void)p.a.Service();
     (void)p.b.Service();
