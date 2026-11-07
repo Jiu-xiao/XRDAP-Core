@@ -69,7 +69,7 @@ bool ChannelTable::Scanned() const
   return false;
 }
 
-void ChannelTable::Ban(uint8_t index, uint32_t now_us)
+void ChannelTable::Ban(uint8_t index, uint64_t now_us)
 {
   if (!IsChannel(index))
   {
@@ -87,24 +87,20 @@ void ChannelTable::Ban(uint8_t index, uint32_t now_us)
   next_ban_ = static_cast<uint8_t>((next_ban_ + 1U) % (sizeof(bans_) / sizeof(bans_[0])));
 }
 
-bool ChannelTable::Banned(uint8_t index, uint32_t now_us)
+bool ChannelTable::Banned(uint8_t index, uint64_t now_us) const
 {
-  for (BanEntry& entry : bans_)
+  for (const BanEntry& entry : bans_)
   {
-    if ((entry.index > index ? entry.index - index : index - entry.index) >= kBanSpan)
-    {
-      continue;
-    }
-    if (now_us - entry.since_us < kBanUs)
+    if ((entry.index > index ? entry.index - index : index - entry.index) < kBanSpan &&
+        now_us - entry.since_us < kBanUs)
     {
       return true;
     }
-    entry.index = kNoChannel;
   }
   return false;
 }
 
-uint8_t ChannelTable::Best(uint32_t now_us)
+uint8_t ChannelTable::Best(uint64_t now_us) const
 {
   uint8_t best = kNoChannel;
   for (uint8_t i = 0; i < kChannels; ++i)

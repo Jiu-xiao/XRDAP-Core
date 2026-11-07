@@ -102,20 +102,22 @@ class ChannelTable
   ChannelSample Sample(uint8_t index) const { return samples_[index]; }
   /// 有测量结果 / Whether any point was measured.
   bool Scanned() const;
-  /// 拉黑一个点 kBanUs / Ban a point for kBanUs.
-  void Ban(uint8_t index, uint32_t now_us);
-  /// 这个点在黑名单里；到期的条目在这里清掉 / Whether the point is banned; an entry that
-  /// ran out is cleared here.
-  bool Banned(uint8_t index, uint32_t now_us);
+  /// @brief 拉黑一个点 kBanUs / Ban a point for kBanUs.
+  /// @param now_us 64 位时间：32 位的时间约 71 分钟回绕一次，到期的条目会重新像刚拉黑的 /
+  ///        64-bit time: 32-bit time wraps about every 71 minutes, and an entry that ran
+  ///        out would look freshly banned again.
+  void Ban(uint8_t index, uint64_t now_us);
+  /// 这个点在黑名单里 / Whether the point is banned.
+  bool Banned(uint8_t index, uint64_t now_us) const;
   /// @brief 测过、没拉黑的最好的点；没有时为 kNoChannel / The best measured point that is
   ///        not banned; kNoChannel when there is none.
-  uint8_t Best(uint32_t now_us);
+  uint8_t Best(uint64_t now_us) const;
 
  private:
   struct BanEntry
   {
     uint8_t index = kNoChannel;
-    uint32_t since_us = 0;
+    uint64_t since_us = 0;
   };
 
   ChannelSample samples_[kChannels] = {};

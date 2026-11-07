@@ -161,6 +161,36 @@ TEST(radio_link_channel_jammed)
   CHECK(p.radio_a.Frequency() == p.radio_b.Frequency());
 }
 
+// 信道被堵过，拉黑早就到期：32 位时间回绕之后第一次选信道，它还是最好的点，不会因为时间差
+// 回绕变小又被当成刚拉黑的 / A channel was jammed and its ban ran out long ago: at the
+// first choice of channel after 32-bit time wrapped it is the best point again, and is
+// not taken for freshly banned because the difference of the times wrapped.
+TEST(radio_link_ban_stays_over_past_the_wrap)
+{
+  Pair p(true);
+  p.radio_a.noise = QuietAt(150, 120);
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::CONNECT), 2));
+  CHECK(p.radio_a.Frequency() == ChannelHz(150));
+  p.air.lose = [](const Flight& f) { return f.params.frequency_hz == ChannelHz(150); };
+  const auto c = Command(Byte(DapCmd::TRANSFER), 64);
+  bool ok = false;
+  for (int attempt = 0; attempt < 10 && !ok; ++attempt)
+  {
+    ok = p.exec_a.Usb(c) == Expected(c);
+  }
+  CHECK(ok);
+  CHECK(p.radio_a.Frequency() != ChannelHz(150));
+  (void)p.exec_a.Usb(Command(Byte(DapCmd::DISCONNECT), 1));
+  p.air.lose = nullptr;
+
+  VirtualClock::Advance(VirtualClock::kWrapUs);
+  RunFor(p.b, 100'000);
+  const auto connect = Command(Byte(DapCmd::CONNECT), 2);
+  CHECK(p.exec_a.Usb(connect) == Expected(connect));
+  CHECK(p.radio_a.Frequency() == ChannelHz(150));
+  CHECK(p.radio_b.Frequency() == ChannelHz(150));
+}
+
 // 对方已换信道（ACK 到了）而新信道上 PING 不通的时间比确认用的 30 ms 长：主机在那个信道上
 // 再找到它，不等它的沉默超时 / The peer has moved (the ACK arrived) but PINGs on the new
 // channel fail for longer than the 30 ms of the confirmation: the host finds it there

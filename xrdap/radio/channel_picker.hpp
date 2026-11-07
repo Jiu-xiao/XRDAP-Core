@@ -71,7 +71,7 @@ class ChannelPicker
     const uint8_t target = ChooseChannel();
     if (!SwitchTo(target))
     {
-      channels_.Ban(target, NowUs());
+      channels_.Ban(target, NowUs64());
       return FindPeer();
     }
     return true;
@@ -84,7 +84,7 @@ class ChannelPicker
   ///         and the next command has to open the session there again.
   bool Reselect()
   {
-    channels_.Ban(port_.Channel(), NowUs());
+    channels_.Ban(port_.Channel(), NowUs64());
     retries_.Reset();
     if (LockedChannel() != kNoChannel)
     {
@@ -96,7 +96,7 @@ class ChannelPicker
     {
       return true;
     }
-    channels_.Ban(target, NowUs());
+    channels_.Ban(target, NowUs64());
     if (stray_ == kNoChannel && from != kControlChannel)
     {
       NoteStray(from, session_.Session());
@@ -190,7 +190,7 @@ class ChannelPicker
     {
       return locked;
     }
-    const uint8_t best = channels_.Best(NowUs());
+    const uint8_t best = channels_.Best(NowUs64());
     return best != kNoChannel ? best : kControlChannel;
   }
 
