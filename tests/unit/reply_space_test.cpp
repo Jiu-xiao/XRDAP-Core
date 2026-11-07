@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// 回复空间。判据：用户决定 B8（统一检查剩余空间，不够回 0x03，剩 1 字节时不能越界）、
+// 回复空间。判据：用户的决定（统一检查剩余空间，不够回 0x03，剩 1 字节时不能越界）、
 // docs/protocol.md 3.2 的回复长度和 3.8 的字节示例、tests/SPEC.md VND-02 的 355 字节 /
-// Reply space. Oracles: user decision B8 (one check of the remaining space, 0x03 when
+// Reply space. Oracles: a user decision (one check of the remaining space, 0x03 when
 // short, no overrun with 1 byte left), the reply sizes of docs/protocol.md 3.2 with the
 // byte examples of 3.8, and the 355 bytes of tests/SPEC.md VND-02.
 #include <vector>

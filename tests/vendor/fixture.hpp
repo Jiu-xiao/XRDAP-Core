@@ -8,7 +8,7 @@
 // 写进的值记在表里。
 //   posted 读：AP 读回的是上一次的结果，最后一个结果要读 RDBUFF。
 //   posted 写：DRW 写一律回 OK，失败要到下一次 AP 访问或 RDBUFF 读才以 FAULT 出现；
-//   CTRL/STAT 的读不等 AP 事务，所以看不到它（V305-2）。
+//   CTRL/STAT 的读不等 AP 事务，所以看不到它。
 //
 // What the vendor extension tests share: an ADIv5 SWD model, a tick timer that does
 // nothing, and functions that encode requests and parse a reply head as
@@ -21,7 +21,7 @@
 //   read.
 //   Posted write: a DRW write always answers OK; a failure only shows up as FAULT on the
 //   next AP access or RDBUFF read. A CTRL/STAT read does not wait for the AP transaction,
-//   so it cannot see the failure (V305-2).
+//   so it cannot see the failure.
 
 #include <atomic>
 #include <cstddef>

@@ -127,7 +127,7 @@ def swd_pipelining(ctx):
 @R.case("SWD-03", "Robustness: more requests in flight than the advertised packet count, all answered in order")
 def swd_overrun(ctx):
     """Robustness, not CMSIS-DAP conformance (the specification forbids the host from exceeding the
-    advertised packet count): decision V305-1 asks that a probe still answers every request, in
+    advertised packet count): decision packet-count asks that a probe still answers every request, in
     order, with nothing lost, when a host does."""
     t = ctx.need_target()
     with ctx.session() as (lk, dap, _):

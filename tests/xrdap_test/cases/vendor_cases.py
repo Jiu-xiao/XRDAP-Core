@@ -178,7 +178,7 @@ def vnd_latency(ctx):
 
 
 def keeps_up(vendor, items, period, tried):
-    """SPEC 2.3 (decision B9): 3 s with 0 skipped, 0 dropped, 0 failed items, no tick gap,
+    """SPEC 2.3 (decision no-time-estimate): 3 s with 0 skipped, 0 dropped, 0 failed items, no tick gap,
     and the ring read empty after the stop."""
     try:
         cap = capture(vendor, items, R.SEARCH_RUN_S, period)
@@ -492,7 +492,7 @@ def vnd_wifi(ctx):
             ctx.metric("last_clear_source", r[9 + n])
             ctx.metric("reset_reason", r[10 + n])
         ctx.check("bad op -> ARG", lk.xfer(b"\x86\x07")[1] == ARG)
-        # Decision A4: a clear without the confirm byte (or with a wrong one) changes nothing.
+        # Decision settings-kept: a clear without the confirm byte (or with a wrong one) changes nothing.
         ctx.check("86 02 without confirm byte -> ARG", lk.xfer(b"\x86\x02") == b"\x86\x01")
         wrong = bytes([0x86, 0x02, WIFI_CLEAR_CONFIRM ^ 0xFF])
         ctx.check("86 02 with a wrong confirm byte -> ARG", lk.xfer(wrong) == b"\x86\x01")
