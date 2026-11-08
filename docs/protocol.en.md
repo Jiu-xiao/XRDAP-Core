@@ -2,11 +2,11 @@
 
 [中文](protocol.md)
 
-This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (protocol version 2; 0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only) and the rule that the probe is used over one link at a time, the probe identity and mDNS advertisement, how the ESP32-C3 USB port separates the DAP link from the command line, the USB/IP virtual device served by `xrdap share usbip`, and the zero-length packet USB hosts must send. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. These rules are implemented in `xrdap/` of this repository: serial frames in `xrdap/serial/`, the executor in `xrdap/session/`, the control port in `xrdap/control/`, the vendor extension in `xrdap/vendor/`.
+This document describes the protocol between the XR-DAP probes (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32) and host tools: the frame format XRDAP-ESP uses to carry CMSIS-DAP packets over serial and TCP, the XR vendor extension commands every probe implements (protocol version 2; 0x80 to 0x85 are data commands; 0x86 is Wi-Fi configuration, XRDAP-ESP only) and the rule that the probe is used over one link at a time, the probe identity and mDNS advertisement, how the ESP32-C3 USB port separates the DAP link from the command line, the USB/IP virtual device served by `xrdap share usbip`, the zero-length packet USB hosts must send, and the link between two radio probes. DAP packets on USB use the CMSIS-DAP v2 Bulk endpoints without any extra framing. These rules are implemented in `xrdap/` of this repository: serial frames in `xrdap/serial/`, the executor in `xrdap/session/`, the control port in `xrdap/control/`, the vendor extension in `xrdap/vendor/`, the radio link in `xrdap/radio/`.
 
 All integers are little-endian. Spaces in hexadecimal examples are for readability only.
 
-Contents: 1 Serial frames; 2 TCP frames; 3 XR vendor extension (3.1 rules and one link at a time, 3.2 status and reply space, 3.3 items, 3.4 commands, 3.5 sampling, 3.6 SWD access, 3.7 0x86, 3.8 byte examples); 4 Probe identity and discovery (DAP_Info, mDNS); 5 The ESP32-C3 USB port; 6 USB/IP virtual device; 7 Notes for USB hosts.
+Contents: 1 Serial frames; 2 TCP frames; 3 XR vendor extension (3.1 rules and one link at a time, 3.2 status and reply space, 3.3 items, 3.4 commands, 3.5 sampling, 3.6 SWD access, 3.7 0x86, 3.7.1 control port, 3.8 byte examples); 4 Probe identity and discovery (DAP_Info, mDNS); 5 The ESP32-C3 USB port; 6 USB/IP virtual device; 7 Notes for USB hosts; 8 Radio link between two probes (8.1 packets, 8.2 sessions, 8.3 control port operations, 8.4 channels).
 
 ## 1. Serial frames
 
@@ -57,10 +57,10 @@ The probe's TCP port 3241 and the listening port of `xrdap share openocd` use th
 "DAP\0"(4) + length(2) + type(1) + reserved(1) + DAP packet
 ```
 
-Type 1 is a request, type 2 is a response; the reserved byte is 0. The length is the number of DAP packet bytes that follow.
+Type 1 is a request, type 2 is a response, types 3 and 4 are a control request and a control answer (section 3.7.1); the reserved byte is 0. The length is the number of DAP packet bytes that follow.
 
 - Only one client is served at a time; requests are executed and answered in order. When the client disconnects the TCP session ends (section 3.1).
-- The probe closes the connection when it receives an invalid header (wrong magic, type other than 1, length 0 or larger than 1024).
+- The probe closes the connection when it receives an invalid header (wrong magic, type other than 1 or 3, length 0 or larger than 1024).
 - A command with no response content (for example `DAP_TransferAbort`) gets no TCP frame back.
 - `xrdap share openocd` strips the 8-byte header from a TCP frame, hands the DAP packet to the probe (wrapped in a serial frame when the link is serial), and converts responses back; it does not interpret DAP content. After the client disconnects it sends `84 00` (stop sampling) to the probe once.
 
@@ -79,17 +79,17 @@ This section is protocol version 2 and is not compatible with version 1: version
 
 #### One link at a time
 
-That the probe is used over one link (USB, serial, TCP, radio peer) at a time is up to the user; the probe does not arbitrate: there is no session owner, no queue and no busy reply. Every command runs whoever sends it; when two links send commands at once, the probe runs one at a time and the later one waits for the earlier to finish, not necessarily in arrival order, and using two links at once can corrupt the SWD state.
+That the probe is used over one link (USB, serial, TCP, radio peer) at a time is up to the user; the probe does not arbitrate: there is no session owner, no queue and no busy reply. Every command runs whoever sends it; when two links send commands at once, the probe runs one at a time and the others wait, not necessarily in arrival order: USB commands go first, so a command from another link runs only when no USB command is waiting and can wait behind several of them, and the other links take turns. Using two links at once can corrupt the SWD state.
 
 `DAP_Connect` (port 0 or 1) notes the link it came from. This connection lapses in the cases below; the extension commands then need a new `DAP_Connect`, and sampling in progress stops:
 
 | Case | Connection that lapses |
 |---|---|
-| `DAP_Disconnect` is sent | the connection, on any link |
+| `DAP_Disconnect` is sent (refused with `FF` while sampling) | the connection, on any link |
 | A TCP client disconnects, the serial link stops | when the connection is on that link |
 | No serial request for 5 s | when the connection is on serial |
 | USB bus reset (unplugged or host reset) | when the connection is on USB |
-| Radio session id changes or is 0, or no ping within the lease | when the connection is on the radio peer (XRDAP-CH32V307) |
+| Radio session id changes or is 0, or no ping within the lease | when the connection is on the radio peer (XRDAP-CH32) |
 
 When the connection is not on the link that was lost, nothing happens.
 
@@ -117,7 +117,7 @@ A request is `command byte + arguments`; a response is `command byte + overall s
 
 A request whose length does not match the count field in the command returns 0x01 and is not executed.
 
-Reply space: before a vendor command runs, the probe works out from the request how many bytes its reply needs and compares that with the space it may write this time. The space is the packet size from DAP_Info (1024 bytes on XRDAP-ESP and XRDAP-CH32V307, 512 bytes on XRDAP-F103C8); inside `DAP_ExecuteCommands` it is the part of that packet not used yet. Vendor commands may sit inside `DAP_ExecuteCommands` and `DAP_QueueCommands`, as in the CMSIS-DAP reference implementation; the commands of a container are back to back and each one's length follows from its own content (READ, WRITE and SUB_START from the item count and the items, INFO 1 byte, SUB_CTRL 2, SUB_READ 3, 0x86 by operation: query 2, save 3 + ssid_len + 1 + pw_len, clear 3); a container with a length that cannot be worked out answers `7F FF` as a whole. With less than 2 bytes of space the reply is `FF` alone; when the whole reply does not fit it is `command 03`; in both cases the command does not run and nothing is written past the given space. The READ reply is 3 + Σ(3 + size) bytes, WRITE 3 + 3 × count, INFO 22, SUB_START and SUB_CTRL 2, SUB_READ at least 24.
+Reply space: before a vendor command runs, the probe works out from the request how many bytes its reply needs and compares that with the space it may write this time. The space is the packet size from DAP_Info (1024 bytes on XRDAP-ESP and XRDAP-CH32, 512 bytes on XRDAP-F103C8); inside `DAP_ExecuteCommands` it is the part of that packet not used yet. Vendor commands may sit inside `DAP_ExecuteCommands` and `DAP_QueueCommands`, as in the CMSIS-DAP reference implementation; the commands of a container are back to back and each one's length follows from its own content (READ, WRITE and SUB_START from the item count and the items, INFO 1 byte, SUB_CTRL 2, SUB_READ 3, 0x86 by operation: query 2, save 3 + ssid_len + 1 + pw_len, clear 3); a container with a length that cannot be worked out answers `7F FF` as a whole. With less than 2 bytes of space the reply is `FF` alone; when the whole reply does not fit it is `command 03`; in both cases the command does not run and nothing is written past the given space. The READ reply is 3 + Σ(3 + size) bytes, WRITE 3 + 3 × count, INFO 22, SUB_START and SUB_CTRL 2, SUB_READ at least 24.
 
 | Overall status | Meaning |
 |---|---|
@@ -185,10 +185,10 @@ The response is always 22 bytes:
 | 0 | 1 | 0x80 |
 | 1 | 1 | Overall status |
 | 2 | 1 | Protocol version, currently 2 |
-| 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86), bit5 control port (3.7.1), bit6 compact frames (3.5); 0x7F on XRDAP-ESP, 0x6F on the radio XRDAP-CH32V307 (wdap), 0x4F on the others (older firmware without compact frames: 0x3F or 0x1F, 0x2F, 0x0F) |
+| 3 | 4 | Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi configuration (0x86), bit5 control port (3.7.1), bit6 compact frames (3.5); 0x7F on XRDAP-ESP, 0x6F on XRDAP-CH32, 0x4F on XRDAP-F103C8 (older firmware without compact frames: 0x3F or 0x1F, 0x2F, 0x0F) |
 | 7 | 2 | Maximum items per request or sampling run: 32 |
 | 9 | 1 | Maximum dereference depth: 8 |
-| 10 | 4 | Ring buffer size in bytes: 16384 on XRDAP-ESP, 4096 on XRDAP-F103C8 and XRDAP-CH32V307 |
+| 10 | 4 | Ring buffer size in bytes: 16384 on XRDAP-ESP (4096 on the ESP32-S2), 4096 on XRDAP-F103C8 and XRDAP-CH32 (2048 on the CH32V305 and CH32V208 boards) |
 | 14 | 8 | Current probe time, µs |
 
 #### 0x81 READ
@@ -375,11 +375,11 @@ Response: `86 status`. With status 0x00 the credentials have been cleared, and a
 
 ### 3.7.1 Control port
 
-Settings requests (for now only the Wi-Fi operations above) can also bypass DAP and use the probe's control port. A request is `op(1) + payload` and the answer `op(1) + status(1) + payload`; `op` and the payload are those of the matching DAP command, but the request has no `86` byte and the first byte of the answer is the `op`. The probe's execution context handles a control request one after the other with DAP commands; there is no connection, and the DAP connection and sampling are not affected. An operation the probe does not have answers status `0xF2` (the control port's own "unsupported"), an empty request status `0xF1`; `0xF0` to `0xFF` belong to the control port and a probe's own operations use the low status codes.
+Settings requests (the Wi-Fi operations above and the radio operations of section 8.3) bypass DAP and use the probe's control port; the Wi-Fi operations can also use `0x86`. A request is `op(1) + payload` and the answer `op(1) + status(1) + payload`; for a Wi-Fi operation `op` and the payload are those of `0x86`, but the request has no `86` byte and the first byte of the answer is the `op`. The probe's execution context handles a control request one after the other with DAP commands; there is no connection, and the DAP connection and sampling are not affected. An operation the probe does not have answers status `0xF2` (the control port's own "unsupported"); `0xF0` to `0xFF` belong to the control port and a probe's own operations use the low status codes. An empty request is not an operation: on USB the SEND is STALLed, on TCP the header is invalid and the connection is closed (section 2), and on serial the answer is `00 F1` (status `0xF1`: malformed request).
 
 | Link | How to send |
 |---|---|
-| USB | A vendor control transfer to the DAP interface: `bmRequestType 0x41 bRequest 0x01` sends the request (OUT data stage); `0xC1 / 0x02` takes the answer (IN; 0 bytes while it is not ready, retry later). One request at a time; sending another before the answer was taken is STALLed; a request cannot exceed the device's EP0 OUT buffer (64 bytes measured on the CH32; a longer SEND is STALLed), and the host must then use another way (a Wi-Fi save request that is longer falls back to `0x86`) |
+| USB | A vendor control transfer to the DAP interface: `bmRequestType 0x41 bRequest 0x01` sends the request (OUT data stage); `0xC1 / 0x02` takes the answer (IN; 0 bytes while it is not ready, retry later). One request at a time; sending another before the answer was taken is STALLed; a request cannot exceed the device's EP0 OUT buffer (64 bytes on the CH32; a longer SEND is STALLed), and the host must then use another way (a Wi-Fi save request that is longer falls back to `0x86`) |
 | Serial | The same frame with the topics `ctrl_req` (`0x3D2538F2`) and `ctrl_resp` (`0x31BDA5B6`) and the same payload layout (2-byte length + content); it does not renew the serial lease |
 | TCP | The same connection, frame type 3 for a control request and 4 for the answer, otherwise as section 2 |
 
@@ -393,9 +393,9 @@ The values below are examples only.
 
 Request: `80`
 
-Response: `80 00 02 1F000000 2000 08 00400000 40420F0000000000`
+Response: `80 00 02 7F000000 2000 08 00400000 40420F0000000000`
 
-Meaning: version 2, feature bits 0x1F, at most 32 items, depth 8, 16384-byte buffer, probe time 1 000 000 µs.
+Meaning: version 2, feature bits 0x7F, at most 32 items, depth 8, 16384-byte buffer, probe time 1 000 000 µs.
 
 #### READ, one item
 
@@ -496,17 +496,17 @@ Request: `05 …` (`DAP_Transfer`), response: `FF`
 
 ### 4.1 DAP_Info strings
 
-The firmware returns these strings in `DAP_Info` (`probe/probe_identity.hpp` in this repository). On probes with USB the USB device descriptor uses the same vendor and serial number.
+The firmware returns these strings in `DAP_Info` (`xrdap/probe/probe_identity.hpp` in this repository). On probes with USB the USB device descriptor uses the same vendor and serial number.
 
 | Info ID | Meaning | Content |
 |---|---|---|
 | 0x01 | Vendor | `XRobot` |
-| 0x02 | Product | ESP32-S3: `XR-DAP-S3`; ESP32-S2: `XR-DAP-S2`; ESP32-C3: `XR-DAP-C3`; ESP32: `XR-DAP-ESP32`; STM32F103: `XR-DAP-F103`; CH32V307: `XR-DAP-V307`; CH32V305: `XR-DAP-V305` |
-| 0x03 | Serial number | `XRobot-XRDAP-` followed by the chip's unique id in upper-case hexadecimal: the factory MAC on ESP (6 bytes from eFuse, 12 digits), e.g. `XRobot-XRDAP-0123456789AB`; the 12-byte UID on STM32F103, CH32V307 and CH32V305 (24 digits) |
+| 0x02 | Product | ESP32-S3: `XR-DAP-S3`; ESP32-S2: `XR-DAP-S2`; ESP32-C3: `XR-DAP-C3`; ESP32: `XR-DAP-ESP32`; STM32F103: `XR-DAP-F103`; CH32V307: `XR-DAP-V307`; CH32V305: `XR-DAP-V305`; CH32V208: `XR-DAP-V208` |
+| 0x03 | Serial number | `XRobot-XRDAP-` followed by the chip's unique id in upper-case hexadecimal: the factory MAC on ESP (6 bytes from eFuse, 12 digits), e.g. `XRobot-XRDAP-0123456789AB`; the 12-byte UID on STM32F103, CH32V307, CH32V305 and CH32V208 (24 digits) |
 | 0x04 | CMSIS-DAP protocol version | `2.0.0` |
 | 0x05, 0x06 | Target device vendor, name | Not provided (empty) |
 | 0x07 | Board vendor | `XRobot` |
-| 0x08 | Board name | XRDAP-ESP: same as the product; XRDAP-F103C8: `STLINK-V2`; XRDAP-CH32V307: the board, e.g. `XR-DAP-WDAP`; the CH32V305 board is `CH32V305-LINKE` |
+| 0x08 | Board name | XRDAP-ESP: same as the product; XRDAP-F103C8: `STLINK-V2`; XRDAP-CH32: the board, e.g. `XR-DAP-WDAP`; the CH32V305 board is `CH32V305-LINKE`, the CH32V208 board `WCH-LINKW` |
 | 0x09 | Firmware version | The version of each firmware |
 
 The serial number is the same over every link (USB, serial, TCP, ...), which lets host tools recognise one probe across them.
@@ -522,7 +522,7 @@ Once the probe has an IP address it advertises itself on the LAN:
 | Instance name | The serial number, e.g. `XRobot-XRDAP-0123456789AB` |
 | TXT `serial` | The serial number |
 | TXT `chip` | `esp32s3`, `esp32s2`, `esp32c3` or `esp32` |
-| TXT `fw` | Firmware version, e.g. `0.5.5` |
+| TXT `fw` | Firmware version, e.g. `0.6.0` |
 
 OpenOCD accepts the host name directly in `cmsis-dap tcp host`. Host tools browse the `_xrdap._tcp` service to list the probes on the LAN and match them with the same probe on USB or serial through the TXT `serial`. An mDNS startup failure is only logged and does not affect the TCP service.
 
@@ -603,3 +603,76 @@ The replies caused by one command (the reply to the OUT and the response paired 
 ## 7. Notes for USB hosts
 
 A full-speed USB Bulk packet is 64 bytes. When a request length is an exact multiple of 64 (128, 192 bytes, ...) and smaller than the DAP packet size, the OUT transfer has no short packet to mark its end, so the probe keeps waiting: the request gets no response and later responses are misaligned. After sending such a request the host must send a zero-length packet. A SUB_START with 8 items is exactly 128 bytes and is the most likely case. `xrdap` handles this; clients written with libusb or pyusb must add it. For reception, the IN request length must be a multiple of the endpoint maximum packet size (and not smaller than the DAP packet size).
+
+## 8. Radio link between two probes
+
+Radio probes are used in pairs: one board on the PC's USB (the host) and one on the target (the remote). The host sends the PC's DAP commands over the radio to the remote, which executes them, and returns the answers to USB. The implementation is in `xrdap/radio/`; the radio driver is a template parameter and meets the contract in `xrdap/radio/transceiver.hpp`. Probes with different transceivers cannot work together. The radio link has no authentication: the CRC seed and the link address only keep pairs apart.
+
+### 8.1 Packets
+
+The radio has a high and a low rate, and each board defines their modulation and packet size (127 to 255 bytes). `wdap` uses the SX1281: the high rate is GFSK with packets of up to 255 bytes, the low rate is FLRC with packets of up to 127 bytes. `linkw` uses the CH32V208's own radio: the high rate is the 2M PHY with packets of up to 251 bytes, the low rate the 1M PHY with packets of up to 127 bytes. Apart from HELLO, every packet starts with a 6-byte header:
+
+| Byte | Content |
+|---|---|
+| 0 | Kind: 1 COMMAND, 2 ANSWER, 3 PING, 4 PONG, 5 HELLO, 6 CONTROL, 7 CHANNEL, 8 CHANNEL_ACK |
+| 1 | Sequence; ANSWER and PONG carry the one of their request |
+| 2 | Fragment index |
+| 3 | Fragment count |
+| 4..5 | Message size, little endian |
+
+A message (a DAP command, a control request or an answer) holds at most 1024 bytes and is split into fragments of fragment = largest packet - 6 bytes: a message of `total` bytes travels as max(1, ⌈total / fragment⌉) fragments, and fragment i carries up to `fragment` bytes from byte i × fragment. A receiver accepts a message only when every fragment of one (sequence, count, size) arrived with exactly its length. PING and PONG are one fragment whose payload is a 2-byte little-endian session id. CHANNEL and CHANNEL_ACK are one fragment whose payload is a 2-byte little-endian session id and a 1-byte channel index (section 8.4); a CHANNEL_ACK carries the sequence of its CHANNEL.
+
+HELLO is used for pairing only: `05`, the own 12-byte chip UID, and the peer's UID heard so far (zeros while none).
+
+### 8.2 Sessions
+
+A session is named by a 16-bit non-zero id the host picks. Before the first command of a session the host sends a PING with the new id, which the remote answers with a PONG; after 1 s without a command it sends a heartbeat PING; on `DAP_Disconnect`, or after 5 s without a command from the PC, it ends the session with a PING carrying id 0. The remote ends the session on id 0 or a new id, or after 3 s without a packet from the host (the time it executes a command does not count: the end of the execution starts the 3 s again); it drops the cached answer, and a connection on the radio lapses together with its sampling. COMMAND and CONTROL outside a session are neither executed nor answered.
+
+After sending a command the host waits for the answer: first 3 ms plus the command's expected execution time, then twice as long with every resend, up to 200 ms each and 1 s plus the execution time in total; each answer fragment that arrives adds 3 ms. The expected execution time is the command's own wait (`DAP_Delay`, and the wait of `DAP_SWJ_Pins` counted up to 3 s) plus twice the time of its SWD transactions at the forwarded `DAP_SWJ_Clock` (500 kHz before there is one); `DAP_ResetTarget`, `DAP_QueueCommands` and `DAP_ExecuteCommands` add 0.5 s, and the total is 3 s at most. A control request counts as 250 ms, as the peer may be writing flash. The remote keeps its last answer and answers a command with the same sequence from it instead of executing it again. The host cannot hear an answer while it transmits, so the remote executes and answers only when the burst of fragments is over (the last fragment arrived, or no next fragment for 3 ms); for a resend of a completed command one fragment is enough for the cached answer.
+
+In the AUTO role a paired probe acts as the remote while it has no session of its own; a `DAP_Connect` on USB that reaches the peer runs the session over the radio, otherwise locally. `SWJ_Clock`, `TransferConfigure` and `SWD_Configure` before `DAP_Connect` run locally, and the last of each is sent to the remote when the session goes over the radio.
+
+Pairing: once both probes are in pairing (for up to 10 s) they send a HELLO every 20 ms or so on the control channel F with the default identity (high rate, link address `XRDP`, CRC seed 0xFFFF); a probe that hears a HELLO naming its own UID is done and keeps answering for 1 s. Both probes compute the same link id from the two UIDs, and the CRC seed and the link address follow from it; for the frequency see section 8.4.
+
+### 8.3 Control port operations
+
+The settings and radio operations of a radio probe go through the control port (section 3.7.1). Answer status: 0 OK, 1 timeout, 2 flash error, 3 bad argument, 4 not paired, 5 pairing is running (operations other than 0x11 and 0x13 have to wait for its end).
+
+| op | Request payload | Effect |
+|---|---|---|
+| 0x10 | Role (0 local, 1 host, 2 remote) | Use this role until the settings apply again, not stored; only 0 while unpaired |
+| 0x11 | None | Radio statistics, answer below |
+| 0x13 | None | Read the settings, answer below |
+| 0x14 | Role setting (0 AUTO, 1 local, 2 host, 3 remote) | Stored, in effect once the answer is out |
+| 0x15 | Rate (0 high, 1 low) | Stored, in effect once the answer is out |
+| 0x16 | None | Forget the pairing, in effect once the answer is out |
+| 0x17 | None | Bootloader slot information (CH32 boards) |
+| 0x19 | None, or mode and channel | Read the channel; mode 0 chooses the channel automatically, 1 locks this channel (stored, in effect at the next choice of channel). The answer is `19 00`, the current channel and the locked channel (0xFF when automatic) |
+| 0x20 | None | Start pairing |
+| 0x30 | A control request (not 0x30) | Sent to the peer over the radio; the answer is the peer's; status 1 when the peer does not answer. Without a wireless DAP session both probes return to F after the forward |
+
+Answer of 0x13 (24 bytes):
+
+| Byte | Content |
+|---|---|
+| 0..1 | `13 00` |
+| 2 | Role setting |
+| 3 | Rate (0 high, 1 low) |
+| 4 | 1 paired |
+| 5 | 1 safe mode (after repeated watchdog resets; the settings are not applied) |
+| 6 | Current role |
+| 7 | Pairing state: 0 idle, 1 running, 2 done, 3 failed |
+| 8..11 | Link id, little endian |
+| 12..23 | The peer's chip UID |
+
+Answer of 0x11: `11 00 n` followed by n little-endian u32 (n = 13): packets sent, good packets received, bad packets, failed transmissions, forwarded commands and control requests, resends, forwards without an answer, answers the remote sent from its cache, round trip of the last one (µs), longest round trip (µs), current channel, receiver re-entries of the radio, resets of the radio.
+
+### 8.4 Channels
+
+A frequency is a channel index in steps of 0.5 MHz: frequency = 2402 MHz + index × 0.5 MHz, index 0 to 159 (2402.0–2481.5 MHz), all within the licence-free 2400–2483.5 MHz. The control channel F is 93 (2448.5 MHz) on every probe; the CRC seed and the link address keep pairs apart. On `wdap` the FLRC sync word is fixed at `XRDP` (SX1281 errata 16.4), so at the low rate only the CRC seed does; `linkw` uses the link address at both rates. The channels of `linkw` are 2 MHz apart (2402–2480 MHz); an index between two of them goes to the nearer one.
+
+Pairing and opening a session happen on F. Once the host has reached its peer on F with a PING (waiting up to 300 ms on `DAP_Connect`), it picks the data channel: the locked one (0x19), or the best of the scan; the first session scans first (one point per MHz, 1.5 ms each, 4 passes keeping the worst pass of each point, about 0.6 s). Busy is the share of time the RSSI is above -85 dBm; the point with the lowest busy share wins, and the lower mean RSSI breaks a tie. The host sends CHANNEL on F, and the remote moves once its CHANNEL_ACK is out; on the ACK the host moves too and confirms with a PING (up to 30 ms) on the new channel. After every 4 CHANNELs without an ACK the host pings on the target channel once (the peer may have moved and only the ACK was lost); when the change does not succeed within 100 ms the host bans the point and stays on the channel the peer is on.
+
+During a session the host checks the resends every 200 exchanges: with more than 10, or when a command was sent 3 times with nothing heard for 60 ms, it bans the channel and the points less than 2 MHz from it for 10 minutes and moves to the next best point; when that fails it looks for the peer again, first on the data channel the peer may have stayed on, then on F. A locked channel does not change; after 3 sends with nothing heard, the radio is reset on F or on a locked channel. Only the host scans. The remote returns to F after 2.5 s on a data channel without a packet from the host (again not counting the time it executes a command), and when the session ends; the PING that ends the session (id 0) is sent on a data channel until the remote answers.
+
+Several pairs of probes can work at the same time: they share F and tell their packets apart by the CRC seed and the link address. The host sends a PING on F about every 3 ms, with an offset of up to about 1 ms in the interval computed from the time and the CRC seed, so that two pairs do not keep sending together. During pairing all probes use the default identity and hear each other, so only one pair is paired at a time. The behaviour of several pairs is checked by host tests (2 to 4 pairs), and the isolation between two probes was tested on hardware; it has not been tested on several pairs of probes.

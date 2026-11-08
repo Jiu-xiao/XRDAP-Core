@@ -9,16 +9,39 @@
 
 using namespace XrDap::Vendor;
 
+namespace
+{
+// ap 1、id 0x1234、size 2、base 0x20001000、n 2（+4、-8）、final +6 / ap 1, id 0x1234,
+// size 2, base 0x20001000, n 2 (+4, -8), final +6.
+const uint8_t kChainItem[] = {0x01, 0x34, 0x12, 0x02, 0x00, 0x10, 0x00, 0x20,
+                              0x02, 0x04, 0x00, 0xF8, 0xFF, 0x06, 0x00};
+// ap 0、id 1、size 4、base 0x20000000、n 0、final 0、div 5、phase 3 / ap 0, id 1, size 4,
+// base 0x20000000, n 0, final 0, div 5, phase 3.
+const uint8_t kSamplingItem[] = {0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x20,
+                                 0x00, 0x00, 0x00, 0x05, 0x00, 0x03, 0x00};
+
+// 解引用 n 次的条目，第 i 级偏移是 i + 1，final 是 0x7F / An item with n dereferences,
+// the offset at level i is i + 1, final is 0x7F.
+std::vector<uint8_t> ItemOfDepth(uint8_t n)
+{
+  std::vector<uint8_t> b = {0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x20, n};
+  for (uint8_t i = 0; i < n; ++i)
+  {
+    b.push_back(static_cast<uint8_t>(i + 1U));
+    b.push_back(0x00);
+  }
+  b.push_back(0x7F);
+  b.push_back(0x00);
+  return b;
+}
+}  // namespace
+
 TEST(ItemWithPointerChain)
 {
-  // ap 1、id 0x1234、size 2、base 0x20001000、n 2（+4、-8）、final +6 / ap 1, id 0x1234,
-  // size 2, base 0x20001000, n 2 (+4, -8), final +6.
-  const uint8_t b[] = {0x01, 0x34, 0x12, 0x02, 0x00, 0x10, 0x00, 0x20,
-                       0x02, 0x04, 0x00, 0xF8, 0xFF, 0x06, 0x00};
-  const uint8_t* p = b;
+  const uint8_t* p = kChainItem;
   Item it;
-  CHECK(ParseItem(p, b + sizeof(b), it, nullptr));
-  CHECK(p == b + sizeof(b));
+  CHECK(ParseItem(p, kChainItem + sizeof(kChainItem), it, nullptr));
+  CHECK(p == kChainItem + sizeof(kChainItem));
   CHECK_EQ(it.ap, 1U);
   CHECK_EQ(it.id, 0x1234U);
   CHECK_EQ(it.size, 2U);
@@ -29,32 +52,41 @@ TEST(ItemWithPointerChain)
   CHECK_EQ(it.final_off, 6);
 }
 
-TEST(SamplingItemCarriesDivAndPhase)
+TEST(TruncatedItemIsRejected)
 {
-  const uint8_t b[] = {0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x20,
-                       0x00, 0x00, 0x00, 0x05, 0x00, 0x03, 0x00};
-  const uint8_t* p = b;
-  Item it;
-  SubItem sub;
-  CHECK(ParseItem(p, b + sizeof(b), it, &sub));
-  CHECK_EQ(sub.div, 5U);
-  CHECK_EQ(sub.phase, 3U);
-  CHECK_EQ(sub.item.base, 0x20000000U);
+  for (size_t n = 0; n < sizeof(kChainItem); ++n)
+  {
+    const uint8_t* p = kChainItem;
+    Item it;
+    CHECK(!ParseItem(p, kChainItem + n, it, nullptr));
+  }
 }
 
-TEST(TruncatedOrTooDeepIsRejected)
+TEST(TruncatedSamplingItemIsRejected)
 {
-  const uint8_t b[] = {0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00};
-  for (size_t n = 0; n < sizeof(b); ++n)
+  for (size_t n = 0; n < sizeof(kSamplingItem); ++n)
   {
-    const uint8_t* p = b;
+    const uint8_t* p = kSamplingItem;
     Item it;
-    CHECK(!ParseItem(p, b + n, it, nullptr));
+    SubItem sub;
+    CHECK(!ParseItem(p, kSamplingItem + n, it, &sub));
   }
-  uint8_t deep[11 + 2 * 9] = {0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x20, 9};
-  const uint8_t* p = deep;
+}
+
+TEST(DepthEightIsTheLimit)
+{
+  const auto eight = ItemOfDepth(8);
+  const uint8_t* p = eight.data();
   Item it;
-  CHECK(!ParseItem(p, deep + sizeof(deep), it, nullptr));
+  CHECK(ParseItem(p, eight.data() + eight.size(), it, nullptr));
+  CHECK(p == eight.data() + eight.size());
+  CHECK_EQ(it.n, 8U);
+  CHECK_EQ(it.deref[7], 8);
+  CHECK_EQ(it.final_off, 0x7F);
+
+  const auto nine = ItemOfDepth(9);
+  p = nine.data();
+  CHECK(!ParseItem(p, nine.data() + nine.size(), it, nullptr));
 }
 
 TEST(AccessSizes)

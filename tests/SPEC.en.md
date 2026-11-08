@@ -2,7 +2,7 @@
 
 [中文](SPEC.md)
 
-This document defines the test cases, fixed conditions and result format shared by the XR-DAP probe family (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32V307). All three probes and all links use the same cases and the same settings, so the measured numbers can be compared directly. The cases are run by the test tool `xrdap_test` in this directory; usage is in [README.en.md](README.en.md); protocol details are in [docs/protocol.en.md](../docs/protocol.en.md).
+This document defines the test cases, fixed conditions and result format shared by the XR-DAP probe family (XRDAP-ESP, XRDAP-F103C8, XRDAP-CH32). All three probes and all links use the same cases and the same settings, so the measured numbers can be compared directly. The cases are run by the test tool `xrdap_test` in this directory; usage is in [README.en.md](README.en.md); protocol details are in [docs/protocol.en.md](../docs/protocol.en.md).
 
 Contents: 1 Scope; 2 Fixed conditions; 3 Case table; 4 Case descriptions; 5 Result records.
 
@@ -12,11 +12,11 @@ Contents: 1 Scope; 2 Fixed conditions; 3 Case table; 4 Case descriptions; 5 Resu
 
 | Link | Notation | Applicable probes |
 |---|---|---|
-| `usb` | CMSIS-DAP v2 Bulk | All (ESP32-S3, F103, CH32V307; ESP32-C3 and the original ESP32 have no USB DAP) |
+| `usb` | CMSIS-DAP v2 Bulk | All (ESP32-S3, F103, CH32V307, CH32V208; ESP32-C3 and the original ESP32 have no USB DAP) |
 | `serial` | libxr Topic serial frames (protocol section 1) | XRDAP-ESP |
 | `tcp` | OpenOCD CMSIS-DAP TCP frames (protocol section 2) | XRDAP-ESP; any probe shared with `xrdap share openocd` |
 | `usbip` | USB/IP, TCP 3240 (protocol section 6) | Any probe shared with `xrdap share usbip` |
-| `radio` | To the target through the wireless peer; the host side is USB | XRDAP-CH32V307 wireless board pair |
+| `radio` | To the target through the wireless peer; the host side is USB | XRDAP-CH32 wireless board pair |
 
 Section 3 lists the applicable links of each case. If a probe does not have a link, that cell is recorded as n/a.
 
@@ -32,7 +32,7 @@ Section 3 lists the applicable links of each case. If a probe does not have a li
 
 The target is given by a chip description file (TOML), kept in the user's own directory and specified with `--target PATH`; `targets/example.toml` in this directory is only a format example. The description contains: DPIDR, the RAM region that may be overwritten (scratch), the region that may be read out (dump), the Flash region that may be erased and written (flash_test), and the target names for OpenOCD, probe-rs and pyOCD. The tool writes the test fixture into scratch and needs no dedicated target program; the program already on the target keeps running; at the start of a run the tool saves the original contents of scratch and writes them back at the end. Scratch must be RAM that the target program does not use.
 
-The target matrix covers at least one each of Cortex-M0/M0+, M3, M4 and M7, one of which is not an ST chip, and at least one each of DPv1 and DPv2 (TGT-01 records the DP version). SWD multidrop is not supported (TGT-04).
+The target matrix covers at least one each of Cortex-M0/M0+, M3, M4 and M7, one of which is not an ST chip, and at least one each of DPv1 and DPv2 (TGT-01 records the DP version). The probe firmware does not select an SWD multidrop target; the host does (TGT-04): when the description has `targetsel`, the tool wakes and selects the target before connecting. When the description has `ap_base`, the tool reaches the MEM-AP by its ADIv6 base address; the READ, WRITE and sampling of the probe firmware select an AP by number and apply to ADIv5 only, so the cases that depend on them are recorded as n/a on such a target.
 
 ### 1.4 Oracle sources
 
@@ -43,7 +43,7 @@ The pass criteria of each case may come only from the sources below; the "Oracle
 | `cmsis-dap` | The Arm CMSIS-DAP specification (command format, responses, packet size and packet count) |
 | `arm` | The Arm debug architecture (ADIv5/ADIv6; DHCSR, DEMCR, AIRCR and so on of ARMv7-M/ARMv8-M), which is what CMSIS-DAP accesses |
 | `protocol X` | Section X of `docs/protocol.en.md` in this repository |
-| `decision X` | A decision of the user, numbered X (`status-light` is the light colour rule of the whole family) |
+| `decision X` | A decision of the user, named X (for example `status-light` is the light colour rule of the whole family) |
 | `hardware` | Hardware evidence: the host tool's own verification and a byte-by-byte comparison |
 | `measure` | Numbers that are only recorded and compared A/B; they do not decide pass or fail by themselves |
 
@@ -86,7 +86,7 @@ The counter is the `counter` of the target profile; if there is none, DWT CYCCNT
 
 ### 2.3 Rule for finding the minimum sampling period
 
-The probe does not estimate the time needed (decision B9); whether it keeps up is judged only from the result of a run. A period "keeps up" when: the run lasts 3 s with the host reading frames without pause, skipped ticks 0, buffer dropped frames 0, failed items 0, no gap in the tick sequence, and after stopping the remaining bytes of the buffer are read empty in one read. A period that fails once is run again at once and counts as not keeping up only when both runs fail (one burst of dropped frames from a pause in the host's reads does not change the result). Starting from 25 µs, the period is doubled each time until the first period P that keeps up; then, starting from P/2, 25 µs is added each time, and the first period that keeps up is the minimum period. The same rule is used for all probes and links.
+The probe does not estimate the time needed (decision no-time-estimate); whether it keeps up is judged only from the result of a run. A period "keeps up" when: the run lasts 3 s with the host reading frames without pause, skipped ticks 0, buffer dropped frames 0, failed items 0, no gap in the tick sequence, and after stopping the remaining bytes of the buffer are read empty in one read. A period that fails once is run again at once and counts as not keeping up only when both runs fail (one burst of dropped frames from a pause in the host's reads does not change the result). Starting from 25 µs, the period is doubled each time until the first period P that keeps up; then, starting from P/2, 25 µs is added each time, and the first period that keeps up is the minimum period. The same rule is used for all probes and links.
 
 ### 2.4 Polling
 
@@ -106,11 +106,11 @@ When the link column is `all`, the case applies to all links of section 1.1.
 |---|---|---|---|---|
 | SWD-01 | `auto` | all | cmsis-dap, measure | SWD clock sweep: actual clock estimate, data integrity at each clock, highest stable clock |
 | SWD-02 | `auto` | all | cmsis-dap | Pipelining depth 1 to N: response order and data |
-| SWD-03 | `auto` | all | decision V305-1 | Robustness: more requests in flight than the advertised packet count are all answered in order |
+| SWD-03 | `auto` | all | decision packet-count | Robustness: more requests in flight than the advertised packet count are all answered in order |
 | PERF-01 | `auto` | all | measure | Round-trip time: DAP_Info and one DP read, median / p99 |
 | PERF-02 | `auto` | all | measure, cmsis-dap | Block read/write throughput: 4 MHz, 10 MHz, highest stable clock |
 | PERF-03 | `auto` | all | measure, cmsis-dap | Small-data access: 4 B and 64 B operations per second at random addresses |
-| DAP-01 | `auto` | all | cmsis-dap, protocol 1, protocol 2, decision B10 | DAP_Transfer: DP/AP access, posted read, match, timestamp, FAULT, abort |
+| DAP-01 | `auto` | all | cmsis-dap, protocol 1, protocol 2, decision transfer-abort | DAP_Transfer: DP/AP access, posted read, match, timestamp, FAULT, abort |
 | DAP-02 | `auto` | all | cmsis-dap | DAP_TransferBlock: AP/DP block, count 0, packet size boundary, FAULT |
 | DAP-03 | `auto` | all | cmsis-dap, protocol 2 | Packet boundary: request and response lengths around the USB packet size |
 | DAP-04 | `auto` | all | cmsis-dap | Command set: DAP_Info, HostStatus, SWJ_Pins, Execute/QueueCommands, unknown command |
@@ -126,39 +126,39 @@ When the link column is `all`, the case applies to all links of section 1.1.
 | VND-01 | `auto` | all | protocol 3.4, protocol 4.1 | INFO and DAP_Info identity |
 | VND-02 | `auto` | all | protocol 3.2, protocol 3.3 | READ: 1/2/4/8 bytes, pointer chain, item status, limits |
 | VND-03 | `auto` | all | protocol 3.2, protocol 3.3 | WRITE: 1/2/4/8 bytes with read-back, item status |
-| VND-04 | `auto` | all | protocol 3.2, protocol 3.4, decision B9 | Parameter and state checks |
+| VND-04 | `auto` | all | protocol 3.2, protocol 3.4, decision no-time-estimate | Parameter and state checks |
 | VND-05 | `auto` | all | measure, protocol 3.3 | READ/WRITE latency, items per second, cost per pointer-chain level |
-| VND-06 | `auto` | all | decision B9, measure | Sampling: minimum period for 1/4/8/32 variables |
+| VND-06 | `auto` | all | decision no-time-estimate, measure | Sampling: minimum period for 1/4/8/32 variables |
 | VND-07 | `auto` | all | protocol 3.5 | Divider and phase: 8-item divider group |
 | VND-08 | `auto` | all | protocol 3.5, measure | Timestamp jitter: 1 ms, 10 s |
-| VND-09 | `auto` | all | protocol 3.5, decision B9 | Skipped-tick and dropped-frame counts, stop when full, partial read, exclusive use during sampling |
+| VND-09 | `auto` | all | protocol 3.5, decision no-time-estimate | Skipped-tick and dropped-frame counts, stop when full, partial read, exclusive use during sampling |
 | VND-10 | `auto` | all | arm, protocol 3.1, measure | Latency of halt, run and reset through vendor WRITE |
-| VND-11 | `auto` | all | protocol 3.6, decision C5 | PPB access when the AP CSW has an unprivileged Prot |
+| VND-11 | `auto` | all | protocol 3.6, decision ppb-access | PPB access when the AP CSW has an unprivileged Prot |
 | VND-12 | `auto` | all | protocol 3.4, protocol 3.5 | Restart right after stop: the new run starts at tick 0, no stale frames |
-| VND-13 | `auto` | usb, serial, tcp, usbip | protocol 3.7, decision A4 | 0x86 Wi-Fi status query |
-| VND-14 | `auto` | all | protocol 3.2, decision B8 | Status 0x03 when the response space is not enough |
+| VND-13 | `auto` | usb, serial, tcp, usbip | protocol 3.7, decision settings-kept | 0x86 Wi-Fi status query |
+| VND-14 | `auto` | all | protocol 3.2, decision reply-space | Status 0x03 when the response space is not enough |
 | VND-15 | `auto` | serial | protocol 3.1 | Serial lease: sampling started over serial stops after 5 s without requests |
 | STAB-01 | `auto` | all | protocol 3.5 | Long sampling run (default 1 h) |
 | STAB-02 | `auto` | all | hardware | OpenOCD program-and-verify loop (default 1 h) |
 | STAB-03 | `assisted` | usb, serial, radio | protocol 3.1 | Unplug and replug the probe during sampling |
 | STAB-04 | `assisted` | all | protocol 3.5 | Target power loss and recovery during sampling |
 | STAB-05 | `assisted` | tcp, usbip | measure | Hotspot disconnect: time to become reachable again |
-| STAB-06 | `auto` | all | protocol 3.1, decision B2 | Host exits without stopping or Disconnect |
+| STAB-06 | `auto` | all | protocol 3.1, decision host-exit | Host exits without stopping or Disconnect |
 | STAB-07 | `assisted` | all | measure | Probe restart: time from boot to the first DAP_Info response |
-| STAB-08 | `auto` | serial | decision A4, protocol 3.7, hardware | Serial session hygiene: Wi-Fi credentials and probe uptime unchanged after a long-running xrdap share, an OpenOCD attach and a killed process |
+| STAB-08 | `auto` | serial | decision settings-kept, protocol 3.7, hardware | Serial session hygiene: Wi-Fi credentials and probe uptime unchanged after a long-running xrdap share, an OpenOCD attach and a killed process |
 | MC-01 | `auto` | tcp | protocol 2 | Second TCP client is not served |
 | RAD-01 | `auto` | radio | measure | Wireless load: retransmission rate, failure count, round-trip time |
-| RAD-02 | `assisted` | radio | decision B3 | Pairing persists after both boards are powered off |
+| RAD-02 | `assisted` | radio | decision pairing-kept | Pairing persists after both boards are powered off |
 | RAD-03 | `manual` | radio | measure | Distance and interference |
-| RAD-04 | `manual` | radio | decision B6 | Wireless session end: the remote side ends the session and stops sampling when the session number changes, is 0, or no ping arrives for 3 s |
+| RAD-04 | `manual` | radio | decision radio-session-end | Wireless session end: the remote side ends the session and stops sampling when the session number changes, is 0, or no ping arrives for 3 s |
 | RES-01 | `auto` | all | measure | Firmware Flash and static RAM usage (ELF) |
 | RES-02 | `manual` | all | measure | Heap margin and peak stack usage |
 | RES-03 | `manual` | all | measure | CPU load of the core running SWD |
-| RES-04 | `manual` | all | decision A4, measure | Firmware update time and settings retention |
+| RES-04 | `manual` | all | decision settings-kept, measure | Firmware update time and settings retention |
 | RES-05 | `manual` | all | measure | Power consumption and temperature |
 | UI-01 | `manual` | all | decision status-light | Status light: link colour |
 | UI-02 | `manual` | all | decision status-light | Status light: activity and host state |
-| UI-03 | `manual` | all | decision A4, decision B3 | Button: clear Wi-Fi, wireless pairing |
+| UI-03 | `manual` | all | decision settings-kept, decision pairing-kept | Button: clear Wi-Fi, wireless pairing |
 
 `run` executes all cases except STAB-01 and STAB-02 by default (`--cases quick`); these two take 1 h each and are run individually, for example with `--cases STAB-01`.
 
@@ -172,7 +172,7 @@ SWD-01 Clock sweep. At each requested clock of section 2.1: reconnect; use `DAP_
 
 SWD-02 Pipelining depth. Depth d runs from 1 to min(the packet count reported by DAP_Info 0xFE, the depth the link allows): the serial link is request-response by protocol, so the depth is only 1. At each depth, 256 word-read requests (write TAR plus read DRW) are sent, always keeping d in flight. Pass: at each depth the responses arrive in send order and all values are correct.
 
-SWD-03 Beyond the advertised packet count (robustness; the oracle is user decision V305-1, not the CMSIS-DAP specification, which forbids the host from exceeding the packet count reported by DAP_Info 0xFE; SWD-02 and every pipelined read or write keep to that limit). 256 word-read requests are sent while always keeping the advertised count + 2 in flight. Pass: every request is answered, none is lost, the responses arrive in send order with correct values, and the link is still request-response afterwards.
+SWD-03 Beyond the advertised packet count (robustness; the oracle is user decision packet-count, not the CMSIS-DAP specification, which forbids the host from exceeding the packet count reported by DAP_Info 0xFE; SWD-02 and every pipelined read or write keep to that limit). 256 word-read requests are sent while always keeping the advertised count + 2 in flight. Pass: every request is answered, none is lost, the responses arrive in send order with correct values, and the link is still request-response afterwards.
 
 ### 4.2 Standard DAP performance and behaviour
 
@@ -182,15 +182,15 @@ PERF-02 Block throughput. 16 KiB of random data is written to and read from the 
 
 PERF-03 Small data. At random 64 B-aligned addresses, each runs for 2 s: 4 B read (write TAR, read DRW), 4 B write, 64 B block write, 64 B block read; operations per second are recorded. Pass: the data read back matches the last write.
 
-DAP-01 to DAP-04 are the checks on a real probe that correspond to the branch catalogue of cmsis-dap-behavior-suite:
+DAP-01 to DAP-04 check the behaviour branches of the CMSIS-DAP commands on a real probe:
 
-- DAP-01: DP read and write; in one packet, write TAR followed by 4 DRW reads and an RDBUFF read, with values in order; in one packet, mixed DP and AP writes with SELECT rewritten midway; match reads that hit and miss under the mask 0xFFFF0000 (a miss answers with 0x10); when the probe reports a test-domain timer, reads and writes with timestamps; reading `fault_address` gives FAULT, and writing ABORT recovers; malformed requests with a count larger than the actual number of operations, and a request reading 255 times that exceeds the packet length, both get a response and the link stays request-response; `DAP_TransferAbort` has no response content (CMSIS-DAP specification; decision B10): on USB and TCP there is no response (protocol section 2), and on serial it is an empty frame with n equal to 0 (protocol section 1); when sent while idle, the response to the next command is still paired as usual.
+- DAP-01: DP read and write; in one packet, write TAR followed by 4 DRW reads and an RDBUFF read, with values in order; in one packet, mixed DP and AP writes with SELECT rewritten midway; match reads that hit and miss under the mask 0xFFFF0000 (a miss answers with 0x10); when the probe reports a test-domain timer, reads and writes with timestamps; reading `fault_address` gives FAULT, and writing ABORT recovers; malformed requests with a count larger than the actual number of operations, and a request reading 255 times that exceeds the packet length, both get a response and the link stays request-response; `DAP_TransferAbort` has no response content (CMSIS-DAP specification; decision transfer-abort): on USB and TCP there is no response (protocol section 2), and on serial it is an empty frame with n equal to 0 (protocol section 1); when sent while idle, the response to the next command is still paired as usual.
 - DAP-02: DP block read (IDCODE × 3) and DP block write (SELECT × 2); count 0; the maximum number of words that fit in one packet is returned in full, and with one more word the response does not exceed the packet length; a block read from `fault_address` gives FAULT; block requests with the match and timestamp bits get a response and the link stays in sync.
 - DAP-03: request lengths MPS−1, MPS, MPS+1, 2×MPS, packet size−1, packet size (MPS is the USB endpoint maximum packet size; 64 for other links), response lengths MPS−4, MPS, packet size, 8 bytes, 20 times each. A request of exactly the packet length is followed by a zero-length packet from the host (protocol "Notes for USB hosts").
 - DAP-04: each DAP_Info ID, DAP_HostStatus, DAP_SWJ_Pins read, DAP_Delay; ExecuteCommands echoes the command count; two consecutive QueueCommands packets plus one ExecuteCommands packet give three 0x7F responses in order; the undefined command 0x3F answers only `FF`.
-- DAP-05: ExecuteCommands builds a response of exactly n bytes (one DAP_Transfer that writes TAR and reads DRW, a second DAP_Transfer with one DP read for even lengths, and HostStatus for the rest); every n from 12 to the packet size is requested once, and the lengths whose frame on the link is one less than, equal to or one more than a multiple of the USB packet size (64 for links without a USB endpoint) are requested 5 times. On serial the frame is the response plus the 19-byte Topic header and checksum. Every response must arrive complete within 1 s; a missing length is recorded, and one DAP_Info realigns the link before the scan goes on. This checks the whole link: a USB-to-serial bridge may hold a frame that is an exact multiple of 64 bytes until the next short packet, which only a scan over every length finds.
+- DAP-05: ExecuteCommands builds a response of exactly n bytes (one DAP_Transfer that writes TAR and reads DRW, a second DAP_Transfer with one DP read for even lengths, and HostStatus for the rest); every n from 12 to the packet size is requested once, and the lengths whose frame on the link is one less than, equal to or one more than a multiple of the USB packet size (64 for links without a USB endpoint) are requested 5 times. On serial the frame is the response plus the 19-byte Topic header and checksum. Every response must arrive complete within 1 s; on the `radio` link within 1.7 s, the longest wait of the host board for one forwarded `DAP_ExecuteCommands` (protocol 8.2: 1 s plus 0.5 s of expected execution, and up to 200 ms after the last send); a missing length is recorded, and one DAP_Info realigns the link before the scan goes on. This checks the whole link: a USB-to-serial bridge may hold a frame that is an exact multiple of 64 bytes until the next short packet, which only a scan over every length finds.
 
-Mapping from behavior-suite branches to the cases of this specification. A branch marked N/A either describes the host-side scheduling model or needs a wire error injected on a healthy target, and is not an online probe test:
+Mapping from behaviour branches to the cases of this specification. A branch marked N/A either describes the host-side scheduling model or needs a wire error injected on a healthy target, and is not an online probe test:
 
 | Branch | Case |
 |---|---|
@@ -265,7 +265,7 @@ TGT-02 Memory: on the RW word, an 8-bit write at offset 1 and a 16-bit write at 
 
 TGT-03 Core control: halt through DHCSR and resume; set DEMCR.VC_CORERESET and then AIRCR.SYSRESETREQ, the core stops at the reset vector; with `--nreset-wired`, additionally pull nRESET low for 50 ms with DAP_SWJ_Pins and confirm that the core resets. At the end VC_CORERESET is cleared, debug is exited and the fixture is rewritten.
 
-TGT-04 multidrop (manual): XR-DAP does not implement SWD multidrop target selection, and every probe is recorded as unsupported; if a multidrop target (for example RP2040) is connected with a host tool, the report of the tool is recorded.
+TGT-04 multidrop (manual): the XR-DAP firmware does not select a target; the host sends TARGETSEL with DAP_SWJ_Sequence and DAP_SWD_Sequence, and this tool does so when the description has `targetsel`; if a multidrop target (for example RP2040 or RP2350) is connected with a host tool, the report of the tool is recorded.
 
 ### 4.5 XR vendor extension
 
@@ -279,23 +279,23 @@ VND-04: SUB_START with period 0, reserved flag bits, count 0, div 0, phase ≥ d
 
 VND-05: the median round trip of single-item READ and WRITE; items per second of 1, 8 and 32 item READ; cost per pointer-chain level: 8 items each dereferenced through a self pointer 0, 1, 2, 4 and 8 levels, with (8 levels − 0 levels) / 64 giving the time per level. Pass: the 8-level self-pointer chain resolves successfully.
 
-VND-06: for the 1, 4, 8 and 32 variable groups, the minimum period is found by the rule of section 2.3 (decision B9: the probe does not estimate the time needed, and only whether it keeps up is looked at). Pass: a minimum period is found for every group; the minimum period is recorded in the result for A/B comparison.
+VND-06: for the 1, 4, 8 and 32 variable groups, the minimum period is found by the rule of section 2.3 (decision no-time-estimate: the probe does not estimate the time needed, and only whether it keeps up is looked at). Pass: a minimum period is found for every group; the minimum period is recorded in the result for A/B comparison.
 
 VND-07: the 8-item divider group runs for 5 s. Pass: the set of due items in each frame equals the set where `(k + phase) % div == 0`; the constants and the pointer chain have correct values; no failed items; skipped ticks, dropped frames and tick gaps are all 0; the counter only increases; the number of occurrences of each item differs from tick count / div by no more than 1.
 
 VND-08: a single counter item, period 1 ms, run for 10 s. The minimum, maximum and absolute p99 of the timestamp deviation (frame timestamp − first frame timestamp − Δk × period) are recorded; when the counter is CYCCNT, the p99 of the deviation of the actual target-side sampling interval is computed from the CYCCNT difference of adjacent frames and the target clock derived from the whole run. The pass criteria are the applicable ones of VND-07.
 
-VND-09: 8-variable group, with a 2 ms period started and then SWD lowered to 100 kHz, run for 2 s: the skipped-tick count is greater than 0; the number of ticks missing before the first frame and between frames is not greater than the skipped-tick count (ticks skipped after the last frame cannot be seen and are counted as skipped_not_seen); in overwrite mode with no reads for 2 s, the dropped-frame count is greater than 0; in stop-when-full mode with no reads for 2 s, the tick of the first frame read is 0 and the dropped-frame count is greater than 0; with max_bytes 20 no frame is returned and the remaining bytes are not 0; during sampling DAP_Transfer answers only `FF`, and DAP_Info and READ work normally. These counters are the basis of the "keeps up" judgement prescribed by decision B9.
+VND-09: 8-variable group, with a 2 ms period started and then SWD lowered to 100 kHz, run for 2 s: the skipped-tick count is greater than 0; the number of ticks missing before the first frame and between frames is not greater than the skipped-tick count (ticks skipped after the last frame cannot be seen and are counted as skipped_not_seen); in overwrite mode with no reads for 2 s, the dropped-frame count is greater than 0; in stop-when-full mode with no reads for 2 s, the tick of the first frame read is 0 and the dropped-frame count is greater than 0; with max_bytes 20 no frame is returned and the remaining bytes are not 0; during sampling DAP_Transfer answers only `FF`, and DAP_Info and READ work normally. These counters are the basis of the "keeps up" judgement prescribed by decision no-time-estimate.
 
 VND-10: through vendor WRITE/READ access to DHCSR, DEMCR and AIRCR: halt, resume, and reset with the core stopping at the reset vector; the milliseconds from issuing to DHCSR reflecting the state are recorded. Pass: all three states are observed within 1 s.
 
-VND-11 (protocol 3.6, decision C5): set the Prot of the AP CSW to unprivileged data access (`0x01`, the initial value on some chips after debug power-up), then read CPUID and DHCSR with vendor READ. Pass: both statuses are 0x00 and CPUID equals the value read with privileged access. Basis: when HPROT1 of the CSW is 0, the probe sets HPROT0, HPROT1 and the debug master bit on an AHB MEM-AP (the same as OpenOCD's CSW_AHB_DEFAULT) and keeps other AP types unchanged; the tool records the CSW written and the IDR of the AP.
+VND-11 (protocol 3.6, decision ppb-access): set the Prot of the AP CSW to unprivileged data access (`0x01`, the initial value on some chips after debug power-up), then read CPUID and DHCSR with vendor READ. Pass: both statuses are 0x00 and CPUID equals the value read with privileged access. Basis: when HPROT1 of the CSW is 0, the probe sets HPROT0, HPROT1 and the debug master bit on an AHB MEM-AP (the same as OpenOCD's CSW_AHB_DEFAULT) and keeps other AP types unchanged; the tool records the CSW written and the IDR of the AP.
 
 VND-12: the 4-variable group samples for 0.5 s and stops; immediately SUB_START another 2-item group, and read after 50 ms. Pass: no dropped frames, the first frame of the new run is at tick 0, and all frames contain only the new items with correct values.
 
-VND-13 (XRDAP-ESP): the response length of 0x86 op 0 is 11 + hotspot name length, and the flags, RSSI, source of the last clear and reset reason are recorded; an undefined op returns 0x01; `86 02` without the confirmation byte, or with a confirmation byte other than 0xA5, returns `86 01` and the Wi-Fi credentials stay unchanged (decision A4, protocol 3.7). Clear and save with the confirmation byte change the settings and restart the probe, and fall under RES-04 and the manual steps.
+VND-13 (XRDAP-ESP): the response length of 0x86 op 0 is 11 + hotspot name length, and the flags, RSSI, source of the last clear and reset reason are recorded; an undefined op returns 0x01; `86 02` without the confirmation byte, or with a confirmation byte other than 0xA5, returns `86 01` and the Wi-Fi credentials stay unchanged (decision settings-kept, protocol 3.7). Clear and save with the confirmation byte change the settings and restart the probe, and fall under RES-04 and the manual steps.
 
-VND-14 (protocol 3.2, decision B8): in a `DAP_ExecuteCommands`, several `DAP_Info(0xFF)` are placed first to take up response space, and when only about 50 bytes remain, a READ that needs a 91-byte response (8 items of 8 bytes) is placed. Pass: the answer to the READ is `81 03`, the whole response does not exceed the packet length, and the link afterwards stays request-response. Then the remaining space is made exactly 1 byte (using a `DAP_Info` whose response length is odd, adding `DAP_HostStatus` if necessary): the answer to the READ is a single `FF`, and the whole response fills exactly one packet.
+VND-14 (protocol 3.2, decision reply-space): in a `DAP_ExecuteCommands`, several `DAP_Info(0xFF)` are placed first to take up response space, and when only about 50 bytes remain, a READ that needs a 91-byte response (8 items of 8 bytes) is placed. Pass: the answer to the READ is `81 03`, the whole response does not exceed the packet length, and the link afterwards stays request-response. Then the remaining space is made exactly 1 byte (using a `DAP_Info` whose response length is odd, adding `DAP_HostStatus` if necessary): the answer to the READ is a single `FF`, and the whole response fills exactly one packet.
 
 VND-15 (protocol 3.1, serial): after sampling with a 100 ms period is started over serial, the port is kept open but no request is sent for 7 s. Pass: afterwards the remaining bytes of the buffer no longer grow within 1 s (sampling has stopped because of the 5 s lease), and the frames in the buffer can still be read.
 
@@ -305,17 +305,17 @@ STAB-01: the 8-item divider group runs for `--long-s` (default 3600 s), with the
 
 STAB-02: in the flash_test region, loop "write random 16 KiB and verify" for `--long-s`. Pass: every verification succeeds; logs of failures are saved separately.
 
-STAB-03 (assisted): during 1 ms sampling of the 4-variable group, unplug the probe USB (or USB serial), and plug it back after 2 s. Pass: it responds again within 30 s; the remaining bytes of the buffer no longer grow (sampling has stopped); after reconnecting, SUB_SET succeeds and at least 500 frames arrive within 1 s. The recovery time is recorded.
+STAB-03 (assisted): during 1 ms sampling of the 4-variable group, unplug the probe USB (or USB serial), and plug it back after 2 s. Pass: it responds again within 30 s; the remaining bytes of the buffer no longer grow (sampling has stopped); after reconnecting, SUB_START succeeds and at least 500 frames arrive within 1 s. The recovery time is recorded.
 
 STAB-04 (assisted): power off the target during sampling. Pass: while the power is off the probe still answers SUB_READ (the failed-item count is recorded in the result); after power is restored, reconnecting and sampling work normally.
 
 STAB-05 (assisted): turn off the hotspot and confirm that the probe is unreachable; start timing immediately after turning the hotspot on and record the time until the probe answers DAP_Info again. Pass: reachable within 300 s, and sampling works normally afterwards.
 
-STAB-06 (protocol 3.1, decision B2): a child process connects on the same link, starts sampling and exits directly, without stopping, Disconnect or closing. Pass: the next client on the same link can stop sampling, and sampling works normally after reconnecting.
+STAB-06 (protocol 3.1, decision host-exit): a child process connects on the same link, starts sampling and exits directly, without stopping, Disconnect or closing. Pass: the next client on the same link can stop sampling, and sampling works normally after reconnecting.
 
 STAB-07 (assisted): reset or power-cycle the probe during sampling. The tool starts timing when the probe stops responding and stops at the first DAP_Info response, which is the boot time (when `--restart-cmd` returns only after the restart has begun, timing starts at the end of the command). Pass: it responds within 60 s, the probe time starts again from zero (the probe really restarted), and sampling works normally afterwards.
 
-STAB-08 (decision A4, serial + `--link2` over TCP or USB): a serial session must not restart the probe or lose the Wi-Fi credentials. The steps are executed in order: a Python serial session is held for `--share-hold-s` (default 30 s); `xrdap share openocd` is left idle for the same time and then ended with Ctrl-C; `xrdap share` with OpenOCD connecting `--attach-count` times and one SRAM read and write, then ended with Ctrl-C; `xrdap share` left idle and then the process is killed directly. After each step, 0x86 op 0 (hotspot name, source of the last clear, reset reason) and the probe clock are read over the second link (TCP or USB, never the serial port; wall-clock time minus probe time gives the boot instant); while the serial session has not ended, the second link gets "busy", the tool waits for it to end before reading, and afterwards ends its own session with `DAP_Disconnect`. Pass: after each step the hotspot name is unchanged and the boot instant changes by no more than 2 s. If the probe has no saved Wi-Fi credentials, this is recorded as n/a.
+STAB-08 (decision settings-kept, serial + `--link2` over TCP or USB): a serial session must not restart the probe or lose the Wi-Fi credentials. The steps are executed in order: a Python serial session is held for `--share-hold-s` (default 30 s); `xrdap share openocd` is left idle for the same time and then ended with Ctrl-C; `xrdap share` with OpenOCD connecting `--attach-count` times and one SRAM read and write, then ended with Ctrl-C; `xrdap share` left idle and then the process is killed directly. After each step, 0x86 op 0 (hotspot name, source of the last clear, reset reason) and the probe clock are read over the second link (TCP or USB, never the serial port; wall-clock time minus probe time gives the boot instant); while the serial session has not ended, the second link gets "busy", the tool waits for it to end before reading, and afterwards ends its own session with `DAP_Disconnect`. Pass: after each step the hotspot name is unchanged and the boot instant changes by no more than 2 s. If the probe has no saved Wi-Fi credentials, this is recorded as n/a.
 
 ### 4.7 Multiple clients
 
@@ -325,11 +325,11 @@ MC-01 (protocol section 2, TCP): after client A connects and starts sampling, cl
 
 On the `radio` link, the cases marked `all` in section 3 are all executed over the radio, and throughput and round-trip time are the wireless performance.
 
-RAD-01: read the diagnostic statistics of the wireless firmware (command 0x9F 0x11), run 5 passes of 4 KiB block read/write, then read the statistics again. Retransmissions / commands, failure count and maximum round-trip time are recorded. Pass: data matches and the failure count is 0.
+RAD-01: read the radio statistics through the control port (operation 0x11), run 5 passes of 4 KiB block read/write, then read the statistics again. Retransmissions / commands, failure count and maximum round-trip time are recorded. Pass: data matches and the failure count is 0.
 
-RAD-02 (assisted): read the pairing settings (0x9F 0x13), power both boards off and on again, then read again. Pass: still paired, and the link id is unchanged.
+RAD-02 (assisted): read the pairing settings through the control port (0x13), power both boards off and on again, then read again. Pass: still paired, and the link id is unchanged.
 
-RAD-04 (manual, decision B6): after sampling is started over the radio, in turn have the host change the session number (reopen the session), send session number 0, and unplug the host board for more than 3 s, and read frames through the remote side each time. Pass: in all three cases the remote side ends the session and stops sampling, and the cached response is cleared. The tool becomes automatic once the wireless firmware publishes how to read the session number.
+RAD-04 (manual, decision radio-session-end): after sampling is started over the radio, in turn have the host change the session number (reopen the session), send session number 0, and unplug the host board for more than 3 s, and read frames through the remote side each time. Pass: in all three cases the remote side ends the session and stops sampling, and the cached response is cleared. The tool becomes automatic once the wireless firmware publishes how to read the session number.
 
 RAD-03 (manual): run PERF-02 and RAD-01 at 1 m, 5 m, 10 m and behind a wall, then repeat with busy 2.4 GHz Wi-Fi within 1 m; distance, obstruction, interference source, retransmission rate and read throughput are recorded.
 
@@ -341,7 +341,7 @@ RES-02 (manual): on F103 and CH32, fill the stack with a fixed value at boot, an
 
 RES-03 (manual): the debug firmware toggles an idle GPIO before and after DAP command handling and the sampling tick, and a logic analyser measures the duty cycle during PERF-02 and during minimum-period sampling.
 
-RES-04 (manual): update the firmware by the normal route of each probe (ESP web flashing or `esptool write_flash 0x0 merged.bin`; CH32 `tools/dfu_update.py`; F103 SWD flashing of the release image); the time from start to a DAP_Info response is recorded, and the retention of settings is confirmed: on ESP the Wi-Fi credentials (0x86 op 0 shows the same hotspot name), and the clear source and the reset reason can be read (decision A4); on CH32 the pairing and role (0x9F 0x13). The boot time itself is measured by STAB-07.
+RES-04 (manual): update the firmware by the normal route of each probe (ESP web flashing or `esptool write_flash 0x0 merged.bin`; CH32 `tools/dfu_update.py`; F103 SWD flashing of the release image); the time from start to a DAP_Info response is recorded, and the retention of settings is confirmed: on ESP the Wi-Fi credentials (0x86 op 0 shows the same hotspot name), and the clear source and the reset reason can be read (decision settings-kept); on CH32 the pairing and role (control port 0x13). The boot time itself is measured by STAB-07.
 
 RES-05 (manual): a USB ammeter in series with the probe records the current when idle, during PERF-02 and during minimum-period sampling; after PERF-02 has looped for 10 minutes, the hottest point on the board and the room temperature are recorded.
 
@@ -353,7 +353,7 @@ UI-01: purple when powered up with no host connected; red when a USB host is con
 
 UI-02: the light shows an activity pulse during DAP communication; after OpenOCD `init; halt`, the main colour and purple alternate every 2 s, and after `resume`, red and blue alternate every 1 s; it returns to normal after `DAP_Disconnect` or 5 s without commands.
 
-UI-03: on the Lite board, holding the GPIO21 button for 5 s gives a fast purple blink and then solid purple, the Wi-Fi credentials are cleared and the board restarts (0x86 op 0 has no hotspot name); the BOOT button (GPIO0) of the default S3 board does not clear any setting while running (decision A4); on a wireless board pair, long-pressing KEY2 on two unpaired boards gives a purple blink, and when done both boards report the same link id, and an unpaired board is not taken as the remote side (decision B3).
+UI-03: on the Lite board, holding the GPIO21 button for 5 s gives a fast purple blink and then solid purple, the Wi-Fi credentials are cleared and the board restarts (0x86 op 0 has no hotspot name); the BOOT button (GPIO0) of the default S3 board does not clear any setting while running (decision settings-kept); on a wireless board pair, long-pressing KEY2 on two unpaired boards gives a purple blink, and when done both boards report the same link id, and an unpaired board is not taken as the remote side (decision pairing-kept).
 
 ## 5. Result records
 

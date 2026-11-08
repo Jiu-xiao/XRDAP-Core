@@ -81,7 +81,7 @@ python -m xrdap_test ab --link usb --target my-target.toml --cases PERF,VND-06 \
 
 ## 目标描述
 
-目标描述是一个 TOML 文件，写明工具可以改写的 RAM（scratch，运行结束时恢复原内容）、主机工具读出的区域（dump）、可以擦写的 Flash 区（flash_test）和各主机工具的目标名，格式见 [targets/example.toml](targets/example.toml)。目标描述放在使用者自己的目录里，用 `--target 路径` 指定；本仓库只带这个示例。scratch 要选目标程序不用的 RAM；临时改用别的区域时用 `--scratch BASE:SIZE`。
+目标描述是一个 TOML 文件，写明工具可以改写的 RAM（scratch，运行结束时恢复原内容）、主机工具读出的区域（dump）、可以擦写的 Flash 区（flash_test）和各主机工具的目标名，格式见 [targets/example.toml](targets/example.toml)。目标描述放在使用者自己的目录里，用 `--target 路径` 指定；本仓库只带这个示例。`--target` 的值不是现有路径时，按 `targets/` 下的文件名（不带 `.toml`）查找。scratch 要选目标程序不用的 RAM；临时改用别的区域时用 `--scratch BASE:SIZE`。
 
 ## 串口会话卫生（STAB-08）
 
@@ -111,4 +111,14 @@ code: 55 cases ({'auto': 39, 'assisted': 5, 'manual': 11})
 coverage OK
 ```
 
-单元测试用协议文档里的字节示例检查帧、条目编码和 SUB_READ 解码。
+单元测试用协议文档里的字节示例检查帧、条目编码和 SUB_READ 解码，并用假链路检查不接探针也能运行的用例逻辑。
+
+## 电脑端测试
+
+`unit/`、`threads/`、`mem_ap/` 和 `compile/` 是不接探针的 C++ 测试，在电脑上编译运行，需要 libxr 的路径，所有目标都开 AddressSanitizer、UBSan 和 `-Werror`。ctest 运行这些测试，检查 `xrdap/` 里的原子变量只用 32 位整数，并在有 Python 3.11 或更新版本时运行上面的覆盖检查和单元测试；每条测试都有超时。以下命令在仓库根目录执行：
+
+```bash
+cmake -S tests -B build -DLIBXR_DIR=<libxr>
+cmake --build build
+ctest --test-dir build --output-on-failure
+```

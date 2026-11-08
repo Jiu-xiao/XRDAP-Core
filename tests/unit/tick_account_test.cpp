@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
-// 节拍账目。判据：用户决定 C4（定时器是唯一时钟，中断只把节拍计数加 1，按计数差算跳拍）、
-// B9（能否跟上只看跳拍、丢帧、缓冲占用）和 docs/protocol.md 3.5（来不及时不补做；一拍占用
-// 太久时让出一拍）/ Tick accounting. Oracles: user decisions C4 (the timer is the only
-// clock, the interrupt only adds 1 to the tick count, skips come from count differences)
-// and B9 (keep-up is judged by skipped ticks, dropped frames and ring fill), and
-// docs/protocol.md 3.5 (late ticks are not made up; a tick that takes too long gives one
-// up).
+// 节拍账目。判据：用户的决定（定时器是唯一时钟，中断只把节拍计数加 1，按计数差算跳拍；
+// 能否跟上只看跳拍、丢帧、缓冲占用）和 docs/protocol.md 3.5（来不及时不补做；下一个
+// 要采的节拍至少晚“占用 + 间隙”，间隙为 max(15 µs, 周期 / 8, 占用 / 4)）/ Tick
+// accounting. Oracles: user decisions (the timer is the only clock, the interrupt only
+// adds 1 to the tick count, skips come from count differences; keep-up is judged by
+// skipped ticks, dropped frames and ring fill) and docs/protocol.md 3.5 (late ticks
+// are not made up; the next tick to sample is at least "busy + gap" later, with gap =
+// max(15 µs, period / 8, busy / 4)).
 #include "check.hpp"
 #include "xrdap/vendor/sampling.hpp"
 
 using XrDap::Vendor::TickAccount;
 using XrDap::Vendor::TickWakes;
 
-TEST(WakeWhenMergedTicksPassDeadline)
+TEST(WakeWhenCountReachesTheNextTick)
 {
   CHECK(!TickWakes(6U, 7U));
   CHECK(TickWakes(7U, 7U));
@@ -20,7 +21,8 @@ TEST(WakeWhenMergedTicksPassDeadline)
   CHECK(!TickWakes(0xFFFFFFFEU, 1U));
   CHECK(TickWakes(1U, 0xFFFFFFFEU));
   CHECK(TickWakes(0U, 0U));
-  CHECK(!TickWakes(3U, 3U + 0x40000000U));  // Parked command.
+  // 要采的节拍还在很远的将来：不唤醒 / The tick to sample is far ahead: no wake.
+  CHECK(!TickWakes(3U, 3U + 0x40000000U));
 }
 
 namespace
@@ -28,16 +30,6 @@ namespace
 constexpr uint32_t kPeriod = 1000U;
 constexpr uint32_t kShort = 100U;  // 一拍很快做完 / a tick done quickly
 }  // namespace
-
-TEST(FirstTickIsZero)
-{
-  TickAccount a;
-  a.Begin();
-  const auto s = a.OnWake(0);
-  CHECK(s.sample);
-  CHECK_EQ(s.tick, 0U);
-  CHECK_EQ(s.skipped, 0U);
-}
 
 TEST(EveryTickOnTimeSkipsNothing)
 {
@@ -51,6 +43,16 @@ TEST(EveryTickOnTimeSkipsNothing)
     CHECK_EQ(s.skipped, 0U);
     a.OnDone(c, kShort, kPeriod);
   }
+}
+
+TEST(TicksBeforeTheFirstWakeAreSkipped)
+{
+  TickAccount a;
+  a.Begin();
+  const auto s = a.OnWake(3);  // 0、1、2 没采 / 0, 1 and 2 were missed
+  CHECK(s.sample);
+  CHECK_EQ(s.tick, 3U);
+  CHECK_EQ(s.skipped, 3U);
 }
 
 TEST(CountJumpIsSkipped)
@@ -86,19 +88,6 @@ TEST(TickPassedWhileSamplingIsNotMadeUp)
   const auto s = a.OnWake(2);
   CHECK(s.sample);
   CHECK_EQ(s.tick, 2U);
-  CHECK_EQ(s.skipped, 1U);
-}
-
-TEST(BusyTickGivesOneUp)
-{
-  TickAccount a;
-  a.Begin();
-  (void)a.OnWake(0);
-  // 900 + max(1000/8, 15) > 1000：再让出一拍 / one more tick is given up
-  a.OnDone(0, 900, kPeriod);
-  CHECK(!a.OnWake(1).sample);
-  const auto s = a.OnWake(2);
-  CHECK(s.sample);
   CHECK_EQ(s.skipped, 1U);
 }
 
@@ -153,24 +142,32 @@ TEST(CountWrapsAround)
   a.OnDone(0xFFFFFFFDU, 10, 1000);
   CHECK_EQ(a.Next(), 0xFFFFFFFEU);
   CHECK(a.OnWake(0xFFFFFFFEU).sample);
-  a.OnDone(0xFFFFFFFEU, 10, 1000);
-  CHECK(a.OnWake(0xFFFFFFFFU).sample);
-  a.OnDone(0xFFFFFFFFU, 10, 1000);
-  CHECK_EQ(a.Next(), 0U);
-  const auto s = a.OnWake(0U);
+  // 周期 50 us、一帧 95 us 时下一个要采的节拍在 3 拍后，已过回绕点；回绕前后的计数都还没
+  // 到它 / With a 50 us period and a 95 us frame the next tick to sample is 3 ticks on,
+  // past the wrap; the counts on either side of the wrap have not reached it.
+  a.OnDone(0xFFFFFFFEU, 95, 50);
+  CHECK_EQ(a.Next(), 1U);
+  CHECK(!a.OnWake(0xFFFFFFFFU).sample);
+  CHECK(!a.OnWake(0U).sample);
+  const auto s = a.OnWake(1U);
   CHECK(s.sample);
-  CHECK_EQ(s.skipped, 0U);
+  CHECK_EQ(s.skipped, 2U);
 }
 
 TEST(MinimumGapForShortPeriods)
 {
+  // 周期 50 us、占用不到 60 us 时间隙是最小值 15 us：35 + 15 正好一个周期，36 + 15 超过 /
+  // With a 50 us period and under 60 us busy the gap is the minimum of 15 us: 35 + 15 is
+  // exactly one period, 36 + 15 is above it.
   TickAccount a;
   a.Begin();
   (void)a.OnWake(0);
-  // 周期 100 us：留 max(15, 12, 21) = 21 us；占用 86 us 时 86 + 21 > 100 / Period
-  // 100 us leaves max(15, 12, 21) = 21 us; 86 us busy gives 86 + 21 > 100.
-  a.OnDone(0, 86, 100);
-  CHECK(!a.OnWake(1).sample);
+  a.OnDone(0, 35, 50);
+  CHECK_EQ(a.Next(), 1U);
+  a.Begin();
+  (void)a.OnWake(0);
+  a.OnDone(0, 36, 50);
+  CHECK_EQ(a.Next(), 2U);
 }
 
 TEST(BeginRestartsAtZero)

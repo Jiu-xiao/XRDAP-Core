@@ -11,7 +11,6 @@ import time
 from . import link as linkmod
 from . import report
 from . import runner as R
-from .dap import Dap
 from .target import list_targets, load_target
 from .vendor import Vendor
 
@@ -34,7 +33,7 @@ def select(spec):
     chosen = []
     for part in spec.split(","):
         part = part.strip().upper()
-        match = [i for i in ids if i == part or i.startswith(part + "-") or i.startswith(part)]
+        match = [i for i in ids if i.startswith(part)]
         if not match:
             raise SystemExit(f"no case matches {part!r}")
         chosen += [i for i in match if i not in chosen]
@@ -44,7 +43,7 @@ def select(spec):
 def add_run_args(p):
     p.add_argument("--link", required=True, help="usb[:SERIAL] | serial:PORT[@BAUD][,keep] | "
                    "tcp:HOST[:PORT] | usbip:HOST[:PORT]")
-    p.add_argument("--target", help="profile name in tests/targets or a .toml path")
+    p.add_argument("--target", help="target profile: a .toml path, or the name of a profile in tests/targets")
     p.add_argument("--cases", default="quick", help="quick (default), all, or ids/prefixes: SWD,VND-06")
     p.add_argument("--out", default="xrdap-results", help="results root; each run gets a subdirectory")
     p.add_argument("--build", default="", help="fw=SHA,libxr=SHA,core=SHA of the image under test")
@@ -78,7 +77,7 @@ def do_run(args, out_dir):
     ctx = R.Context(args, target, out_dir)
     lk = linkmod.open_link(args.link)
     try:
-        dap = Dap(lk)
+        dap = ctx.new_dap(lk)
         identity = dap.identity()
         identity["vendor_info"] = Vendor(lk).info()
         saved = None
@@ -253,7 +252,7 @@ def cmd_coverage(args):
     return 1 if problems else 0
 
 
-def main(argv=None):
+def main():
     ap = argparse.ArgumentParser(prog="python -m xrdap_test", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("run", help="run cases against one probe, link and target")
@@ -280,5 +279,5 @@ def main(argv=None):
     p.set_defaults(fn=cmd_table)
     p = sub.add_parser("coverage", help="check SPEC.md / SPEC.en.md against the implemented cases")
     p.set_defaults(fn=cmd_coverage)
-    args = ap.parse_args(argv)
+    args = ap.parse_args()
     return args.fn(args)

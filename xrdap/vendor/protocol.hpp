@@ -51,6 +51,10 @@ constexpr uint32_t kFeatures = 0x0FU | kFeatureCompactFrames;
 /// 功能位 bit5:探针有控制口(docs/protocol.md 3.7.1)/ Feature bit 5: the probe has a
 /// control port (docs/protocol.md 3.7.1).
 constexpr uint32_t kFeatureControl = 1U << 5;
+/// 功能位 bit4:Wi-Fi 配置，厂商命令 0x86(docs/protocol.md 3.7，编解码在
+/// vendor/wifi_command.hpp)/ Feature bit 4: Wi-Fi configuration, vendor command 0x86
+/// (docs/protocol.md 3.7, codec in vendor/wifi_command.hpp).
+constexpr uint32_t kFeatureWifi = 1U << 4;
 /// 一条命令最多的条目数 / Maximum items per command.
 constexpr uint16_t kMaxItems = 32;
 /// 指针链最大深度 / Maximum pointer-chain depth.

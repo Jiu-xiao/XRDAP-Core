@@ -15,6 +15,7 @@ from .vendor_cases import check_stream, counter_item, divided_set, need_vendor
 
 @R.case("STAB-01", "Long sampling: divided 8-item set, 2 ms, --long-s (default 1 h)")
 def stab_sampling(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -72,6 +73,7 @@ def wait_probe(ctx, gone, timeout):
 
 
 def start_sampling(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
         need_vendor(vendor)
@@ -116,6 +118,7 @@ def stab_replug(ctx):
 
 @R.case("STAB-04", "Target power loss during sampling and after", mode=R.ASSISTED)
 def stab_target_power(ctx):
+    ctx.need_probe_mem_ap()
     ctx.need_operator()
     t = ctx.need_target()
     with ctx.session() as (lk, dap, vendor):
@@ -164,6 +167,7 @@ os._exit(0)  # no stop, no DAP_Disconnect, no close
 
 @R.case("STAB-06", "Host exits without stop or DAP_Disconnect: the next client recovers")
 def stab_host_exit(ctx):
+    ctx.need_probe_mem_ap()
     t = ctx.need_target()
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     code = CHILD.format(root=root, spec=ctx.spec, clock=ctx.clock, addr=t.at(t.V_U32))

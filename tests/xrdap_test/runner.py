@@ -35,7 +35,6 @@ class CaseDef:
     mode: str
     links: tuple
     fn: object = None
-    procedure: str = ""
     oracle: str = ""
 
 
@@ -44,15 +43,14 @@ CASES = {}
 
 def case(case_id, title, mode=AUTO, links=LINKS):
     def register(fn):
-        CASES[case_id] = CaseDef(case_id, title, mode, tuple(links), fn,
-                                 (fn.__doc__ or "").strip(), ORACLES[case_id])
+        CASES[case_id] = CaseDef(case_id, title, mode, tuple(links), fn, ORACLES[case_id])
         return fn
     return register
 
 
-def manual(case_id, title, procedure, links=LINKS):
-    CASES[case_id] = CaseDef(case_id, title, MANUAL, tuple(links), None, procedure.strip(),
-                             ORACLES[case_id])
+def manual(case_id, title, links=LINKS):
+    """A case done by hand: its steps are in SPEC section 4, its result goes in with `record`."""
+    CASES[case_id] = CaseDef(case_id, title, MANUAL, tuple(links), None, ORACLES[case_id])
 
 
 class NotApplicable(Exception):
@@ -111,12 +109,10 @@ class Context:
             raise NotApplicable("needs an operator (run without --no-prompt)")
 
     def ask(self, text):
-        """Operator step of an assisted case; returns False when prompts are off."""
-        if not self.prompt:
-            raise NotApplicable("needs an operator (run without --no-prompt)")
+        """Operator step of an assisted case; n/a when prompts are off."""
+        self.need_operator()
         self.log(f"  >>> {text}")
         input("      press Enter when done ")
-        return True
 
     # ------------------------------------------------------------- sessions
     @contextlib.contextmanager
@@ -127,11 +123,15 @@ class Context:
         finally:
             lk.close()
 
+    def new_dap(self, lk):
+        t = self.target
+        return Dap(lk, t.targetsel, t.ap_base) if t else Dap(lk)
+
     @contextlib.contextmanager
     def session(self, clock=None, fixture=True):
         """Open the link, attach SWD at `clock` and (re)write the scratch fixture."""
         with self.link() as lk:
-            dap = Dap(lk)
+            dap = self.new_dap(lk)
             dap.query_packet()
             vendor = Vendor(lk)
             vendor.stop()  # a previous client may have left sampling running
@@ -139,6 +139,12 @@ class Context:
             if fixture and self.target:
                 dap.block_write(self.target.scratch.base, self.target.fixture_bytes())
             yield lk, dap, vendor
+
+    def need_probe_mem_ap(self):
+        """For cases that use the READ, WRITE and sampling of the probe, which select an AP by
+        number."""
+        if self.target and self.target.ap_base is not None:
+            raise NotApplicable("the probe's own memory access selects an AP by number (ADIv5)")
 
     def need_target(self):
         if not self.target:
@@ -183,7 +189,7 @@ def run_cases(ctx, ids, meta):
             if cdef.mode == MANUAL:
                 res.status = TODO
                 res.summary = "manual: record with `record`"
-                ctx.log("  manual case, procedure:\n    " + cdef.procedure.replace("\n", "\n    "))
+                ctx.log("  manual case, steps in SPEC section 4")
             elif ctx.link_kind not in cdef.links:
                 raise NotApplicable(f"not for link {ctx.link_kind}")
             else:

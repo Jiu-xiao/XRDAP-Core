@@ -67,19 +67,14 @@ class DapVendor
   void SetExtraCommand(uint8_t cmd, uint32_t feature, ExtraHandler handler, void* ctx,
                        ExtraLength length);
 
-  /// 读取 USB 总线复位计数的函数 / Function returning the USB bus-reset count.
-  using ResetCountFn = uint32_t (*)(void* ctx);
-
   /// @brief 设置 USB 复位计数来源：连接在 USB 上时计数变了，连接和采样作废 / Set the USB
   ///        reset-count source: when the connection is on USB and the count changes, the
   ///        connection and sampling lapse.
-  /// @note 初始化时调用；fn 只能读一个计数，不能阻塞或取锁 / Call at initialisation; fn
-  ///       must only read a counter and must not block or take a lock.
-  void SetUsbResetSource(ResetCountFn fn, void* ctx)
-  {
-    usb_reset_fn_ = fn;
-    usb_reset_ctx_ = ctx;
-  }
+  /// @param resets 总线复位次数，通常是 ResetCountingUsb::BusResets() / Number of bus
+  ///        resets, usually ResetCountingUsb::BusResets().
+  /// @note 初始化时调用；生命周期需长于本对象 / Call at initialisation; it must outlive
+  ///       this object.
+  void SetUsbResetSource(const std::atomic<uint32_t>* resets) { usb_resets_ = resets; }
 
   /// @brief 链路 t 丢了（TCP 断开、串口链路停止或太久没有请求、无线会话结束）：连接在 t
   ///        上时，连接和采样作废 / Link t is gone (TCP closed, serial link stopped or
@@ -158,8 +153,7 @@ class DapVendor
   std::atomic<uint32_t> epoch_{1U};
   /// 连接成功时的代数 / The epoch at the successful connection.
   uint32_t connected_epoch_ = 0U;
-  ResetCountFn usb_reset_fn_ = nullptr;
-  void* usb_reset_ctx_ = nullptr;
+  const std::atomic<uint32_t>* usb_resets_ = nullptr;
   uint32_t usb_reset_base_ = 0U;
   /// 最近一次成功的 SUB_START 要的是紧凑帧 / The last successful SUB_START asked for
   /// compact frames.
